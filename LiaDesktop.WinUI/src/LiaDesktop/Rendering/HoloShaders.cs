@@ -136,10 +136,11 @@ float4 main(PSIn i) : SV_TARGET {
   float3 V = normalize(camPos - i.world);
   float3 L = normalize(float3(0.3, 0.5, 0.8));
   float wrap = saturate((dot(N,L)+0.4)/1.4);
-  float3 sclera = float3(0.86, 0.78, 0.70);
-  float3 color = sclera * (0.35 + wrap * 0.7);
+  // Warm off-white sclera (not blown-out white)
+  float3 sclera = float3(0.78, 0.72, 0.68);
+  float3 color = sclera * (0.40 + wrap * 0.55);
   float fres = pow(1.0 - saturate(dot(N,V)), 3.0);
-  color += float3(1,0.85,0.6) * fres * 0.12;
+  color += float3(1,0.85,0.6) * fres * 0.06;
   color = pow(saturate(color), 1.0/2.2);
   return float4(color, 1);
 }";
@@ -200,12 +201,17 @@ struct PSIn {
 float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
+  // Front hemisphere only — avoid milky backfaces
+  float facing = saturate(dot(N, V));
+  clip(facing - 0.15);
   float3 L = normalize(float3(0.4, 0.7, 0.5));
   float3 H = normalize(L+V);
-  float fres = pow(1.0 - saturate(dot(N,V)), 3.5);
-  float spec = pow(saturate(dot(N,H)), 320.0);
-  float3 color = float3(0.9, 0.95, 1.0) * (fres * 0.35 + spec * 0.9);
-  return float4(color, saturate(fres * 0.55 + spec));
+  float fres = pow(1.0 - facing, 4.0);
+  float spec = pow(saturate(dot(N,H)), 400.0);
+  float3 color = float3(0.95, 0.97, 1.0) * (spec * 1.1 + fres * 0.12);
+  float a = saturate(spec * 0.95 + fres * 0.18);
+  clip(a - 0.02);
+  return float4(color, a);
 }";
 
     public const string PixelLid = @"

@@ -42,8 +42,8 @@ struct Vertex
 public sealed class HoloRenderer : IDisposable
 {
     static readonly Vector3 Amber = new(1f, 0.604f, 0.235f);
-    const float EyeRadius = 0.022f;
-    // Face Y≈0.20..0.55 local; eyes ≈0.39 — place eyes near world Y=0.05
+    // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
+    const float EyeRadius = 0.0115f;
     const float HeadScale = 2.85f;
     const float HeadTransY = -1.06f;
     const int MsaaCount = 4;
@@ -681,19 +681,20 @@ public sealed class HoloRenderer : IDisposable
 
     void DrawEyes(Matrix4x4 viewProj, Matrix4x4 headWorld, Vector3 cam, float blinkAmt)
     {
-        if (_eyeSphere == null || _lidUpper == null || _lidLower == null) return;
+        if (_eyeSphere == null) return;
         var stride = (uint)Marshal.SizeOf<Vertex>();
-        var close = _freezeBlink ? 0f : BlinkLidAmount();
+        // Procedural lids OFF — Rocketbox head mesh already has lids; blink morph closes them.
 
         void DrawOne(Vector3 eyeLocal, bool left)
         {
-            // Sit eyeball slightly behind the lid plane (face looks +Z)
-            var center = eyeLocal + new Vector3(0, -0.004f, -EyeRadius * 0.55f);
-            var converge = left ? 0.018f : -0.018f;
+            // Recess into socket so mesh lids occlude the sphere rim
+            var center = eyeLocal + new Vector3(0, -0.006f, -0.022f);
+            var converge = left ? 0.012f : -0.012f;
             var eyeRot = Matrix4x4.CreateFromYawPitchRoll(_gazeYaw + converge, _gazePitch, 0);
 
             _ctx!.OMSetDepthStencilState(_dssWrite);
             _ctx.OMSetBlendState(_blendOpaque);
+            _ctx.RSSetState(_rs);
             _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
 
             var eyeWorld =
@@ -702,7 +703,7 @@ public sealed class HoloRenderer : IDisposable
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
 
-            WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.05f);
+            WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.0f);
             _ctx.PSSetShader(_psEye);
             _ctx.IASetVertexBuffer(0, _eyeSphere.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_eyeSphere.Ib, Format.R32_UInt, 0);
@@ -711,12 +712,12 @@ public sealed class HoloRenderer : IDisposable
             if (_irisDisc != null)
             {
                 var irisWorld =
-                    Matrix4x4.CreateScale(EyeRadius * 0.58f) *
-                    Matrix4x4.CreateTranslation(0, 0, EyeRadius * 0.82f) *
+                    Matrix4x4.CreateScale(EyeRadius * 0.72f) *
+                    Matrix4x4.CreateTranslation(0, 0, EyeRadius * 0.78f) *
                     eyeRot *
                     Matrix4x4.CreateTranslation(center) *
                     headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.25f);
+                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.1f);
                 _ctx.PSSetShader(_psIris);
                 _ctx.IASetVertexBuffer(0, _irisDisc.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_irisDisc.Ib, Format.R32_UInt, 0);
@@ -727,12 +728,13 @@ public sealed class HoloRenderer : IDisposable
             {
                 _ctx.OMSetDepthStencilState(_dssRead);
                 _ctx.OMSetBlendState(_blendAlpha);
+                // Slightly larger than iris plane — specular wetness only
                 var corneaWorld =
-                    Matrix4x4.CreateScale(EyeRadius * 1.06f) *
+                    Matrix4x4.CreateScale(EyeRadius * 1.02f) *
                     eyeRot *
                     Matrix4x4.CreateTranslation(center) *
                     headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(corneaWorld), cam, blinkAmt, 1.1f);
+                WriteFrame(viewProj, Matrix4x4.Transpose(corneaWorld), cam, blinkAmt, 1.0f);
                 _ctx.PSSetShader(_psCornea);
                 _ctx.IASetVertexBuffer(0, _corneaShell.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_corneaShell.Ib, Format.R32_UInt, 0);
@@ -740,29 +742,6 @@ public sealed class HoloRenderer : IDisposable
                 _ctx.OMSetDepthStencilState(_dssWrite);
                 _ctx.OMSetBlendState(_blendOpaque);
             }
-
-            var upperAngle = MathHelper.Lerp(-0.38f, 0.58f, close);
-            var upperWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.18f, EyeRadius * 1.12f, EyeRadius * 1.18f) *
-                Matrix4x4.CreateRotationX(upperAngle) *
-                Matrix4x4.CreateTranslation(center) *
-                headWorld;
-            WriteFrame(viewProj, Matrix4x4.Transpose(upperWorld), cam, blinkAmt, 1.0f);
-            _ctx.PSSetShader(_psLid);
-            _ctx.IASetVertexBuffer(0, _lidUpper.Vb, stride, 0);
-            _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
-            _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
-
-            var lowerAngle = MathHelper.Lerp(0.36f, -0.05f, close);
-            var lowerWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.16f, EyeRadius * 1.10f, EyeRadius * 1.16f) *
-                Matrix4x4.CreateRotationX(lowerAngle) *
-                Matrix4x4.CreateTranslation(center) *
-                headWorld;
-            WriteFrame(viewProj, Matrix4x4.Transpose(lowerWorld), cam, blinkAmt, 1.0f);
-            _ctx.IASetVertexBuffer(0, _lidLower.Vb, stride, 0);
-            _ctx.IASetIndexBuffer(_lidLower.Ib, Format.R32_UInt, 0);
-            _ctx.DrawIndexed(_lidLower.IndexCount, 0, 0);
         }
 
         DrawOne(_eyeL, left: true);
@@ -835,23 +814,25 @@ public sealed class HoloRenderer : IDisposable
 
     PartMesh CreateIrisDisc(int segments)
     {
-        const float dish = 0.12f;
+        // Shallow dome facing +Z (toward camera)
+        const float dish = 0.08f;
         var verts = new List<Vertex>
         {
-            new() { Pos = new Vector3(0, 0, -dish), Nrm = Vector3.UnitZ, Uv = new Vector2(0.5f, 0.5f) },
+            new() { Pos = new Vector3(0, 0, dish), Nrm = Vector3.UnitZ, Uv = new Vector2(0.5f, 0.5f) },
         };
         for (var i = 0; i <= segments; i++)
         {
             var a = i / (float)segments * MathF.PI * 2;
             var x = MathF.Cos(a);
             var y = MathF.Sin(a);
-            var nrm = Vector3.Normalize(new Vector3(-x * 0.35f, -y * 0.35f, 1f));
+            var nrm = Vector3.Normalize(new Vector3(x * 0.25f, y * 0.25f, 1f));
             verts.Add(new Vertex { Pos = new Vector3(x, y, 0), Nrm = nrm, Uv = new Vector2(x * 0.5f + 0.5f, y * 0.5f + 0.5f) });
         }
         var indices = new List<int>();
         for (var i = 1; i <= segments; i++)
         {
-            indices.Add(0); indices.Add(i); indices.Add(i + 1);
+            // CCW from +Z
+            indices.Add(0); indices.Add(i + 1); indices.Add(i);
         }
         var vb = _device!.CreateBuffer(verts.ToArray(), BindFlags.VertexBuffer);
         var ib = _device.CreateBuffer(indices.ToArray(), BindFlags.IndexBuffer);
