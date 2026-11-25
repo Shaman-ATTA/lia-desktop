@@ -1,5 +1,3 @@
 <Project>
-  <PropertyGroup>
-    <WindowsSdkPackageVersion>10.0.26100.1742</WindowsSdkPackageVersion>
-  </PropertyGroup>
+  <!-- Let WinUI / WindowsAppSDK pick a resolvable Microsoft.Windows.SDK.NET.Ref -->
 </Project>
