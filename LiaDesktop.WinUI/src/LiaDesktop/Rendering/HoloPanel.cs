@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media;
 using Vortice.DXGI;
 using WinRT;
 
@@ -21,7 +20,7 @@ public sealed class HoloPanel : SwapChainPanel
 
     public HoloPanel()
     {
-        Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0, 0, 0, 0));
+        // SwapChainPanel does not support Background — leave transparent by default.
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SizeChanged += OnSizeChanged;
