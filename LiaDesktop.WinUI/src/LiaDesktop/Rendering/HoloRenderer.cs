@@ -423,8 +423,13 @@ public sealed class HoloRenderer : IDisposable
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
+            // Lids only while blinking — open lids were covering the upper sclera
+            // with dark shells (looked like black voids). Rim of the carved socket
+            // + sclera plate already reads as an eyelid line when open.
             var close = _freezeBlink ? 0f : lidClose;
-            var upperAngle = MathHelper.Lerp(-0.12f, 0.72f, close);
+            if (close < 0.04f) return;
+
+            var upperAngle = MathHelper.Lerp(-0.55f, 0.72f, close);
             var upperWorld =
                 Matrix4x4.CreateScale(0.145f, 0.082f, 0.145f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
@@ -436,7 +441,7 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.12f, 0.0f, close);
+            var lowerAngle = MathHelper.Lerp(0.45f, 0.0f, close);
             var lowerWorld =
                 Matrix4x4.CreateScale(0.142f, 0.078f, 0.142f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
