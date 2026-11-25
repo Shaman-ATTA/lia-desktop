@@ -6,6 +6,7 @@ const api = {
   getConfig: () => ipcRenderer.invoke('config:get'),
   getConfigSecret: () => ipcRenderer.invoke('config:getSecret'),
   saveConfig: (partial: Record<string, unknown>) => ipcRenderer.invoke('config:save', partial),
+  listGeminiModels: (apiKey?: string) => ipcRenderer.invoke('gemini:listModels', apiKey),
   speak: (text: string) => ipcRenderer.invoke('tts:speak', text),
   stopSpeak: () => ipcRenderer.invoke('tts:stop'),
   runAgent: (text: string) => ipcRenderer.invoke('agent:run', text),

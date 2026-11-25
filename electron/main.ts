@@ -16,6 +16,11 @@ import { BrowserSession } from './agent/browser'
 import { ScreenControl } from './agent/screen'
 import type { ToolContext } from './agent/tools'
 import { shapeFromRange, morphTargets } from './agent/visemes'
+import {
+  classifyGeminiError,
+  listGeminiModels,
+  resolveGeminiModel,
+} from './agent/geminiModels'
 
 let mainWindow: BrowserWindow | null = null
 let controlBanner: BrowserWindow | null = null
@@ -173,19 +178,60 @@ function abortAll() {
   log('ABORT')
 }
 
+async function ensureGeminiModel(cfg: LiaConfig): Promise<LiaConfig> {
+  if (cfg.provider !== 'gemini' || !cfg.apiKey?.trim()) return cfg
+  try {
+    const { model, migrated } = await resolveGeminiModel(cfg.apiKey, cfg.model)
+    if (migrated || cfg.model !== model || cfg.visionModel !== model) {
+      const next = saveConfig({ model, visionModel: model })
+      agent?.updateConfig(next)
+      log(`model → ${model}`)
+      mainWindow?.webContents.send('agent:event', {
+        type: 'model',
+        model,
+        text: migrated ? `Модель: ${model}` : undefined,
+      })
+      return next
+    }
+  } catch (err) {
+    const c = classifyGeminiError(err)
+    log(`model-resolve: ${c.userMessage}`)
+  }
+  return cfg
+}
+
 function registerIpc() {
   ipcMain.handle('config:get', () => {
     const c = loadConfig()
     return { ...c, apiKeyMasked: maskKey(c.apiKey), apiKey: c.apiKey ? '***' : '' }
   })
   ipcMain.handle('config:getSecret', () => {
-    // Only for settings form edit
     return loadConfig()
   })
-  ipcMain.handle('config:save', (_e, partial: Partial<LiaConfig>) => {
-    const next = saveConfig(partial)
+  ipcMain.handle('config:save', async (_e, partial: Partial<LiaConfig>) => {
+    let next = saveConfig(partial)
+    if (next.provider === 'gemini' && next.apiKey?.trim()) {
+      next = await ensureGeminiModel(next)
+    }
     agent?.updateConfig(next)
+    mainWindow?.webContents.send('config:updated', {
+      ...next,
+      apiKeyMasked: maskKey(next.apiKey),
+      apiKey: next.apiKey ? '***' : '',
+    })
     return { ...next, apiKeyMasked: maskKey(next.apiKey), apiKey: next.apiKey ? '***' : '' }
+  })
+
+  ipcMain.handle('gemini:listModels', async (_e, apiKey?: string) => {
+    const key = (apiKey || loadConfig().apiKey || '').trim()
+    if (!key) return { ok: false, error: 'Нет ключа API', models: [] }
+    try {
+      const models = await listGeminiModels(key)
+      return { ok: true, models }
+    } catch (err) {
+      const c = classifyGeminiError(err)
+      return { ok: false, error: c.userMessage, detail: c.detail, models: [] }
+    }
   })
 
   ipcMain.handle('tts:speak', async (_e, text: string) => speak(text))
@@ -202,32 +248,51 @@ function registerIpc() {
 
   ipcMain.handle('agent:run', async (_e, userText: string) => {
     aborted = false
-    const cfg = loadConfig()
-    if (!agent) agent = new LlmAgent(cfg, buildToolCtx(cfg), (ev) => {
-      mainWindow?.webContents.send('agent:event', ev)
-      if (ev.type === 'tool_start') {
-        showControlBanner(true)
-        log(`start ${ev.tool}`)
-      }
-      if (ev.type === 'tool_end') log(`end ${ev.tool}`)
-      if (ev.type === 'narrate' && ev.text) void speak(ev.text)
-      if (ev.type === 'done' || ev.type === 'abort' || ev.type === 'error') showControlBanner(false)
-    })
+    let cfg = loadConfig()
+    cfg = await ensureGeminiModel(cfg)
+    if (!agent)
+      agent = new LlmAgent(cfg, buildToolCtx(cfg), (ev) => {
+        mainWindow?.webContents.send('agent:event', ev)
+        if (ev.type === 'tool_start') {
+          showControlBanner(true)
+          log(`start ${ev.tool}`)
+        }
+        if (ev.type === 'tool_end') log(`end ${ev.tool}`)
+        if (ev.type === 'model' && ev.model) log(`MODEL ${ev.model}${ev.text ? ' · ' + ev.text : ''}`)
+        // Speak narrate only (not model-switch / backoff status lines)
+        if (ev.type === 'narrate' && ev.text) void speak(ev.text)
+        if (ev.type === 'done' || ev.type === 'abort' || ev.type === 'error') showControlBanner(false)
+      })
     else {
       agent.updateConfig(cfg)
     }
     showControlBanner(true)
     try {
-      // Interrupt check for stop phrase handled in renderer too
       const reply = await agent.turn(userText)
       if (reply) await speak(reply)
-      return { ok: true, reply }
+      return { ok: true, reply, model: loadConfig().model }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      log('error ' + msg)
-      mainWindow?.webContents.send('agent:event', { type: 'error', text: msg })
-      await speak('Не удалось выполнить запрос. Проверьте ключ API в настройках.')
-      return { ok: false, error: msg }
+      const detail =
+        typeof err === 'object' && err && 'detail' in err
+          ? String((err as { detail?: string }).detail || '')
+          : err instanceof Error
+            ? err.message
+            : String(err)
+      const classified = classifyGeminiError(err)
+      const userMsg =
+        typeof err === 'object' && err && 'kind' in err
+          ? err instanceof Error
+            ? err.message
+            : classified.userMessage
+          : classified.userMessage
+      log(userMsg)
+      mainWindow?.webContents.send('agent:event', {
+        type: 'error',
+        text: userMsg,
+        detail: detail.slice(0, 400),
+      })
+      await speak(userMsg)
+      return { ok: false, error: userMsg, detail: detail.slice(0, 400) }
     } finally {
       showControlBanner(false)
     }
@@ -340,6 +405,9 @@ app.whenReady().then(() => {
 
   registerIpc()
   createMainWindow()
+
+  // Migrate retired model ids in background (needs network + key)
+  void ensureGeminiModel(loadConfig())
 
   globalShortcut.register('CommandOrControl+Alt+S', () => abortAll())
 

@@ -13,7 +13,7 @@
     getConfig: async () => ({
       provider: 'gemini',
       apiKeyMasked: '',
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash',
       ttsVoice: 'SvetlanaNeural',
       workspacePath: workspace,
     }),
@@ -21,11 +21,18 @@
       provider: 'gemini',
       apiKey: '',
       baseUrl: '',
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash',
       workspacePath: workspace,
       ttsVoice: 'SvetlanaNeural',
     }),
     saveConfig: async (p) => p,
+    listGeminiModels: async () => ({
+      ok: true,
+      models: [
+        { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
+        { id: 'gemini-2.5-flash-lite', displayName: 'Gemini 2.5 Flash-Lite' },
+      ],
+    }),
     speak: async (text) => {
       emit('voice:state', { state: 'SPEAKING', text })
       const boundaries = []

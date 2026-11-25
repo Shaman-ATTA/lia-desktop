@@ -1,13 +1,26 @@
 /**
  * Free LLM providers:
- * - gemini (default): Google AI Studio free key → gemini-2.0-flash (vision + tools)
- * - ollama: local OpenAI-compatible (qwen2.5-vl, llama3.2-vision, qwen2.5-coder)
- * - openai-compatible: any base URL
+ * - gemini (default): Google AI Studio key → saved model (ListModels-resolved *-flash)
+ * - ollama / openai-compatible
+ *
+ * Per-request: always reads this.cfg.model (updated via updateConfig / saveConfig).
+ * 404 → parse suggested model, switch, retry once.
+ * 503/429 → backoff 2–3× then fall back to next flash from ListModels.
  */
 import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration } from '@google/generative-ai'
 import OpenAI from 'openai'
-import type { LiaConfig } from '../secure/secrets'
+import { saveConfig, type LiaConfig } from '../secure/secrets'
 import { TOOL_DECLARATIONS, type ToolName, runTool, type ToolContext } from './tools'
+import {
+  classifyGeminiError,
+  parseSuggestedModel,
+  isModelUnavailableMessage,
+  isOverloadMessage,
+  listGeminiModels,
+  nextFlashFallbacks,
+  sleep,
+  stripModelsPrefix,
+} from './geminiModels'
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -17,12 +30,14 @@ export interface ChatMessage {
 }
 
 export interface AgentEvent {
-  type: 'narrate' | 'tool_start' | 'tool_end' | 'need_confirm' | 'done' | 'error' | 'abort'
+  type: 'narrate' | 'tool_start' | 'tool_end' | 'need_confirm' | 'done' | 'error' | 'abort' | 'model'
   text?: string
+  detail?: string
   tool?: string
   args?: unknown
   result?: unknown
   confirmId?: string
+  model?: string
 }
 
 const SYSTEM = `Ты — Лиа, женский голосовой ИИ-ассистент ATTA CORP (N-33). Отвечай коротко по-русски, тёплым живым тоном, женский род.
@@ -55,8 +70,14 @@ export class LlmAgent {
     this.cfg = cfg
   }
 
+  getModel(): string {
+    return stripModelsPrefix(this.cfg.model || '') || ''
+  }
+
   async turn(userText: string, imageBase64?: string): Promise<string> {
     this.aborted = false
+    // Always use latest saved config fields for this turn
+    this.onEvent({ type: 'model', model: this.getModel() || 'auto' })
     this.history.push({
       role: 'user',
       content: imageBase64
@@ -129,18 +150,13 @@ export class LlmAgent {
     }))
   }
 
-  private async geminiStep(imageBase64?: string): Promise<
-    | { kind: 'text'; text: string }
-    | { kind: 'tools'; calls: { name: string; args: Record<string, string> }[] }
-  > {
-    if (!this.cfg.apiKey) throw new Error('Нет ключа Gemini. Введите бесплатный ключ в Настройках (aistudio.google.com).')
-    const genAI = new GoogleGenerativeAI(this.cfg.apiKey)
-    const model = genAI.getGenerativeModel({
-      model: this.cfg.model || 'gemini-2.0-flash',
-      systemInstruction: SYSTEM,
-      tools: [{ functionDeclarations: this.geminiTools() }],
-    })
+  private switchModel(next: string, reason: string) {
+    const id = stripModelsPrefix(next)
+    this.cfg = saveConfig({ model: id, visionModel: id })
+    this.onEvent({ type: 'model', model: id, text: reason })
+  }
 
+  private buildContents(imageBase64?: string) {
     const contents = this.history
       .filter((m) => m.role !== 'system')
       .map((m) => {
@@ -158,13 +174,22 @@ export class LlmAgent {
         ],
       })
     }
+    return contents
+  }
 
-    const result = await model.generateContent({ contents })
+  private async generateOnce(modelName: string, imageBase64?: string) {
+    const genAI = new GoogleGenerativeAI(this.cfg.apiKey)
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      systemInstruction: SYSTEM,
+      tools: [{ functionDeclarations: this.geminiTools() }],
+    })
+    const result = await model.generateContent({ contents: this.buildContents(imageBase64) })
     const resp = result.response
     const calls = resp.functionCalls?.() ?? []
     if (calls.length) {
       return {
-        kind: 'tools',
+        kind: 'tools' as const,
         calls: calls.map((c) => ({
           name: c.name,
           args: Object.fromEntries(
@@ -173,7 +198,104 @@ export class LlmAgent {
         })),
       }
     }
-    return { kind: 'text', text: resp.text() || 'Готово.' }
+    return { kind: 'text' as const, text: resp.text() || 'Готово.' }
+  }
+
+  private errMeta(err: unknown): { status?: number; msg: string } {
+    const status =
+      typeof err === 'object' && err && 'status' in err
+        ? Number((err as { status?: number }).status)
+        : undefined
+    const msg = err instanceof Error ? err.message : String(err)
+    // SDK sometimes embeds status only in message
+    const fromMsg = msg.match(/\b(429|503|404|401|403)\b/)
+    return { status: status ?? (fromMsg ? Number(fromMsg[1]) : undefined), msg }
+  }
+
+  private async geminiStep(
+    imageBase64?: string,
+    opts: { triedModels?: Set<string>; overloadRetries?: number } = {},
+  ): Promise<
+    | { kind: 'text'; text: string }
+    | { kind: 'tools'; calls: { name: string; args: Record<string, string> }[] }
+  > {
+    if (!this.cfg.apiKey) {
+      throw Object.assign(new Error('Нет ключа Gemini. Введите ключ в Настройках (aistudio.google.com).'), {
+        status: 401,
+      })
+    }
+
+    const tried = opts.triedModels ?? new Set<string>()
+    const modelName = stripModelsPrefix(this.cfg.model || '')
+    if (!modelName) {
+      throw Object.assign(new Error('Модель не выбрана. Откройте Настройки и сохраните ключ — модель подберётся сама.'), {
+        status: 404,
+      })
+    }
+    tried.add(modelName)
+
+    try {
+      return await this.generateOnce(modelName, imageBase64)
+    } catch (err) {
+      const { status, msg } = this.errMeta(err)
+
+      // 404 / retired → suggested model or ListModels next
+      if (isModelUnavailableMessage(msg, status)) {
+        const suggested = parseSuggestedModel(msg)
+        if (suggested && !tried.has(suggested)) {
+          this.switchModel(suggested, `Модель недоступна → ${suggested}`)
+          return this.geminiStep(imageBase64, { triedModels: tried, overloadRetries: 0 })
+        }
+        try {
+          const models = await listGeminiModels(this.cfg.apiKey)
+          const next = nextFlashFallbacks(models, modelName).find((id) => !tried.has(id))
+          if (next) {
+            this.switchModel(next, `Модель недоступна → ${next}`)
+            return this.geminiStep(imageBase64, { triedModels: tried, overloadRetries: 0 })
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+
+      // 503 / 429 → exponential backoff then next flash
+      if (isOverloadMessage(msg, status)) {
+        const attempt = opts.overloadRetries ?? 0
+        if (attempt < 3) {
+          const wait = 800 * Math.pow(2, attempt) // 0.8s, 1.6s, 3.2s
+          this.onEvent({
+            type: 'model',
+            model: modelName,
+            text: `Модель перегружена, жду ${Math.round(wait / 100) / 10}с…`,
+          })
+          await sleep(wait)
+          return this.geminiStep(imageBase64, {
+            triedModels: tried,
+            overloadRetries: attempt + 1,
+          })
+        }
+        try {
+          const models = await listGeminiModels(this.cfg.apiKey)
+          const next = nextFlashFallbacks(models, modelName).find((id) => !tried.has(id))
+          if (next) {
+            this.switchModel(next, `Модель перегружена, переключаюсь на ${next}`)
+            return this.geminiStep(imageBase64, { triedModels: tried, overloadRetries: 0 })
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+
+      const classified = classifyGeminiError(
+        Object.assign(err instanceof Error ? err : new Error(msg), { status }),
+      )
+      throw Object.assign(new Error(classified.userMessage), {
+        status: classified.status,
+        detail: classified.detail,
+        kind: classified.kind,
+        suggestedModel: classified.suggestedModel,
+      })
+    }
   }
 
   private client(): OpenAI {

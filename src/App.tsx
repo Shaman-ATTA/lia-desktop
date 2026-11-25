@@ -39,7 +39,8 @@ export default function App() {
   const [statusSub, setStatusSub] = useState('Скажите «Лиа» или нажмите микрофон')
   const [subtitle, setSubtitle] = useState(GREETING_SUB)
   const [transcript, setTranscript] = useState('')
-  const [log, setLog] = useState<string[]>([])
+  const [log, setLog] = useState<{ line: string; detail?: string }[]>([])
+  const [activeModel, setActiveModel] = useState('')
   const [controlling, setControlling] = useState(false)
   const [confirmPrompt, setConfirmPrompt] = useState<string | null>(null)
   const [mouth, setMouth] = useState({ jaw: 0, funnel: 0, wide: 0 })
@@ -54,8 +55,8 @@ export default function App() {
   const speakStartedAt = useRef(0)
   const sys = useSysReadout(booted)
 
-  const pushLog = useCallback((line: string) => {
-    setLog((prev) => [...prev.slice(-120), line])
+  const pushLog = useCallback((line: string, detail?: string) => {
+    setLog((prev) => [...prev.slice(-120), { line, detail }])
   }, [])
 
   const playNext = useCallback(() => {
@@ -118,20 +119,37 @@ export default function App() {
         }
       }),
       window.lia.on('agent:log', (line) => pushLog(String(line))),
+      window.lia.on('config:updated', (c) => {
+        const cfg = c as { model?: string }
+        if (cfg.model) setActiveModel(cfg.model)
+      }),
       window.lia.on('agent:event', (ev) => {
-        const e = ev as { type: string; text?: string; tool?: string; args?: unknown; result?: unknown }
+        const e = ev as {
+          type: string
+          text?: string
+          detail?: string
+          model?: string
+          tool?: string
+          args?: unknown
+          result?: unknown
+        }
         if (e.type === 'tool_start') setControlling(true)
         if (e.type === 'done' || e.type === 'abort' || e.type === 'error') setControlling(false)
+        if (e.type === 'model' && e.model) setActiveModel(e.model)
         if (e.type === 'tool_start' && e.tool) {
-          pushLog(`→ ${e.tool}${e.args ? ' ' + JSON.stringify(e.args) : ''}`)
+          pushLog(`→ ${e.tool}${e.args ? ' ' + JSON.stringify(e.args).slice(0, 80) : ''}`)
         } else if (e.type === 'tool_end' && e.tool) {
           const summary =
             e.result && typeof e.result === 'object'
-              ? JSON.stringify(e.result).slice(0, 180)
-              : String(e.result ?? 'ok')
+              ? JSON.stringify(e.result).slice(0, 120)
+              : String(e.result ?? 'ok').slice(0, 120)
           pushLog(`✓ ${e.tool}: ${summary}`)
-        } else if (e.text) {
-          pushLog(`${e.type}: ${e.text}`)
+        } else if (e.type === 'error') {
+          pushLog(e.text || 'Ошибка', e.detail)
+        } else if (e.type === 'model' && e.text) {
+          pushLog(e.text)
+        } else if (e.text && e.type !== 'model') {
+          pushLog(e.type === 'narrate' || e.type === 'done' ? e.text : `${e.type}: ${e.text}`)
           if (e.type === 'done') setSubtitle(e.text.slice(0, 160))
         }
       }),
@@ -168,7 +186,10 @@ export default function App() {
         if (m.speaking) setStatusSub('Речь · анимация рта')
       }),
     ]
-    return () => offs.forEach((off) => off())
+    void window.lia.getConfig().then((c: { model?: string }) => {
+      if (c?.model) setActiveModel(c.model)
+    })
+    return () => offs.forEach((o) => o())
   }, [playNext, pushLog])
 
   useEffect(() => {
@@ -327,6 +348,9 @@ export default function App() {
                 <em>MESH</em> HOLO · 3D
               </div>
               <div>
+                <em>MODEL</em> {activeModel || '—'}
+              </div>
+              <div>
                 <em>LINK</em> {sys.net}
               </div>
             </div>
@@ -335,9 +359,16 @@ export default function App() {
             <h3>ЖУРНАЛ</h3>
             <div className="log" data-testid="action-log">
               {log.length === 0 && <div className="log-empty">Нет задач</div>}
-              {log.map((l, i) => (
-                <div key={i}>{l}</div>
-              ))}
+              {log.map((l, i) =>
+                l.detail ? (
+                  <details key={i} className="log-err">
+                    <summary>{l.line}</summary>
+                    <pre>{l.detail}</pre>
+                  </details>
+                ) : (
+                  <div key={i}>{l.line}</div>
+                ),
+              )}
             </div>
           </div>
         </aside>

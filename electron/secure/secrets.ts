@@ -26,12 +26,13 @@ export interface LiaConfig {
   offlineOnly: boolean
 }
 
+/** Empty model = resolve via ListModels on save/startup (never pin a retired id). */
 const DEFAULTS: LiaConfig = {
   provider: 'gemini',
   apiKey: '',
-  baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-  model: 'gemini-2.0-flash',
-  visionModel: 'gemini-2.0-flash',
+  baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  model: '',
+  visionModel: '',
   ttsVoice: 'SvetlanaNeural',
   workspacePath: '',
   offlineOnly: false,
@@ -127,6 +128,27 @@ $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($prot, $null, [
   }
 }
 
+const RETIRED = new Set([
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-001',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash-lite-001',
+  'models/gemini-2.0-flash',
+])
+
+function scrubRetiredModel(cfg: LiaConfig): LiaConfig {
+  const model = (cfg.model || '').replace(/^models\//, '')
+  const vision = (cfg.visionModel || '').replace(/^models\//, '')
+  let next = cfg
+  if (RETIRED.has(cfg.model) || RETIRED.has(model) || !model) {
+    next = { ...next, model: '' }
+  }
+  if (RETIRED.has(cfg.visionModel) || RETIRED.has(vision) || !vision) {
+    next = { ...next, visionModel: next.model }
+  }
+  return next
+}
+
 export function loadConfig(): LiaConfig {
   ensureDir()
   const p = configPath()
@@ -145,7 +167,7 @@ export function loadConfig(): LiaConfig {
     } else {
       json = raw.toString('utf8')
     }
-    return { ...DEFAULTS, ...JSON.parse(json) }
+    return scrubRetiredModel({ ...DEFAULTS, ...JSON.parse(json) })
   } catch {
     return { ...DEFAULTS, workspacePath: path.join(os.homedir(), 'LiaWorkspace') }
   }

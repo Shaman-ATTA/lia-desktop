@@ -1,7 +1,7 @@
 {
   "name": "lia-assistant",
   "productName": "Lia Assistant",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Lia Assistant — ATTA CORP desktop (N-33 FREE, personal use)",
   "author": "ATTA CORP",
   "license": "UNLICENSED",
@@ -19,10 +19,11 @@
     "pack:linux": "npm run build && electron-builder --linux dir --x64",
     "pack:zip": "npm run build && electron-builder --win zip --x64 -c.win.signAndEditExecutable=false",
     "capture": "node scripts/capture-demo.mjs",
-    "postinstall": "electron-builder install-app-deps || true"
+    "postinstall": "electron-builder install-app-deps || true",
+    "test": "npm run build:electron && node --test electron/agent/geminiModels.test.mjs"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
+    "@google/generative-ai": "^0.24.1",
     "edge-tts-universal": "^1.3.3",
     "electron-store": "^8.2.0",
     "openai": "^4.77.0",
@@ -70,15 +71,21 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "icon.ico",
@@ -92,7 +99,9 @@
       "uninstallerIcon": "icon.ico"
     },
     "linux": {
-      "target": ["dir"],
+      "target": [
+        "dir"
+      ],
       "category": "Utility"
     },
     "publish": null

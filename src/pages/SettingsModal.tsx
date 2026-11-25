@@ -1,15 +1,56 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 type Props = { open: boolean; onClose: () => void }
+
+type GeminiModel = { id: string; displayName: string }
 
 export function SettingsModal({ open, onClose }: Props) {
   const [provider, setProvider] = useState('gemini')
   const [apiKey, setApiKey] = useState('')
-  const [baseUrl, setBaseUrl] = useState('https://generativelanguage.googleapis.com/v1beta/openai/')
-  const [model, setModel] = useState('gemini-2.0-flash')
+  const [baseUrl, setBaseUrl] = useState('https://generativelanguage.googleapis.com/v1beta')
+  const [model, setModel] = useState('')
+  const [models, setModels] = useState<GeminiModel[]>([])
+  const [modelsMsg, setModelsMsg] = useState('')
   const [workspacePath, setWorkspace] = useState('')
   const [ttsVoice, setTtsVoice] = useState('SvetlanaNeural')
   const [saving, setSaving] = useState(false)
+  const [loadingModels, setLoadingModels] = useState(false)
+
+  const refreshModels = useCallback(async (key: string, prefer?: string) => {
+    if (!key.trim() || key === '***') {
+      setModelsMsg('Введите ключ API, чтобы загрузить список моделей')
+      return
+    }
+    setLoadingModels(true)
+    setModelsMsg('')
+    try {
+      const r = (await window.lia.listGeminiModels(key)) as {
+        ok: boolean
+        models?: GeminiModel[]
+        error?: string
+      }
+      if (!r.ok) {
+        setModels([])
+        setModelsMsg(r.error || 'Не удалось загрузить модели')
+        return
+      }
+      const list = r.models || []
+      setModels(list)
+      if (list.length) {
+        const ids = list.map((m) => m.id)
+        if (!prefer || !ids.includes(prefer)) {
+          setModel(list[0].id)
+        } else {
+          setModel(prefer)
+        }
+        setModelsMsg(`${list.length} моделей · выбрана ${prefer && ids.includes(prefer) ? prefer : list[0].id}`)
+      } else {
+        setModelsMsg('Нет моделей с generateContent')
+      }
+    } finally {
+      setLoadingModels(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -17,31 +58,36 @@ export function SettingsModal({ open, onClose }: Props) {
       setProvider(c.provider || 'gemini')
       setApiKey(c.apiKey || '')
       setBaseUrl(c.baseUrl || '')
-      setModel(c.model || 'gemini-2.0-flash')
+      setModel(c.model || '')
       setWorkspace(c.workspacePath || '')
       setTtsVoice(c.ttsVoice || 'SvetlanaNeural')
+      if ((c.provider || 'gemini') === 'gemini' && c.apiKey) {
+        void refreshModels(c.apiKey, c.model)
+      }
     })
-  }, [open])
+  }, [open, refreshModels])
 
   if (!open) return null
 
   const save = async () => {
     setSaving(true)
     try {
-      await window.lia.saveConfig({
+      const partial: Record<string, unknown> = {
         provider,
-        apiKey,
         baseUrl:
           provider === 'ollama'
             ? baseUrl || 'http://127.0.0.1:11434/v1'
             : provider === 'gemini'
-              ? 'https://generativelanguage.googleapis.com/v1beta/openai/'
+              ? 'https://generativelanguage.googleapis.com/v1beta'
               : baseUrl,
         model,
         visionModel: model,
         workspacePath,
         ttsVoice,
-      })
+      }
+      if (apiKey && apiKey !== '***') partial.apiKey = apiKey
+      const saved = (await window.lia.saveConfig(partial)) as { model?: string }
+      if (saved?.model) setModel(saved.model)
       onClose()
     } finally {
       setSaving(false)
@@ -53,7 +99,7 @@ export function SettingsModal({ open, onClose }: Props) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>Настройки · Лиа</h2>
         <p>
-          Бесплатный ключ Gemini: откройте{' '}
+          Бесплатный ключ Gemini:{' '}
           <a
             href="#"
             style={{ color: 'var(--cyan)' }}
@@ -64,7 +110,7 @@ export function SettingsModal({ open, onClose }: Props) {
           >
             aistudio.google.com/apikey
           </a>
-          , создайте API key и вставьте ниже. Либо выберите Ollama (локально).
+          . Модель подбирается через ListModels (не хардкод).
         </p>
 
         <div className="field">
@@ -75,8 +121,8 @@ export function SettingsModal({ open, onClose }: Props) {
               const p = e.target.value
               setProvider(p)
               if (p === 'gemini') {
-                setModel('gemini-2.0-flash')
-                setBaseUrl('https://generativelanguage.googleapis.com/v1beta/openai/')
+                setModel('')
+                setBaseUrl('https://generativelanguage.googleapis.com/v1beta')
               } else if (p === 'ollama') {
                 setModel('qwen2.5-vl')
                 setBaseUrl('http://127.0.0.1:11434/v1')
@@ -95,6 +141,9 @@ export function SettingsModal({ open, onClose }: Props) {
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
+            onBlur={() => {
+              if (provider === 'gemini' && apiKey && apiKey !== '***') void refreshModels(apiKey, model)
+            }}
             placeholder={provider === 'gemini' ? 'AIza…' : 'optional'}
             autoComplete="off"
           />
@@ -109,10 +158,38 @@ export function SettingsModal({ open, onClose }: Props) {
 
         <div className="field">
           <label>Модель (vision + tools)</label>
-          <input value={model} onChange={(e) => setModel(e.target.value)} list="models" />
+          {provider === 'gemini' ? (
+            <>
+              <div className="row" style={{ gap: 8, marginBottom: 6 }}>
+                <select
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  disabled={!models.length}
+                  style={{ flex: 1 }}
+                >
+                  {!models.length && <option value={model || ''}>{model || '— загрузите список —'}</option>}
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.id}
+                      {m.displayName && m.displayName !== m.id ? ` · ${m.displayName}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={loadingModels || !apiKey}
+                  onClick={() => void refreshModels(apiKey, model)}
+                >
+                  {loadingModels ? '…' : 'Обновить'}
+                </button>
+              </div>
+              {modelsMsg && <div className="hint">{modelsMsg}</div>}
+            </>
+          ) : (
+            <input value={model} onChange={(e) => setModel(e.target.value)} list="models" />
+          )}
           <datalist id="models">
-            <option value="gemini-2.0-flash" />
-            <option value="gemini-2.5-flash" />
             <option value="qwen2.5-vl" />
             <option value="llama3.2-vision" />
             <option value="qwen2.5-coder" />
