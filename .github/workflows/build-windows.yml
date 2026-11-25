@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main, 'cursor/**']
-  tags: ['v*']
+    tags: ['v*']
 
 jobs:
   windows:
