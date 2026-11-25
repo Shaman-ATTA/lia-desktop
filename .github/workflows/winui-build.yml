@@ -100,13 +100,14 @@ jobs:
           "@
           Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 
-          function Find-Hwnd([uint32]$pid) {
+          function Find-Hwnd([uint32]$procId) {
             $script:found = [IntPtr]::Zero
+            $script:want = $procId
             [Win]::EnumWindows({
               param($h,$l)
               $outPid = [uint32]0
               [void][Win]::GetWindowThreadProcessId($h, [ref]$outPid)
-              if ($outPid -ne $pid) { return $true }
+              if ($outPid -ne $script:want) { return $true }
               $script:found = $h
               return $false
             }, [IntPtr]::Zero)
