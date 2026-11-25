@@ -168,10 +168,11 @@ jobs:
           }
 
           "" | Out-File $after
-          # Front (yaw locked ~0), 3/4, speaking mouth
+          # Front, 3/4, speaking mouth, eyes close-up
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front.png') @('--smoke-yaw=5') 12
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_threequarter.png') @('--smoke-yaw=32') 10
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_speaking.png') @('--smoke-yaw=12','--smoke-jaw=0.72') 10
+          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_eyes.png') @('--smoke-eyes','--smoke-yaw=0') 12
 
           # Rings alias for compatibility with prior asset name
           Copy-Item (Join-Path $PWD 'desktop_winui_threequarter.png') (Join-Path $PWD 'desktop_winui_rings.png') -Force
@@ -184,7 +185,7 @@ jobs:
           Get-Content $after
 
           # Basic visual QA: shots must not be tiny / near-white
-          foreach ($f in @('desktop_winui_front.png','desktop_winui_threequarter.png','desktop_winui_speaking.png')) {
+          foreach ($f in @('desktop_winui_front.png','desktop_winui_threequarter.png','desktop_winui_speaking.png','desktop_winui_eyes.png')) {
             $len = (Get-Item $f).Length
             if ($len -lt 40000) { throw "$f too small ($len) — likely blank/error dialog" }
           }
@@ -201,6 +202,7 @@ jobs:
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_speaking.png
+            desktop_winui_eyes.png
             desktop_winui_rings.png
             tasklist_before.txt
             tasklist_after.txt
@@ -217,17 +219,19 @@ jobs:
           NOTES=$(cat <<'EOF'
           Lia Desktop **v0.3.1** — hologram / rings / HUD polish
 
-          - Amber hologram shader (fresnel, Lambert/Blinn, scanlines, lips/eyes/blink)
+          - Amber hologram shader (fresnel, Lambert/Blinn, scanlines, lips/brows)
+          - Real 3D eyeballs (sphere meshes) + iris/pupil/spec, eyelids blink 3–6s, gaze/saccades
           - Thin amber 3D torus rings with depth occlusion
           - Camera framing + idle 3/4; MODEL status; titlebar / subtitle layout
           - Job Object clean exit (`tasklist_after.txt`)
+          - Screenshots: front, 3/4, speaking, eyes close-up
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           for f in LiaDesktop-0.3.1-win-x64.zip \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_speaking.png \
-                   desktop_winui_rings.png tasklist_before.txt tasklist_after.txt; do
+                   desktop_winui_eyes.png desktop_winui_rings.png tasklist_before.txt tasklist_after.txt; do
             if [ -f "$f" ]; then
               gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber
             else
@@ -245,6 +249,6 @@ jobs:
           TAG=v0.3.1
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "WinUI 3 · hologram polish"
-          for f in LiaDesktop-0.3.1-win-x64.zip desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_speaking.png desktop_winui_rings.png tasklist_after.txt; do
+          for f in LiaDesktop-0.3.1-win-x64.zip desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png tasklist_after.txt; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
           done

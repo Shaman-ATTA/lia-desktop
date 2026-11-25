@@ -94,14 +94,22 @@ public sealed partial class MainWindow : Window
 
     void ApplySmokeOverrides()
     {
-        // LIA_SMOKE_YAW=35 LIA_SMOKE_JAW=0.7 — CI capture modes
+        // LIA_SMOKE_YAW / LIA_SMOKE_JAW / --smoke-eyes — CI capture modes
         float? yaw = null, jaw = null;
+        var eyesCloseup = false;
         if (float.TryParse(Environment.GetEnvironmentVariable("LIA_SMOKE_YAW"), out var y)) yaw = y;
         if (float.TryParse(Environment.GetEnvironmentVariable("LIA_SMOKE_JAW"),
                 System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out var j)) jaw = j;
+        if (string.Equals(Environment.GetEnvironmentVariable("LIA_SMOKE_EYES"), "1", StringComparison.Ordinal))
+            eyesCloseup = true;
         foreach (var a in Environment.GetCommandLineArgs())
         {
+            if (a.Equals("--smoke-eyes", StringComparison.OrdinalIgnoreCase))
+            {
+                eyesCloseup = true;
+                yaw ??= 0f;
+            }
             if (a.StartsWith("--smoke-yaw=", StringComparison.OrdinalIgnoreCase) &&
                 float.TryParse(a["--smoke-yaw=".Length..], System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var y2)) yaw = y2;
@@ -109,10 +117,15 @@ public sealed partial class MainWindow : Window
                 float.TryParse(a["--smoke-jaw=".Length..], System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var j2)) jaw = j2;
         }
-        if (yaw.HasValue || jaw.HasValue)
+        if (yaw.HasValue || jaw.HasValue || eyesCloseup)
         {
-            Holo.Renderer.ForcePose(yaw, jaw);
-            if (jaw is > 0.05f)
+            Holo.Renderer.ForcePose(eyesCloseup ? yaw ?? 0f : yaw, jaw, eyesCloseup);
+            if (eyesCloseup)
+            {
+                StatusCaption.Text = "ГЛАЗА";
+                Subtitle.Text = "Крупный план · радужка / блик";
+            }
+            else if (jaw is > 0.05f)
             {
                 StatusCaption.Text = "ГОВОРЮ";
                 VoiceLine.Text = "VOICE  ГОВОРЮ";
