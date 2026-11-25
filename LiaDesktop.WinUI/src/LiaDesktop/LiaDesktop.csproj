@@ -30,8 +30,12 @@
     <AssemblyName>LiaDesktop</AssemblyName>
     <Product>Lia Assistant</Product>
     <Company>ATTA CORP</Company>
-    <Version>0.4.0</Version>
+    <Version>0.4.1</Version>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <!-- Shrink satellite assemblies — keep en only -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
 
   <ItemGroup>
@@ -55,6 +59,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="Assets\models\lia_holo_lashes.bin">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\models\lia_holo_brows.bin">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="Assets\app.ico">

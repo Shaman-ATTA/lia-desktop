@@ -1,22 +1,21 @@
 # Lia Desktop — ship report
 
-## v0.4.0 — female hologram head
+## v0.4.1 — face polish + installer
 
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.4.0
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.4.1
 
 | Asset | Notes |
 |-------|-------|
-| `LiaDesktop-0.4.0-win-x64.zip` | Self-contained publish |
-| `desktop_winui_front.png` | Front — female head + hair |
-| `desktop_winui_threequarter.png` | 3/4 yaw |
-| `desktop_winui_profile.png` | Profile yaw ~82° |
-| `desktop_winui_rings.png` | Distinct yaw −48° + ring phase |
-| `desktop_winui_speaking.png` | Mouth open / viseme |
-| `desktop_winui_eyes.png` | Eyes close-up |
-| `tasklist_after.txt` | Job Object clean exit proof |
+| `LiaDesktop-0.4.1-win-x64.zip` | Portable (shrunk) |
+| `LiaDesktop-0.4.1-setup.exe` | Per-user Inno installer |
+| `desktop_winui_front.png` | Lips amber, eyes almond |
+| `desktop_winui_threequarter.png` | 3/4 |
+| `desktop_winui_profile.png` | Profile |
+| `desktop_winui_speaking.png` | Viseme |
+| `desktop_winui_eyes.png` | Close-up (outside face) |
+| `desktop_winui_rings.png` | Rings |
+| `tasklist_after.txt` | Clean exit + installer smoke |
 
-Mesh: CC0 MakeHuman/MPFB via argus-mask stock-02 — see `THIRD_PARTY.md`.
+## v0.4.0 — female hologram head
 
-## v0.3.3 — real eyeball spheres
-
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.3.3
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.4.0

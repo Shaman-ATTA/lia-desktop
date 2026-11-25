@@ -120,8 +120,10 @@ public sealed class ToolHost : IAsyncDisposable
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LiaDesktop", "playwright-profile");
             Directory.CreateDirectory(profile);
+            // Use installed Edge — do not ship Chromium (~150MB+) in the zip
             _browser = await _pw.Chromium.LaunchPersistentContextAsync(profile, new()
             {
+                Channel = "msedge",
                 Headless = false,
                 ViewportSize = new() { Width = 1280, Height = 800 },
             });

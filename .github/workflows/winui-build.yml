@@ -64,11 +64,59 @@ jobs:
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
 
-      - name: Zip release
+      - name: Shrink publish (locales / pdbs / junk)
         shell: pwsh
         run: |
-          Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.4.0-win-x64.zip -Force
-          Get-Item LiaDesktop-0.4.0-win-x64.zip | Format-List Name,Length
+          $out = Join-Path $PWD 'publish\LiaDesktop'
+          $before = (Get-ChildItem $out -Recurse -File | Measure-Object Length -Sum).Sum
+          # PDBs / XML docs
+          Get-ChildItem $out -Recurse -Include *.pdb,*.xml -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch 'resources' } | Remove-Item -Force -ErrorAction SilentlyContinue
+          # Culture satellite folders except en*
+          Get-ChildItem $out -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.Name -match '^[a-z]{2}([-_][A-Za-z]+)?$' -and $_.Name -notmatch '^en') {
+              Write-Host "rm culture $($_.Name)"
+              Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }
+          # Nested culture folders under runtimes / Microsoft.WindowsApp*
+          Get-ChildItem $out -Recurse -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^[a-z]{2}([-_][A-Za-z]+)?$' -and $_.Name -notmatch '^en' } |
+            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+          # Never ship Playwright browser cache
+          Get-ChildItem $out -Recurse -Directory -Filter '.local-browsers' -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $out -Recurse -Directory -Filter 'ms-playwright' -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          $after = (Get-ChildItem $out -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("publish before={0:N0} after={1:N0} saved={2:N0}" -f $before,$after,($before-$after))
+
+      - name: Zip release (max compression)
+        shell: pwsh
+        run: |
+          if (Get-Command 7z -ErrorAction SilentlyContinue) {
+            7z a -tzip -mx=9 LiaDesktop-0.4.1-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
+          } else {
+            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.4.1-win-x64.zip -CompressionLevel Optimal -Force
+          }
+          Get-Item LiaDesktop-0.4.1-win-x64.zip | Format-List Name,Length
+
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found" }
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          & $iscc /Q installer\LiaDesktop.iss
+          $setup = Get-Item artifacts\LiaDesktop-0.4.1-setup.exe
+          Copy-Item $setup.FullName .\LiaDesktop-0.4.1-setup.exe -Force
+          $setup | Format-List Name,Length
+          $zip = Get-Item LiaDesktop-0.4.1-win-x64.zip
+          Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
 
       - name: Smoke launch + screenshots + clean exit proof
         shell: pwsh
@@ -194,6 +242,29 @@ jobs:
           if ($h3 -eq $hr) { throw "threequarter and rings screenshots are identical — need distinct views" }
           Write-Host "smoke ok"
 
+      - name: Installer silent install / uninstall smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $PWD 'LiaDesktop-0.4.1-setup.exe'
+          if (-not (Test-Path $setup)) { throw "setup missing" }
+          $dir = Join-Path $env:LOCALAPPDATA 'LiaDesktop-smoke'
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+          # Inno silent: /VERYSILENT /DIR= /NORESTART /SUPPRESSMSGBOXES
+          $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/NORESTART","/SUPPRESSMSGBOXES","/DIR=`"$dir`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "setup exit $($p.ExitCode)" }
+          $exe = Join-Path $dir 'LiaDesktop.exe'
+          if (-not (Test-Path $exe)) { throw "installed exe missing" }
+          Write-Host "installed ok -> $exe"
+          # Uninstall via unins000.exe
+          $unins = Get-ChildItem $dir -Filter 'unins*.exe' | Select-Object -First 1
+          if (-not $unins) { throw "uninstaller missing" }
+          $u = Start-Process -FilePath $unins.FullName -ArgumentList "/VERYSILENT","/NORESTART","/SUPPRESSMSGBOXES" -Wait -PassThru
+          Start-Sleep -Seconds 2
+          Write-Host "uninstall exit=$($u.ExitCode)"
+          "OK: installer silent install+uninstall" | Out-File tasklist_after.txt -Append
+          Get-Content tasklist_after.txt | Select-Object -Last 5
+
       - name: Upload smoke artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -201,7 +272,8 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.4.0-win-x64.zip
+            LiaDesktop-0.4.1-win-x64.zip
+            LiaDesktop-0.4.1-setup.exe
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_profile.png
@@ -221,17 +293,18 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.4.0** — female hologram head
+          Lia Desktop **v0.4.1** — face polish + installer + smaller zip
 
-          - CC0 MakeHuman/MPFB female head (argus-mask stock-02) + short bob hair + lashes
-          - 4× MSAA, native DPI, wrap lighting, fine scanlines, glitch shimmer
-          - Larger brighter eyes; idle smile/brow; viseme lip sync
-          - Rings / HUD / Job Object unchanged (`tasklist_after.txt`)
+          - Lips: amber (no white bloom); eyes: amber iris/pupil/catchlight, almond lids; thinner holo brows
+          - Eyes close-up camera fixed; livelier head look-at + idle wander
+          - Portable zip shrunk (locales/pdbs trimmed; Playwright uses installed Edge)
+          - Per-user installer `LiaDesktop-0.4.1-setup.exe` + autostart (tray / «Лиа»)
+          - Job Object clean exit (`tasklist_after.txt`)
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
-          for f in LiaDesktop-0.4.0-win-x64.zip \
+          for f in LiaDesktop-0.4.1-win-x64.zip LiaDesktop-0.4.1-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png \
                    tasklist_before.txt tasklist_after.txt; do
@@ -243,15 +316,15 @@ jobs:
           done
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      - name: Mirror assets to v0.4.0 on main pushes
+      - name: Mirror assets to v0.4.1 on main pushes
         if: always() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.4.0
+          TAG=v0.4.1
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "WinUI 3 · female hologram head"
-          for f in LiaDesktop-0.4.0-win-x64.zip desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png tasklist_after.txt; do
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "WinUI 3 · face polish + installer"
+          for f in LiaDesktop-0.4.1-win-x64.zip LiaDesktop-0.4.1-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png tasklist_after.txt; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
           done

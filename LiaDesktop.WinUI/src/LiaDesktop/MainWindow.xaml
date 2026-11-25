@@ -133,6 +133,8 @@
           <TextBlock x:Name="ModelsHint" Foreground="{StaticResource LiaMuted}" FontSize="11"/>
           <TextBlock Text="Workspace" Foreground="{StaticResource LiaMuted}" FontSize="11"/>
           <TextBox x:Name="WorkspaceBox"/>
+          <CheckBox x:Name="AutostartBox" Content="Запускать вместе с Windows (в трее, ждать «Лиа»)"
+                    Foreground="{StaticResource LiaMuted}" Margin="0,8,0,0"/>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,8,0,0">
             <Button Content="Отмена" Click="SettingsCancel_Click"/>
             <Button Content="Сохранить" Click="SettingsSave_Click" Style="{StaticResource AccentButtonStyle}"/>

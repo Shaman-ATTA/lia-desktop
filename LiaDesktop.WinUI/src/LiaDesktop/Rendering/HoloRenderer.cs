@@ -40,7 +40,7 @@ struct Vertex
 public sealed class HoloRenderer : IDisposable
 {
     static readonly Vector3 Amber = new(1f, 0.604f, 0.235f);
-    const float EyeRadius = 0.058f; // larger feminine eyes
+    const float EyeRadius = 0.046f; // natural socket fit (was oversized balls)
     const int MsaaCount = 4;
 
     ID3D11Device? _device;
@@ -59,7 +59,9 @@ public sealed class HoloRenderer : IDisposable
     ID3D11Buffer? _hairIb;
     ID3D11Buffer? _lashVb;
     ID3D11Buffer? _lashIb;
-    uint _hairIndexCount, _lashIndexCount;
+    ID3D11Buffer? _browVb;
+    ID3D11Buffer? _browIb;
+    uint _hairIndexCount, _lashIndexCount, _browIndexCount;
     ID3D11VertexShader? _vs;
     ID3D11PixelShader? _psHead;
     ID3D11PixelShader? _psHair;
@@ -67,6 +69,7 @@ public sealed class HoloRenderer : IDisposable
     ID3D11PixelShader? _psIris;
     ID3D11PixelShader? _psLid;
     ID3D11PixelShader? _psLash;
+    ID3D11PixelShader? _psBrow;
     ID3D11PixelShader? _psRing;
     ID3D11InputLayout? _layout;
     ID3D11DepthStencilState? _dssWrite;
@@ -100,6 +103,10 @@ public sealed class HoloRenderer : IDisposable
     float _gazeYaw, _gazePitch;
     float _saccadeYaw, _saccadePitch;
     float _nextSaccade = 1.2f;
+    float _headYaw, _headPitch; // smoothed look-at
+    float _idleYawTarget, _idlePitchTarget;
+    float _nextIdleWander = 2.5f;
+    bool _listening;
     Vector3 _eyeL = new(-0.157f, 0.25f, 0.40f);
     Vector3 _eyeR = new(0.157f, 0.25f, 0.40f);
 
@@ -108,6 +115,7 @@ public sealed class HoloRenderer : IDisposable
     public float Wide { set => _wide = value; }
     public float PoseYaw { set => _poseYaw = value; }
     public void SetPointer(float x, float y) { _ptrX = x; _ptrY = y; }
+    public void SetListening(bool listening) => _listening = listening;
 
     public void ForcePose(float? yawDeg, float? jaw, bool eyesCloseup = false, bool ringsShowcase = false)
     {
@@ -146,6 +154,7 @@ public sealed class HoloRenderer : IDisposable
         _psIris = CompilePS(HoloShaders.PixelIris);
         _psLid = CompilePS(HoloShaders.PixelLid);
         _psLash = CompilePS(HoloShaders.PixelLash);
+        _psBrow = CompilePS(HoloShaders.PixelBrow);
         _psRing = CompilePS(HoloShaders.PixelRing);
         _layout = _device.CreateInputLayout(new[]
         {
@@ -209,6 +218,7 @@ public sealed class HoloRenderer : IDisposable
         var dir = Path.GetDirectoryName(path) ?? "";
         LoadPart(Path.Combine(dir, "lia_holo_hair.bin"), ref _hairVb, ref _hairIb, ref _hairIndexCount);
         LoadPart(Path.Combine(dir, "lia_holo_lashes.bin"), ref _lashVb, ref _lashIb, ref _lashIndexCount);
+        LoadPart(Path.Combine(dir, "lia_holo_brows.bin"), ref _browVb, ref _browIb, ref _browIndexCount);
     }
 
     void LoadPart(string path, ref ID3D11Buffer? vb, ref ID3D11Buffer? ib, ref uint indexCount)
@@ -307,6 +317,7 @@ public sealed class HoloRenderer : IDisposable
         _time += dt;
 
         UpdateBlink(dt);
+        UpdateHeadLook(dt);
         UpdateGaze(dt);
         var blinkAmt = _blinkPhase;
 
@@ -340,27 +351,28 @@ public sealed class HoloRenderer : IDisposable
         var aspect = _width / (float)_height;
         Vector3 cam, lookAt;
         float fovDeg;
+        float nearPlane = 0.08f;
         if (_eyesCloseup)
         {
-            lookAt = new Vector3(0f, 0.22f, 0.22f);
-            cam = new Vector3(_ptrX * 0.02f, 0.24f, 0.85f);
-            fovDeg = 16f;
+            // Outside the face, framed on both eyes (head scale≈0.52 → eyes ~y0.09 z0.21)
+            lookAt = new Vector3(0f, 0.10f, 0.18f);
+            cam = new Vector3(0f, 0.12f, 1.45f);
+            fovDeg = 18f;
+            nearPlane = 0.2f; // never clip into skull
         }
         else
         {
-            var orbit = MathF.Sin(_time * 0.09f) * 0.06f;
-            cam = new Vector3(_ptrX * 0.10f + orbit, 0.06f + _ptrY * 0.04f, 3.35f);
+            var orbit = MathF.Sin(_time * 0.09f) * 0.05f;
+            cam = new Vector3(orbit, 0.06f, 3.35f);
             lookAt = new Vector3(0, 0.02f, 0);
             fovDeg = 24f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
-        var proj = Matrix4x4.CreatePerspectiveFieldOfView(fovDeg * MathF.PI / 180f, aspect, 0.05f, 40f);
+        var proj = Matrix4x4.CreatePerspectiveFieldOfView(fovDeg * MathF.PI / 180f, aspect, nearPlane, 40f);
         var viewProj = Matrix4x4.Transpose(view * proj);
 
-        var yaw = float.IsNaN(_forcedYaw)
-            ? _poseYaw + MathF.Sin(_time * 0.28f) * 0.18f
-            : _forcedYaw;
-        var pitch = _eyesCloseup ? 0f : MathF.Sin(_time * 0.23f) * 0.04f;
+        var yaw = float.IsNaN(_forcedYaw) ? _headYaw : _forcedYaw;
+        var pitch = _eyesCloseup ? 0f : _headPitch;
         // Gentle breathing head motion
         var breath = 1f + MathF.Sin(_time * 1.05f) * 0.008f;
         var breathY = MathF.Sin(_time * 1.05f) * 0.006f;
@@ -374,7 +386,7 @@ public sealed class HoloRenderer : IDisposable
         // 1) Head
         _ctx.OMSetDepthStencilState(_dssWrite);
         _ctx.OMSetBlendState(_blendOpaque);
-        WriteFrame(viewProj, headModel, cam, blinkAmt, 1.08f);
+        WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         _ctx.PSSetShader(_psHead);
         if (_headVb != null && _headIb != null && _mesh != null)
         {
@@ -386,7 +398,7 @@ public sealed class HoloRenderer : IDisposable
         // 2) Eyes + lids
         DrawEyes(viewProj, headWorld, cam, blinkAmt);
 
-        // 3) Lashes / brows (opaque, depth write, no cull — thin shells)
+        // 3) Lashes (opaque, thin)
         if (_lashVb != null && _lashIb != null && _lashIndexCount > 0)
         {
             _ctx.RSSetState(_rsNoCull);
@@ -398,7 +410,23 @@ public sealed class HoloRenderer : IDisposable
             _ctx.RSSetState(_rs);
         }
 
-        // 4) Hair — alpha, depth-tested, no depth write, no cull
+        // 4) Brows — alpha holo amber arches
+        if (_browVb != null && _browIb != null && _browIndexCount > 0)
+        {
+            _ctx.OMSetDepthStencilState(_dssRead);
+            _ctx.OMSetBlendState(_blendAlpha);
+            _ctx.RSSetState(_rsNoCull);
+            WriteFrame(viewProj, headModel, cam, blinkAmt, 0.95f);
+            _ctx.PSSetShader(_psBrow);
+            _ctx.IASetVertexBuffer(0, _browVb, stride, 0);
+            _ctx.IASetIndexBuffer(_browIb, Format.R32_UInt, 0);
+            _ctx.DrawIndexed(_browIndexCount, 0, 0);
+            _ctx.RSSetState(_rs);
+            _ctx.OMSetDepthStencilState(_dssWrite);
+            _ctx.OMSetBlendState(_blendOpaque);
+        }
+
+        // 5) Hair — alpha, depth-tested, no depth write, no cull
         if (_hairVb != null && _hairIb != null && _hairIndexCount > 0)
         {
             _ctx.OMSetDepthStencilState(_dssRead);
@@ -465,24 +493,60 @@ public sealed class HoloRenderer : IDisposable
         return Math.Clamp(raw * raw * (3f - 2f * raw), 0f, 1f);
     }
 
+    void UpdateHeadLook(float dt)
+    {
+        if (!float.IsNaN(_forcedYaw))
+        {
+            _headYaw = _forcedYaw;
+            _headPitch = 0f;
+            return;
+        }
+        // Idle wander targets
+        if (_time >= _nextIdleWander)
+        {
+            _idleYawTarget = (Random.Shared.NextSingle() - 0.5f) * 0.28f;
+            _idlePitchTarget = (Random.Shared.NextSingle() - 0.5f) * 0.08f;
+            _nextIdleWander = _time + 2.2f + Random.Shared.NextSingle() * 2.8f;
+        }
+        // Mouse / listening toward speaker (pointer), else idle wander
+        float wantYaw, wantPitch;
+        if (_listening)
+        {
+            wantYaw = Math.Clamp(_ptrX * 0.42f, -0.35f, 0.35f);
+            wantPitch = Math.Clamp(_ptrY * 0.18f, -0.12f, 0.12f);
+        }
+        else if (MathF.Abs(_ptrX) > 0.08f || MathF.Abs(_ptrY) > 0.08f)
+        {
+            wantYaw = Math.Clamp(_ptrX * 0.38f + _idleYawTarget * 0.25f, -0.4f, 0.4f);
+            wantPitch = Math.Clamp(_ptrY * 0.16f + _idlePitchTarget * 0.35f, -0.14f, 0.14f);
+        }
+        else
+        {
+            wantYaw = _idleYawTarget + MathF.Sin(_time * 0.22f) * 0.04f;
+            wantPitch = _idlePitchTarget + MathF.Sin(_time * 0.19f) * 0.02f;
+        }
+        wantYaw += _poseYaw;
+        // Smooth — no jitter
+        var k = 1f - MathF.Exp(-dt * 3.2f);
+        _headYaw = MathHelper.Lerp(_headYaw, wantYaw, k);
+        _headPitch = MathHelper.Lerp(_headPitch, wantPitch, k);
+    }
+
     void UpdateGaze(float dt)
     {
-        // Prefer looking toward camera / pointer; subtle saccades
-        var targetYaw = Math.Clamp(_ptrX * 0.28f, -0.22f, 0.22f);
-        var targetPitch = Math.Clamp(_ptrY * 0.18f, -0.14f, 0.14f);
-        // Bias slightly toward camera (zero) when idle
-        targetYaw *= 0.85f;
-        targetPitch *= 0.85f;
+        // Eyes lead the head slightly toward look target + saccades
+        var leadYaw = Math.Clamp((_headYaw - _poseYaw) * 0.35f + _ptrX * 0.12f, -0.22f, 0.22f);
+        var leadPitch = Math.Clamp(_headPitch * 0.5f + _ptrY * 0.08f, -0.14f, 0.14f);
         if (_time >= _nextSaccade)
         {
-            _saccadeYaw = (Random.Shared.NextSingle() - 0.5f) * 0.10f;
-            _saccadePitch = (Random.Shared.NextSingle() - 0.5f) * 0.06f;
+            _saccadeYaw = (Random.Shared.NextSingle() - 0.5f) * 0.09f;
+            _saccadePitch = (Random.Shared.NextSingle() - 0.5f) * 0.05f;
             _nextSaccade = _time + 0.9f + Random.Shared.NextSingle() * 1.6f;
         }
         _saccadeYaw = MathHelper.Lerp(_saccadeYaw, 0, 1f - MathF.Exp(-dt * 3.2f));
         _saccadePitch = MathHelper.Lerp(_saccadePitch, 0, 1f - MathF.Exp(-dt * 3.2f));
-        _gazeYaw = MathHelper.Lerp(_gazeYaw, targetYaw + _saccadeYaw, 1f - MathF.Exp(-dt * 7f));
-        _gazePitch = MathHelper.Lerp(_gazePitch, targetPitch + _saccadePitch, 1f - MathF.Exp(-dt * 7f));
+        _gazeYaw = MathHelper.Lerp(_gazeYaw, leadYaw + _saccadeYaw, 1f - MathF.Exp(-dt * 8.5f));
+        _gazePitch = MathHelper.Lerp(_gazePitch, leadPitch + _saccadePitch, 1f - MathF.Exp(-dt * 8.5f));
     }
 
     void DrawEyes(Matrix4x4 viewProj, Matrix4x4 headWorld, Vector3 cam, float blinkAmt)
@@ -514,8 +578,8 @@ public sealed class HoloRenderer : IDisposable
             if (_irisDisc != null)
             {
                 var irisWorld =
-                    Matrix4x4.CreateScale(EyeRadius * 0.62f) *
-                    Matrix4x4.CreateTranslation(0, 0, EyeRadius * 0.84f) *
+                    Matrix4x4.CreateScale(EyeRadius * 0.58f) *
+                    Matrix4x4.CreateTranslation(0, 0, EyeRadius * 0.85f) *
                     eyeRot *
                     Matrix4x4.CreateTranslation(center) *
                     headWorld;
@@ -526,9 +590,10 @@ public sealed class HoloRenderer : IDisposable
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
-            var upperAngle = MathHelper.Lerp(-0.52f, 0.58f, close);
+            // More coverage when open → almond, not round balls
+            var upperAngle = MathHelper.Lerp(-0.38f, 0.58f, close);
             var upperWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.16f, EyeRadius * 1.10f, EyeRadius * 1.16f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.18f, EyeRadius * 1.12f, EyeRadius * 1.18f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
@@ -538,9 +603,9 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.48f, -0.05f, close);
+            var lowerAngle = MathHelper.Lerp(0.36f, -0.05f, close);
             var lowerWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.14f, EyeRadius * 1.08f, EyeRadius * 1.14f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.16f, EyeRadius * 1.10f, EyeRadius * 1.16f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
@@ -784,6 +849,8 @@ public sealed class HoloRenderer : IDisposable
         _hairIb?.Dispose();
         _lashVb?.Dispose();
         _lashIb?.Dispose();
+        _browVb?.Dispose();
+        _browIb?.Dispose();
         _frameCb?.Dispose();
         _ringCb?.Dispose();
         _rtvMsaa?.Dispose();
@@ -799,6 +866,7 @@ public sealed class HoloRenderer : IDisposable
         _psIris?.Dispose();
         _psLid?.Dispose();
         _psLash?.Dispose();
+        _psBrow?.Dispose();
         _psRing?.Dispose();
         _layout?.Dispose();
         _dssWrite?.Dispose();

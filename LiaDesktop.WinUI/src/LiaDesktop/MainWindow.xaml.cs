@@ -15,6 +15,7 @@ public sealed partial class MainWindow : Window
     readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
     readonly MediaPlayer _player = new();
     HotkeyService? _hotkey;
+    TrayIcon? _tray;
     bool _listening;
 
     public MainWindow()
@@ -76,6 +77,54 @@ public sealed partial class MainWindow : Window
         foreach (var (line, detail) in _s.Log.Lines) AddLog(line, detail);
 
         ApplySmokeOverrides();
+        DispatcherQueue.TryEnqueue(() => InitTrayAndAutostart());
+    }
+
+    void InitTrayAndAutostart()
+    {
+        try
+        {
+            _tray = new TrayIcon(RestoreFromTray);
+            if (AutostartService.WantsAutostart(Environment.GetCommandLineArgs()))
+            {
+                // Start minimized to tray, waiting for wake word
+                var hwnd = WindowNative.GetWindowHandle(this);
+                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+                var appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
+                appWindow.Hide();
+                _ = StartWakeListenAsync();
+            }
+        }
+        catch (Exception ex) { Program.BootLog("tray: " + ex.Message); }
+    }
+
+    void RestoreFromTray()
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                var hwnd = WindowNative.GetWindowHandle(this);
+                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+                var appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
+                appWindow.Show();
+                Activate();
+            }
+            catch { /* */ }
+        });
+    }
+
+    async Task StartWakeListenAsync()
+    {
+        try
+        {
+            if (!_s.Speech.IsAvailable) return;
+            await _s.Speech.StartAsync();
+            _listening = true;
+            Holo.Renderer.SetListening(true);
+            VoiceLine.Text = "VOICE  СЛУШАЮ";
+        }
+        catch { /* */ }
     }
 
     void RefreshModelLine() => ModelLine.Text = $"MODEL  {ModelLabel()}";
@@ -190,6 +239,8 @@ public sealed partial class MainWindow : Window
     {
         _clock.Stop();
         _hotkey?.Dispose();
+        _tray?.Dispose();
+        _tray = null;
         _player.Dispose();
         await _s.ShutdownAsync();
     }
@@ -257,6 +308,7 @@ public sealed partial class MainWindow : Window
         {
             await _s.Speech.StopAsync();
             _listening = false;
+            Holo.Renderer.SetListening(false);
             MicBtn.Content = "🎤";
             VoiceLine.Text = "VOICE  ОЖИДАНИЕ";
         }
@@ -264,6 +316,7 @@ public sealed partial class MainWindow : Window
         {
             await _s.Speech.StartAsync();
             _listening = true;
+            Holo.Renderer.SetListening(true);
             MicBtn.Content = "■";
             VoiceLine.Text = "VOICE  СЛУШАЮ";
             StatusCaption.Text = "СЛУШАЮ";
@@ -290,6 +343,7 @@ public sealed partial class MainWindow : Window
         ProviderBox.SelectedIndex = cfg.Provider == "ollama" ? 1 : 0;
         ApiKeyBox.Password = cfg.ApiKey;
         WorkspaceBox.Text = cfg.WorkspacePath;
+        AutostartBox.IsChecked = AutostartService.IsEnabled();
         ModelBox.Items.Clear();
         if (!string.IsNullOrEmpty(cfg.Model))
         {
@@ -314,6 +368,8 @@ public sealed partial class MainWindow : Window
         cfg.Model = ModelBox.SelectedItem?.ToString() ?? cfg.Model;
         cfg.VisionModel = cfg.Model;
         _s.Secrets.Save(cfg);
+        try { AutostartService.SetEnabled(AutostartBox.IsChecked == true); }
+        catch (Exception ex) { _s.Log.Info("Автозапуск: " + ex.Message); }
         SettingsOverlay.Visibility = Visibility.Collapsed;
         await _s.Gemini.EnsureModelAsync();
         RefreshModelLine();

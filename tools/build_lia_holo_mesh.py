@@ -130,23 +130,21 @@ def recompute_normals(pos: np.ndarray, indices: np.ndarray) -> np.ndarray:
 
 
 def feature_colors(pos: np.ndarray, eye_l, eye_r, mouth_c) -> np.ndarray:
-    """Bake subtle feature weights into vertex color (g=feature)."""
+    """Bake subtle feature weights into vertex color (g=feature). Keep lips mild — no bloom bake."""
     col = np.zeros((len(pos), 4), dtype=np.float32)
-    col[:, 0:3] = 0.55  # base
+    col[:, 0:3] = 0.50  # base
     col[:, 3] = 1.0
-    # lips: near mouth, forward
     d_mouth = np.linalg.norm(pos - mouth_c, axis=1)
-    lip = np.clip(1.0 - d_mouth / 0.12, 0, 1) * np.clip((pos[:, 2] - mouth_c[2] + 0.05) * 8, 0, 1)
-    # brows
-    brow_y = eye_l[1] + 0.06
+    lip = np.clip(1.0 - d_mouth / 0.10, 0, 1) * np.clip((pos[:, 2] - mouth_c[2] + 0.04) * 6, 0, 1)
+    brow_y = eye_l[1] + 0.055
     brow = (
-        np.clip(1.0 - np.abs(pos[:, 1] - brow_y) / 0.04, 0, 1)
-        * np.clip(1.0 - (np.abs(pos[:, 0]) - 0.06) / 0.12, 0, 1)
+        np.clip(1.0 - np.abs(pos[:, 1] - brow_y) / 0.03, 0, 1)
+        * np.clip(1.0 - (np.abs(pos[:, 0]) - 0.05) / 0.11, 0, 1)
         * np.clip((pos[:, 2] - 0.15) * 4, 0, 1)
     )
-    feat = np.maximum(lip * 0.9, brow * 0.75)
-    col[:, 1] = np.clip(0.35 + feat, 0, 1)
-    col[:, 0] = np.clip(0.5 + lip * 0.35, 0, 1)
+    feat = np.maximum(lip * 0.35, brow * 0.4)
+    col[:, 1] = np.clip(0.32 + feat, 0, 0.7)
+    col[:, 0] = np.clip(0.48 + lip * 0.12, 0, 0.65)
     return col
 
 
@@ -358,29 +356,33 @@ def main():
         {"kind": "hair", "license": "CC0-1.0", "source": "stock-02 short02 hair"},
     )
 
-    # Lashes + brows combined as lid line accent
-    parts_pos = []
-    parts_nrm = []
-    parts_idx = []
-    base = 0
-    for mesh in (lashes, brows):
-        prim = mesh.primitives[0]
-        p = read_accessor(g, blob, prim.attributes.POSITION) * scale + offset
-        ix = read_indices(g, blob, prim) + base
-        n = recompute_normals(p, ix - base)
-        parts_pos.append(p)
-        parts_nrm.append(n)
-        parts_idx.append(ix)
-        base += len(p)
-    lpos = np.vstack(parts_pos)
-    lnrm = np.vstack(parts_nrm)
-    lidx = np.concatenate(parts_idx)
+    # Lashes only (thin lid line)
+    lprim = lashes.primitives[0]
+    lpos = read_accessor(g, blob, lprim.attributes.POSITION) * scale + offset
+    lidx = read_indices(g, blob, lprim)
+    lnrm = recompute_normals(lpos, lidx)
     write_part_bin(
         OUT_DIR / "lia_holo_lashes.bin",
         lpos,
         lnrm,
         lidx,
-        {"kind": "lashes", "license": "CC0-1.0", "source": "stock-02 eyelashes+eyebrows"},
+        {"kind": "lashes", "license": "CC0-1.0", "source": "stock-02 eyelashes"},
+    )
+
+    # Brows separate — thinner holo arches (scale Y slightly toward brow ridge)
+    bprim = brows.primitives[0]
+    bpos = read_accessor(g, blob, bprim.attributes.POSITION) * scale + offset
+    # Flatten thickness toward skin: pull toward mean Y of each side
+    mid_y = float(bpos[:, 1].mean())
+    bpos[:, 1] = mid_y + (bpos[:, 1] - mid_y) * 0.55
+    bidx = read_indices(g, blob, bprim)
+    bnrm = recompute_normals(bpos, bidx)
+    write_part_bin(
+        OUT_DIR / "lia_holo_brows.bin",
+        bpos,
+        bnrm,
+        bidx,
+        {"kind": "brows", "license": "CC0-1.0", "source": "stock-02 eyebrow002"},
     )
 
     # Save landmarks JSON for C# sync
