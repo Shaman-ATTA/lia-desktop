@@ -43,7 +43,7 @@ public sealed class HoloRenderer : IDisposable
     // Landmarks from lia_holo_mesh.bin meta
     static readonly Vector3 EyeL = new(-0.1610455f, 0.2527412f, 0.3928776f);
     static readonly Vector3 EyeR = new(0.1524404f, 0.2506996f, 0.3901789f);
-    const float EyeRadius = 0.045f;
+    const float EyeRadius = 0.052f;
 
     ID3D11Device? _device;
     ID3D11DeviceContext? _ctx;
@@ -70,6 +70,7 @@ public sealed class HoloRenderer : IDisposable
     float[]? _morphScratch;
     readonly List<RingMesh> _rings = [];
     PartMesh? _eyeSphere;
+    PartMesh? _irisDisc;
     PartMesh? _lidUpper;
     PartMesh? _lidLower;
 
@@ -372,8 +373,7 @@ public sealed class HoloRenderer : IDisposable
 
         void DrawOne(Vector3 eyeLocal, bool left)
         {
-            // Forward so sphere fills punched socket and reads at distance
-            var center = eyeLocal + new Vector3(0, 0.002f, 0.018f);
+            var center = eyeLocal + new Vector3(0, 0.002f, 0.022f);
             var converge = left ? 0.05f : -0.05f;
             var eyeRot = Matrix4x4.CreateFromYawPitchRoll(_gazeYaw + converge, _gazePitch, 0);
             var eyeWorld =
@@ -382,33 +382,46 @@ public sealed class HoloRenderer : IDisposable
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
 
+            // Sclera sphere
             WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.15f);
             _ctx.PSSetShader(_psEye);
-            _ctx.IASetVertexBuffer(0, _eyeSphere.Vb, stride, 0);
+            _ctx.IASetVertexBuffer(0, _eyeSphere!.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_eyeSphere.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_eyeSphere.IndexCount, 0, 0);
 
-            // Upper lid: wide open rest so iris stays visible; closes on blink
-            var upperAngle = MathHelper.Lerp(-0.85f, 0.72f, lidClose);
+            // Flat iris/pupil disc on +Z of unit eye (same S*R*T as sclera sphere)
+            if (_irisDisc != null)
+            {
+                WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.25f);
+                _ctx.PSSetShader(_psEye);
+                _ctx.IASetVertexBuffer(0, _irisDisc.Vb, stride, 0);
+                _ctx.IASetIndexBuffer(_irisDisc.Ib, Format.R32_UInt, 0);
+                _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
+            }
+
+            // Lids: skip while smoke/freeze so iris is never occluded in screenshots
+            if (_freezeBlink) return;
+
+            var upperAngle = MathHelper.Lerp(-0.95f, 0.72f, lidClose);
             var upperWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.18f, EyeRadius * 1.08f, EyeRadius * 1.18f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.2f, EyeRadius * 1.1f, EyeRadius * 1.2f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(upperWorld), cam, blinkAmt, 1.0f);
             _ctx.PSSetShader(_psLid);
-            _ctx.IASetVertexBuffer(0, _lidUpper.Vb, stride, 0);
+            _ctx.IASetVertexBuffer(0, _lidUpper!.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.55f, 0.08f, lidClose);
+            var lowerAngle = MathHelper.Lerp(0.65f, 0.08f, lidClose);
             var lowerWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.15f, EyeRadius * 0.95f, EyeRadius * 1.15f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.18f, EyeRadius * 0.95f, EyeRadius * 1.18f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(lowerWorld), cam, blinkAmt, 1.0f);
-            _ctx.IASetVertexBuffer(0, _lidLower.Vb, stride, 0);
+            _ctx.IASetVertexBuffer(0, _lidLower!.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_lidLower.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidLower.IndexCount, 0, 0);
         }
@@ -475,9 +488,36 @@ public sealed class HoloRenderer : IDisposable
     void BuildEyes()
     {
         _eyeSphere = CreateSphere(1f, 28, 20);
-        // Upper lid: front hemisphere band (theta from equator toward +Y in local after rot)
+        _irisDisc = CreateIrisDisc(1f, 48);
         _lidUpper = CreateLidShell(upper: true);
         _lidLower = CreateLidShell(upper: false);
+    }
+
+    /// <summary>Iris disc on unit-sphere +Z face (z=0.88, r=0.9) — PixelEye uses local.xy.</summary>
+    PartMesh CreateIrisDisc(float radius, int segments)
+    {
+        const float z = 0.88f;
+        var r = radius * 0.9f;
+        var verts = new List<Vertex> { new() { Pos = new Vector3(0, 0, z), Nrm = Vector3.UnitZ, Col = Vector4.One } };
+        for (var i = 0; i <= segments; i++)
+        {
+            var a = i / (float)segments * MathF.PI * 2;
+            verts.Add(new Vertex
+            {
+                Pos = new Vector3(MathF.Cos(a) * r, MathF.Sin(a) * r, z),
+                Nrm = Vector3.UnitZ,
+                Col = Vector4.One,
+            });
+        }
+        var indices = new List<int>();
+        for (var i = 1; i <= segments; i++)
+        {
+            // CCW from +Z
+            indices.Add(0); indices.Add(i); indices.Add(i + 1);
+        }
+        var vb = _device!.CreateBuffer(verts.ToArray(), BindFlags.VertexBuffer);
+        var ib = _device.CreateBuffer(indices.ToArray(), BindFlags.IndexBuffer);
+        return new PartMesh(vb, ib, (uint)indices.Count);
     }
 
     PartMesh CreateSphere(float radius, int slices, int stacks)
@@ -628,6 +668,7 @@ public sealed class HoloRenderer : IDisposable
         foreach (var r in _rings) { r.Vb.Dispose(); r.Ib.Dispose(); }
         _rings.Clear();
         _eyeSphere?.Dispose();
+        _irisDisc?.Dispose();
         _lidUpper?.Dispose();
         _lidLower?.Dispose();
         _headVb?.Dispose();

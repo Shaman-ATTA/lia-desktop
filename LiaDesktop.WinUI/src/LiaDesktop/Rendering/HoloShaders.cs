@@ -58,10 +58,10 @@ float4 main(PSIn i) : SV_TARGET {
   // Punch open sockets (landmarks eye_L / eye_R) — real eyeball meshes fill these
   float2 eyeL = float2(-0.161, 0.253);
   float2 eyeR = float2(0.152, 0.251);
-  float dL = length((i.local.xy - eyeL) / float2(0.095, 0.055));
-  float dR = length((i.local.xy - eyeR) / float2(0.095, 0.055));
+  float dL = length((i.local.xy - eyeL) / float2(0.11, 0.065));
+  float dR = length((i.local.xy - eyeR) / float2(0.11, 0.065));
   float dEye = min(dL, dR);
-  if (dEye < 1.08 && i.local.z > 0.28) discard;
+  if (dEye < 1.12 && i.local.z > 0.26) discard;
 
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
@@ -149,36 +149,39 @@ float4 main(PSIn i) : SV_TARGET {
   float3 H = normalize(L + V);
   float spec = pow(saturate(dot(N, H)), 96.0);
 
-  // Sphere local: large iris on +Z face so it reads at normal camera distance
+  // Works for sphere (+Z front) and flat iris disc (z≈0, xy in unit circle)
   float2 xy = i.local.xy;
   float r = length(xy);
-  float front = saturate(i.local.z * 1.8 + 0.15);
+  // Iris disc verts sit at z≈0.88; sphere uses full z range
+  float isDisc = saturate(1.0 - abs(i.local.z - 0.88) * 20.0);
+  float front = max(saturate(i.local.z * 1.8 + 0.15), isDisc);
 
-  float3 sclera = float3(0.55, 0.48, 0.38); // dimmer — avoid white-dot bloom
+  float3 sclera = float3(0.42, 0.36, 0.28);
   float3 amber = float3(1.0, 0.62, 0.22);
-  float3 irisOuter = float3(0.35, 0.16, 0.04);
-  float3 irisInner = float3(0.72, 0.38, 0.10);
-  float3 pupil = float3(0.01, 0.008, 0.005);
+  float3 irisOuter = float3(0.28, 0.12, 0.03);
+  float3 irisInner = float3(0.78, 0.42, 0.12);
+  float3 pupil = float3(0.005, 0.004, 0.002);
 
-  float irisR = 0.72;
-  float pupilR = 0.28;
-  float irisMask = (1.0 - smoothstep(irisR * 0.82, irisR, r)) * front;
-  float pupilMask = (1.0 - smoothstep(pupilR * 0.65, pupilR, r)) * front;
-  float limbus = smoothstep(irisR * 0.75, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.12, r)) * front;
+  // Disc: full radius is iris. Sphere: iris on forward cap.
+  float irisR = lerp(0.70, 0.98, isDisc);
+  float pupilR = lerp(0.28, 0.38, isDisc);
+  float irisMask = (1.0 - smoothstep(irisR * 0.88, irisR, r)) * front;
+  float pupilMask = (1.0 - smoothstep(pupilR * 0.7, pupilR, r)) * front;
+  float limbus = smoothstep(irisR * 0.78, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.08, r)) * front;
 
   float ang = atan2(xy.y, xy.x);
-  float spoke = 0.8 + 0.2 * sin(ang * 11.0 + r * 14.0);
+  float spoke = 0.75 + 0.25 * sin(ang * 12.0 + r * 16.0);
   float3 iris = lerp(irisInner, irisOuter, saturate(r / max(irisR, 1e-3))) * spoke;
 
-  float3 col = sclera * (0.4 + diff * 0.35);
-  col = lerp(col, iris, irisMask);
+  float3 col = sclera * (0.35 + diff * 0.3);
+  // On disc, force iris fill (no bare sclera ring looking like a white dot)
+  col = lerp(col, iris, max(irisMask, isDisc * (1.0 - pupilMask)));
   col = lerp(col, pupil, pupilMask);
-  col += amber * limbus * 0.45;
-  // Specular catchlight — compact, on iris only (not whole sclera)
-  col += float3(1.0, 0.96, 0.88) * spec * irisMask * 1.1;
-  float2 catchUv = xy - float2(0.16, 0.12);
-  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.10, length(catchUv))) * irisMask * 0.95;
-  col += amber * pow(1.0 - ndv, 2.5) * 0.12 * glow * (1.0 - irisMask);
+  col += amber * limbus * 0.55;
+  col += float3(1.0, 0.96, 0.88) * spec * irisMask * 0.9;
+  float2 catchUv = xy - float2(0.18, 0.14) * irisR;
+  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.12 * irisR, length(catchUv))) * irisMask * 0.85;
+  col += amber * pow(1.0 - ndv, 2.5) * 0.1 * glow * (1.0 - irisMask);
 
   return float4(saturate(col), 1.0);
 }
