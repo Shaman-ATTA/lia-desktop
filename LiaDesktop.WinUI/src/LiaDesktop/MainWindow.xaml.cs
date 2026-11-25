@@ -189,7 +189,7 @@ public sealed partial class MainWindow : Window
             else if (ringsShowcase)
             {
                 StatusCaption.Text = "КОЛЬЦА";
-                Subtitle.Text = "Орбиты · 15° / −35° / 70°";
+                Subtitle.Text = "Орбиты · halo · depth occluded";
             }
             else if (jaw is > 0.05f)
             {

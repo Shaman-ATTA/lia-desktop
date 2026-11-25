@@ -51,8 +51,8 @@ public sealed class HoloRenderer : IDisposable
     static readonly Vector3 Amber = new(1f, 0.55f, 0.22f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
-    const float HeadScale = 2.35f;
-    const float HeadTransY = -0.88f;
+    const float HeadScale = 1.95f;
+    const float HeadTransY = -0.72f;
     const int MsaaCount = 4;
     int _msaaSamples = 1;
 
@@ -526,26 +526,26 @@ public sealed class HoloRenderer : IDisposable
         float nearPlane = 0.08f;
         if (_eyesCloseup)
         {
-            // Both eyes fully in frame (world eyes ≈ y=0.12 after HeadScale 2.35)
-            lookAt = new Vector3(0f, 0.125f, 0.06f);
-            cam = new Vector3(0f, 0.125f, 1.05f);
-            fovDeg = 24f;
+            // Eye local ~0.43 → world y ≈ 0.43*1.95-0.72 ≈ 0.12
+            lookAt = new Vector3(0f, 0.12f, 0.05f);
+            cam = new Vector3(0f, 0.12f, 1.25f);
+            fovDeg = 26f;
             nearPlane = 0.08f;
         }
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.08f;
-            cam = new Vector3(orbit, 0.02f, 3.35f);
+            cam = new Vector3(orbit, 0.0f, 3.80f);
             lookAt = new Vector3(0, 0.0f, 0.0f);
-            fovDeg = 28f;
+            fovDeg = 30f;
         }
         else
         {
-            // Full head + upper neck with margin (crown not cropped, stump below fade)
+            // Full head + neck margin
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.0f, 3.25f);
+            cam = new Vector3(orbit, 0.0f, 3.70f);
             lookAt = new Vector3(0, 0.0f, 0.0f);
-            fovDeg = 28f;
+            fovDeg = 30f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
         var proj = Matrix4x4.CreatePerspectiveFieldOfView(fovDeg * MathF.PI / 180f, aspect, nearPlane, 40f);
