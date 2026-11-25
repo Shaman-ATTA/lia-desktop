@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.2 — Socket fill / ring polish
+
+- Eye sockets filled: hologram-tinted sclera, eyelids hugging the eyeball, larger iris — no pitch-black almond void
+- Rings sized ~1.3–1.6× head width, tilts 15° / −35° / 70°, thinner tubes, back half dimmed + depth occlusion
+- Distinct `desktop_winui_rings.png` capture (not a copy of threequarter)
+
 ## v0.3.1 — Hologram / rings / HUD polish
 
 - Amber hologram shader: dark interior, fresnel rim, Lambert/Blinn, fine scanlines, lips/brows/nose

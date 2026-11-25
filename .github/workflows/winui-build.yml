@@ -67,8 +67,8 @@ jobs:
       - name: Zip release
         shell: pwsh
         run: |
-          Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.3.1-win-x64.zip -Force
-          Get-Item LiaDesktop-0.3.1-win-x64.zip | Format-List Name,Length
+          Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.3.2-win-x64.zip -Force
+          Get-Item LiaDesktop-0.3.2-win-x64.zip | Format-List Name,Length
 
       - name: Smoke launch + screenshots + clean exit proof
         shell: pwsh
@@ -173,9 +173,8 @@ jobs:
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_threequarter.png') @('--smoke-yaw=32') 10
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_speaking.png') @('--smoke-yaw=12','--smoke-jaw=0.72') 10
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_eyes.png') @('--smoke-eyes','--smoke-yaw=0') 12
-
-          # Rings alias for compatibility with prior asset name
-          Copy-Item (Join-Path $PWD 'desktop_winui_threequarter.png') (Join-Path $PWD 'desktop_winui_rings.png') -Force
+          # Distinct rings view (must NOT be a copy of threequarter)
+          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_rings.png') @('--smoke-rings','--smoke-yaw=-48') 12
 
           "`n=== AFTER CLOSE ===" | Out-File $after -Append
           $left = tasklist | Select-String -Pattern 'LiaDesktop|Lia Assistant'
@@ -185,10 +184,13 @@ jobs:
           Get-Content $after
 
           # Basic visual QA: shots must not be tiny / near-white
-          foreach ($f in @('desktop_winui_front.png','desktop_winui_threequarter.png','desktop_winui_speaking.png','desktop_winui_eyes.png')) {
+          foreach ($f in @('desktop_winui_front.png','desktop_winui_threequarter.png','desktop_winui_speaking.png','desktop_winui_eyes.png','desktop_winui_rings.png')) {
             $len = (Get-Item $f).Length
             if ($len -lt 40000) { throw "$f too small ($len) — likely blank/error dialog" }
           }
+          $h3 = (Get-FileHash desktop_winui_threequarter.png).Hash
+          $hr = (Get-FileHash desktop_winui_rings.png).Hash
+          if ($h3 -eq $hr) { throw "threequarter and rings screenshots are identical — need distinct views" }
           Write-Host "smoke ok"
 
       - name: Upload smoke artifacts
@@ -198,7 +200,7 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.3.1-win-x64.zip
+            LiaDesktop-0.3.2-win-x64.zip
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_speaking.png
@@ -217,19 +219,17 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.3.1** — hologram / rings / HUD polish
+          Lia Desktop **v0.3.2** — socket fill / ring polish
 
-          - Amber hologram shader (fresnel, Lambert/Blinn, scanlines, lips/brows)
-          - Real 3D eyeballs (sphere meshes) + iris/pupil/spec, eyelids blink 3–6s, gaze/saccades
-          - Thin amber 3D torus rings with depth occlusion
-          - Camera framing + idle 3/4; MODEL status; titlebar / subtitle layout
+          - Eye sockets filled: holo-tinted sclera, lids hugging the eyeball, larger iris (no black void)
+          - Compact rings (~1.3–1.6× head): tilts 15° / −35° / 70°, thinner, back half dimmed + depth occlude
+          - Distinct threequarter vs rings screenshots
           - Job Object clean exit (`tasklist_after.txt`)
-          - Screenshots: front, 3/4, speaking, eyes close-up
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
-          for f in LiaDesktop-0.3.1-win-x64.zip \
+          for f in LiaDesktop-0.3.2-win-x64.zip \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_speaking.png \
                    desktop_winui_eyes.png desktop_winui_rings.png tasklist_before.txt tasklist_after.txt; do
             if [ -f "$f" ]; then
@@ -240,15 +240,15 @@ jobs:
           done
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      - name: Mirror assets to v0.3.1 on main pushes
+      - name: Mirror assets to v0.3.2 on main pushes
         if: always() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.3.1
+          TAG=v0.3.2
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "WinUI 3 · hologram polish"
-          for f in LiaDesktop-0.3.1-win-x64.zip desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png tasklist_after.txt; do
+          for f in LiaDesktop-0.3.2-win-x64.zip desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png tasklist_after.txt; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
           done

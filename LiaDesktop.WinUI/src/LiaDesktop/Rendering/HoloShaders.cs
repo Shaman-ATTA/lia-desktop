@@ -55,13 +55,13 @@ struct PSIn {
   float3 local : TEXCOORD2;
 };
 float4 main(PSIn i) : SV_TARGET {
-  // Punch open sockets (landmarks eye_L / eye_R) — real eyeball meshes fill these
+  // Narrow palpebral punch only — lids + sclera fill the almond (no black void)
   float2 eyeL = float2(-0.161, 0.253);
   float2 eyeR = float2(0.152, 0.251);
-  float dL = length((i.local.xy - eyeL) / float2(0.11, 0.065));
-  float dR = length((i.local.xy - eyeR) / float2(0.11, 0.065));
+  float dL = length((i.local.xy - eyeL) / float2(0.072, 0.036));
+  float dR = length((i.local.xy - eyeR) / float2(0.072, 0.036));
   float dEye = min(dL, dR);
-  if (dEye < 1.12 && i.local.z > 0.26) discard;
+  if (dEye < 0.92 && i.local.z > 0.30) discard;
 
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
@@ -109,9 +109,9 @@ float4 main(PSIn i) : SV_TARGET {
   nose *= saturate(i.local.z * 2.0);
   base += gold * nose * (0.22 + fres * 0.22);
 
-  // Soft socket rim (edge of punched hole)
-  float socketRim = (1.0 - smoothstep(0.95, 1.25, dEye)) * smoothstep(0.28, 0.36, i.local.z);
-  base += amber * socketRim * 0.35;
+  // Soft lid-line rim around the fissure
+  float socketRim = (1.0 - smoothstep(0.85, 1.15, dEye)) * smoothstep(0.28, 0.36, i.local.z);
+  base += amber * socketRim * 0.4;
 
   float neck = smoothstep(-0.92, -0.52, i.local.y);
   float neckScanCut = lerp(1.0, 0.15, 1.0 - smoothstep(-0.7, -0.45, i.local.y));
@@ -149,39 +149,41 @@ float4 main(PSIn i) : SV_TARGET {
   float3 H = normalize(L + V);
   float spec = pow(saturate(dot(N, H)), 96.0);
 
-  // Works for sphere (+Z front) and flat iris disc (z≈0, xy in unit circle)
   float2 xy = i.local.xy;
   float r = length(xy);
-  // Iris disc verts sit at z≈0.88; sphere uses full z range
+  // Iris disc at z≈0.88; sphere uses full z — leave visible sclera ring around iris
   float isDisc = saturate(1.0 - abs(i.local.z - 0.88) * 20.0);
-  float front = max(saturate(i.local.z * 1.8 + 0.15), isDisc);
+  float front = max(saturate(i.local.z * 1.6 + 0.2), isDisc);
 
-  float3 sclera = float3(0.42, 0.36, 0.28);
+  // Hologram-tinted sclera (not chalk-white, not dark void)
   float3 amber = float3(1.0, 0.62, 0.22);
-  float3 irisOuter = float3(0.28, 0.12, 0.03);
-  float3 irisInner = float3(0.78, 0.42, 0.12);
-  float3 pupil = float3(0.005, 0.004, 0.002);
+  float3 gold = float3(1.0, 0.78, 0.42);
+  float3 sclera = float3(0.78, 0.68, 0.52);
+  float3 irisOuter = float3(0.32, 0.14, 0.04);
+  float3 irisInner = float3(0.82, 0.45, 0.14);
+  float3 pupil = float3(0.01, 0.008, 0.005);
 
-  // Disc: full radius is iris. Sphere: iris on forward cap.
-  float irisR = lerp(0.70, 0.98, isDisc);
-  float pupilR = lerp(0.28, 0.38, isDisc);
-  float irisMask = (1.0 - smoothstep(irisR * 0.88, irisR, r)) * front;
+  // Larger iris relative to eye, still with sclera margin
+  float irisR = lerp(0.78, 0.82, isDisc);
+  float pupilR = lerp(0.30, 0.34, isDisc);
+  float irisMask = (1.0 - smoothstep(irisR * 0.86, irisR, r)) * front;
   float pupilMask = (1.0 - smoothstep(pupilR * 0.7, pupilR, r)) * front;
-  float limbus = smoothstep(irisR * 0.78, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.08, r)) * front;
+  float limbus = smoothstep(irisR * 0.78, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.1, r)) * front;
 
   float ang = atan2(xy.y, xy.x);
-  float spoke = 0.75 + 0.25 * sin(ang * 12.0 + r * 16.0);
+  float spoke = 0.78 + 0.22 * sin(ang * 12.0 + r * 16.0);
   float3 iris = lerp(irisInner, irisOuter, saturate(r / max(irisR, 1e-3))) * spoke;
 
-  float3 col = sclera * (0.35 + diff * 0.3);
-  // On disc, force iris fill (no bare sclera ring looking like a white dot)
-  col = lerp(col, iris, max(irisMask, isDisc * (1.0 - pupilMask)));
+  float fres = pow(1.0 - ndv, 2.2);
+  float3 col = sclera * (0.55 + diff * 0.4);
+  col += amber * fres * 0.22; // holo tint on sclera
+  col = lerp(col, iris, irisMask);
   col = lerp(col, pupil, pupilMask);
-  col += amber * limbus * 0.55;
-  col += float3(1.0, 0.96, 0.88) * spec * irisMask * 0.9;
-  float2 catchUv = xy - float2(0.18, 0.14) * irisR;
-  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.12 * irisR, length(catchUv))) * irisMask * 0.85;
-  col += amber * pow(1.0 - ndv, 2.5) * 0.1 * glow * (1.0 - irisMask);
+  col += gold * limbus * 0.45;
+  col += float3(1.0, 0.96, 0.88) * spec * irisMask * 0.85;
+  float2 catchUv = xy - float2(0.16, 0.12) * irisR;
+  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.11 * irisR, length(catchUv))) * irisMask * 0.8;
+  col += amber * pow(1.0 - ndv, 2.5) * 0.12 * glow;
 
   return float4(saturate(col), 1.0);
 }
@@ -246,9 +248,12 @@ float4 main(PSIn i) : SV_TARGET {
   float3 V = normalize(camPos - i.world);
   float ndv = saturate(dot(N, V));
   float fres = pow(1.0 - ndv, 1.8);
-  float3 c = ringColor * (0.35 + fres * 0.95) * glow;
-  c += ringColor * pow(fres, 2.5) * 0.4;
-  return float4(c, ringOpacity * (0.4 + fres * 0.55));
+  // Dim the arc behind the head (camera looks from +Z; world.z < 0 is back)
+  float backDim = lerp(1.0, 0.18, saturate((-i.world.z - 0.02) * 4.0));
+  float3 c = ringColor * (0.35 + fres * 0.95) * glow * backDim;
+  c += ringColor * pow(fres, 2.5) * 0.35 * backDim;
+  float a = ringOpacity * (0.35 + fres * 0.55) * backDim;
+  return float4(c, a);
 }
 """;
 }

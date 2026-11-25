@@ -43,7 +43,7 @@ public sealed class HoloRenderer : IDisposable
     // Landmarks from lia_holo_mesh.bin meta
     static readonly Vector3 EyeL = new(-0.1610455f, 0.2527412f, 0.3928776f);
     static readonly Vector3 EyeR = new(0.1524404f, 0.2506996f, 0.3901789f);
-    const float EyeRadius = 0.052f;
+    const float EyeRadius = 0.058f; // fills socket; lids hug this
 
     ID3D11Device? _device;
     ID3D11DeviceContext? _ctx;
@@ -86,6 +86,7 @@ public sealed class HoloRenderer : IDisposable
     float _forcedJaw = float.NaN;
     bool _freezeBlink;
     bool _eyesCloseup;
+    bool _ringsShowcase;
     float _gazeYaw, _gazePitch;
     float _saccadeYaw, _saccadePitch;
     float _nextSaccade = 1.2f;
@@ -97,12 +98,15 @@ public sealed class HoloRenderer : IDisposable
     public void SetPointer(float x, float y) { _ptrX = x; _ptrY = y; }
 
     /// <summary>CI / demo overrides (NaN = idle animation). Freezes blink open for screenshots.</summary>
-    public void ForcePose(float? yawDeg, float? jaw, bool eyesCloseup = false)
+    public void ForcePose(float? yawDeg, float? jaw, bool eyesCloseup = false, bool ringsShowcase = false)
     {
         _forcedYaw = yawDeg.HasValue ? yawDeg.Value * MathF.PI / 180f : float.NaN;
         _forcedJaw = jaw ?? float.NaN;
-        _freezeBlink = yawDeg.HasValue || jaw.HasValue || eyesCloseup;
+        _freezeBlink = yawDeg.HasValue || jaw.HasValue || eyesCloseup || ringsShowcase;
         _eyesCloseup = eyesCloseup;
+        _ringsShowcase = ringsShowcase;
+        if (ringsShowcase)
+            _time = 1.85f; // distinct ring phase vs idle 3/4
     }
 
     public ID3D11Device? Device => _device;
@@ -299,8 +303,9 @@ public sealed class HoloRenderer : IDisposable
                 r.BaseYaw + _time * r.SpinY,
                 r.BasePitch,
                 r.BaseRoll + _time * r.SpinZ);
+            // Centered on head; small radii stay inside viewport
             var model = Matrix4x4.Transpose(
-                Matrix4x4.CreateScale(1) * rot * Matrix4x4.CreateTranslation(0, -0.05f, -0.08f));
+                rot * Matrix4x4.CreateTranslation(0, -0.02f, 0));
             WriteFrame(viewProj, model, cam, 0, 1.0f);
             WriteRing(r.Color, r.Opacity);
             _ctx.IASetVertexBuffer(0, r.Vb, stride, 0);
@@ -373,8 +378,9 @@ public sealed class HoloRenderer : IDisposable
 
         void DrawOne(Vector3 eyeLocal, bool left)
         {
-            var center = eyeLocal + new Vector3(0, 0.002f, 0.022f);
-            var converge = left ? 0.05f : -0.05f;
+            // Slightly proud of socket so sclera fills the fissure
+            var center = eyeLocal + new Vector3(0, 0.001f, 0.012f);
+            var converge = left ? 0.045f : -0.045f;
             var eyeRot = Matrix4x4.CreateFromYawPitchRoll(_gazeYaw + converge, _gazePitch, 0);
             var eyeWorld =
                 Matrix4x4.CreateScale(EyeRadius) *
@@ -382,14 +388,13 @@ public sealed class HoloRenderer : IDisposable
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
 
-            // Sclera sphere
+            // Sclera sphere (holo-tinted white)
             WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.15f);
             _ctx.PSSetShader(_psEye);
             _ctx.IASetVertexBuffer(0, _eyeSphere!.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_eyeSphere.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_eyeSphere.IndexCount, 0, 0);
 
-            // Flat iris/pupil disc on +Z of unit eye (same S*R*T as sclera sphere)
             if (_irisDisc != null)
             {
                 WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.25f);
@@ -399,12 +404,11 @@ public sealed class HoloRenderer : IDisposable
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
-            // Lids: skip while smoke/freeze so iris is never occluded in screenshots
-            if (_freezeBlink) return;
-
-            var upperAngle = MathHelper.Lerp(-0.95f, 0.72f, lidClose);
+            // Lids always hug the eyeball (open slit shows sclera+iris; no black void)
+            var close = _freezeBlink ? 0f : lidClose;
+            var upperAngle = MathHelper.Lerp(-0.38f, 0.68f, close);
             var upperWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.2f, EyeRadius * 1.1f, EyeRadius * 1.2f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.06f, EyeRadius * 1.04f, EyeRadius * 1.06f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
@@ -414,9 +418,9 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.65f, 0.08f, lidClose);
+            var lowerAngle = MathHelper.Lerp(0.36f, -0.05f, close);
             var lowerWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.18f, EyeRadius * 0.95f, EyeRadius * 1.18f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.05f, EyeRadius * 1.02f, EyeRadius * 1.05f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
@@ -493,11 +497,11 @@ public sealed class HoloRenderer : IDisposable
         _lidLower = CreateLidShell(upper: false);
     }
 
-    /// <summary>Iris disc on unit-sphere +Z face (z=0.88, r=0.9) — PixelEye uses local.xy.</summary>
+    /// <summary>Iris disc on unit-sphere +Z face — larger iris, sclera margin remains.</summary>
     PartMesh CreateIrisDisc(float radius, int segments)
     {
         const float z = 0.88f;
-        var r = radius * 0.9f;
+        var r = radius * 0.78f; // ~larger iris vs eye, still leaves sclera ring
         var verts = new List<Vertex> { new() { Pos = new Vector3(0, 0, z), Nrm = Vector3.UnitZ, Col = Vector4.One } };
         for (var i = 0; i <= segments; i++)
         {
@@ -559,34 +563,24 @@ public sealed class HoloRenderer : IDisposable
     /// <summary>Curved eyelid shell covering the front of the eyeball (half-dome band).</summary>
     PartMesh CreateLidShell(bool upper)
     {
-        const int segU = 24, segV = 10;
+        const int segU = 28, segV = 12;
         var verts = new List<Vertex>();
         var indices = new List<int>();
-        // Local space before CreateRotationX: lid sits as a shell in front (+Z), spanning X and Y
+        // Tight spherical shell hugging the eyeball (slightly outside unit sphere)
         for (var i = 0; i <= segV; i++)
         {
             var vv = i / (float)segV;
-            // Upper lid covers top-front; lower covers bottom-front
-            float y0, y1, zBias;
-            if (upper)
-            {
-                y0 = 0.05f; y1 = 1.0f;
-                zBias = 0.15f;
-            }
-            else
-            {
-                y0 = -1.0f; y1 = -0.05f;
-                zBias = 0.15f;
-            }
+            float y0, y1;
+            if (upper) { y0 = 0.02f; y1 = 1.02f; }
+            else { y0 = -1.02f; y1 = -0.02f; }
             var y = MathHelper.Lerp(y0, y1, vv);
             for (var j = 0; j <= segU; j++)
             {
                 var uu = j / (float)segU;
-                var x = MathHelper.Lerp(-1.05f, 1.05f, uu);
-                // Project onto sphere-ish shell slightly outside eyeball
-                var r = MathF.Sqrt(x * x + y * y);
-                var z = MathF.Sqrt(MathF.Max(0.05f, 1.05f - r * r)) + zBias * (1f - r);
-                var pos = new Vector3(x, y, z);
+                var x = MathHelper.Lerp(-1.02f, 1.02f, uu);
+                var r2 = x * x + y * y;
+                var z = MathF.Sqrt(MathF.Max(0.02f, 1.08f - r2)); // snug shell
+                var pos = Vector3.Normalize(new Vector3(x, y, z)) * 1.02f;
                 var nrm = Vector3.Normalize(pos);
                 verts.Add(new Vertex { Pos = pos, Nrm = nrm, Col = new Vector4(Amber, 1) });
             }
@@ -606,14 +600,17 @@ public sealed class HoloRenderer : IDisposable
 
     void BuildRings()
     {
-        void Add(float radius, float tube, float pitch, float yaw, float roll, float spinZ, float spinY = 0.02f, float opacity = 0.85f)
+        // Radii ~1.3–1.6× head width (head scale 0.48 → visual half-width ~0.5);
+        // tilts 15° / -35° / 70° so orbits read as 3D; thin tubes stay inside viewport.
+        void Add(float radius, float tube, float pitchDeg, float yaw, float roll, float spinZ, float spinY = 0.015f, float opacity = 0.85f)
         {
+            var pitch = pitchDeg * MathF.PI / 180f;
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        Add(1.05f, 0.006f, 1.22f, 0.04f, 0.18f, 0.14f, 0.012f, 0.82f);
-        Add(1.22f, 0.005f, -1.30f, 0.10f, -0.22f, -0.10f, 0.018f, 0.68f);
-        Add(1.38f, 0.0045f, 1.38f, -0.06f, 0.28f, 0.07f, 0.009f, 0.52f);
+        Add(0.68f, 0.0032f, 15f, 0.02f, 0.05f, 0.12f, 0.01f, 0.88f);
+        Add(0.76f, 0.0028f, -35f, 0.08f, -0.1f, -0.09f, 0.014f, 0.75f);
+        Add(0.84f, 0.0024f, 70f, -0.05f, 0.12f, 0.06f, 0.008f, 0.62f);
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
@@ -630,11 +627,12 @@ public sealed class HoloRenderer : IDisposable
                 var v = j / (float)sides * MathF.PI * 2;
                 var cx = MathF.Cos(u);
                 var sx = MathF.Sin(u);
+                // Torus in XZ (Y-up) so pitch angles read as orbital tilts, not edge-on bands
                 var pos = new Vector3(
                     (radius + tube * MathF.Cos(v)) * cx,
-                    (radius + tube * MathF.Cos(v)) * sx,
-                    tube * MathF.Sin(v));
-                var nrm = Vector3.Normalize(new Vector3(MathF.Cos(v) * cx, MathF.Cos(v) * sx, MathF.Sin(v)));
+                    tube * MathF.Sin(v),
+                    (radius + tube * MathF.Cos(v)) * sx);
+                var nrm = Vector3.Normalize(new Vector3(MathF.Cos(v) * cx, MathF.Sin(v), MathF.Cos(v) * sx));
                 verts.Add(new Vertex { Pos = pos, Nrm = nrm, Col = new Vector4(Amber, 1) });
             }
         }
