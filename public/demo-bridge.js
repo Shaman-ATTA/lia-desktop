@@ -95,7 +95,7 @@
       emit('voice:state', { state: 'SPEAKING', text: 'Аа…' })
       emit('debug:mouth', { jaw: 0.62, funnel: 0.08, wide: 0.12, speaking: true, poseYaw: 0 })
     },
-    rotate: (yaw = 0.55) => {
+    rotate: (yaw = Math.PI / 6) => {
       emit('voice:state', { state: 'IDLE' })
       emit('debug:mouth', { jaw: 0, funnel: 0, wide: 0, speaking: false, poseYaw: yaw, motionBoost: 1 })
     },

@@ -324,7 +324,7 @@ export default function App() {
                 <em>AGENT</em> {controlling ? 'ACTIVE' : 'STANDBY'}
               </div>
               <div>
-                <em>MESH</em> GLB · 3D
+                <em>MESH</em> HOLO · 3D
               </div>
               <div>
                 <em>LINK</em> {sys.net}
@@ -355,7 +355,7 @@ export default function App() {
               motionBoost={motionBoost}
             />
             <div className={`status ${voice === 'SPEAKING' ? 'speaking' : ''}`}>
-              <ScrambleText text={statusLine} active={voice !== 'IDLE'} />
+              <span className="status-main">{statusLine}</span>
               <span className="status-sub">{statusSub}</span>
             </div>
           </div>

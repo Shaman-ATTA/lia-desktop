@@ -361,24 +361,28 @@ body {
 
 .status {
   position: absolute;
-  bottom: 10px;
+  bottom: 12px;
   left: 0;
   right: 0;
   text-align: center;
   font-family: var(--display);
-  letter-spacing: 0.2em;
-  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  font-size: 0.72rem;
   color: var(--amber);
   text-shadow: 0 0 16px rgba(255, 154, 60, 0.55);
   pointer-events: none;
   z-index: 2;
-  background: linear-gradient(180deg, transparent, rgba(3, 5, 9, 0.55));
-  padding: 18px 8px 6px;
+  background: linear-gradient(180deg, transparent, rgba(3, 5, 9, 0.65));
+  padding: 22px 8px 8px;
 }
 .status.speaking { animation: pulseGlow 1.15s ease-in-out infinite; }
 @keyframes pulseGlow {
   0%, 100% { opacity: 0.85; }
   50% { opacity: 1; text-shadow: 0 0 22px rgba(90, 214, 255, 0.75); }
+}
+.status-main {
+  display: block;
+  white-space: nowrap;
 }
 .status-sub {
   display: block;
@@ -393,18 +397,24 @@ body {
 .hud-subtitle {
   text-align: center;
   font-family: var(--mono);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   letter-spacing: 0.04em;
   color: var(--cyan);
   text-shadow: 0 0 10px rgba(90, 214, 255, 0.35);
-  min-height: 1.4em;
-  padding: 0 8px 2px;
+  min-height: 1.2em;
+  max-height: 2.4em;
+  overflow: hidden;
+  padding: 2px 16px 0;
+  margin: 0 0 2px;
   opacity: 0.92;
+  position: relative;
+  z-index: 2;
+  pointer-events: none;
 }
 
 .bottom-bar {
   z-index: 3;
-  padding: 0 14px 12px;
+  padding: 8px 14px 12px;
 }
 .nav-glass {
   display: grid;
