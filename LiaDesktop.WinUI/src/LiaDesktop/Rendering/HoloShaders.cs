@@ -57,26 +57,25 @@ struct PSIn {
 float4 main(PSIn i) : SV_TARGET {
   float2 eyeL = float2(-0.161, 0.253);
   float2 eyeR = float2(0.152, 0.251);
-  // Almond open-eye region — paint holo sclera (never discard to black void)
-  float dL = length((i.local.xy - eyeL) / float2(0.078, 0.040));
-  float dR = length((i.local.xy - eyeR) / float2(0.078, 0.040));
+  // Almond open-eye region — paint bright holo sclera (fills socket, no black void)
+  float dL = length((i.local.xy - eyeL) / float2(0.090, 0.048));
+  float dR = length((i.local.xy - eyeR) / float2(0.090, 0.048));
   float dEye = min(dL, dR);
-  float inSocket = (1.0 - smoothstep(0.75, 1.05, dEye)) * smoothstep(0.28, 0.36, i.local.z);
+  float inSocket = (1.0 - smoothstep(0.65, 1.0, dEye)) * smoothstep(0.22, 0.34, i.local.z);
 
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
   float ndv = saturate(dot(N, V));
 
-  if (inSocket > 0.04) {
+  if (inSocket > 0.02) {
     float3 amber = float3(1.0, 0.62, 0.22);
-    float3 gold = float3(1.0, 0.78, 0.42);
-    float3 sclera = float3(0.93, 0.84, 0.64);
-    float3 c = sclera * (0.78 + 0.22 * ndv);
-    c += amber * pow(1.0 - ndv, 2.2) * 0.35;
-    c += gold * 0.08;
-    // Soft lid-line at almond edge
-    float edge = smoothstep(0.7, 1.0, dEye);
-    c = lerp(c, amber * 0.45, edge * 0.55);
+    float3 gold = float3(1.0, 0.82, 0.48);
+    float3 sclera = float3(0.96, 0.88, 0.70);
+    float3 c = sclera * (0.85 + 0.15 * ndv);
+    c += amber * pow(1.0 - ndv, 2.0) * 0.4;
+    c += gold * 0.12;
+    float edge = smoothstep(0.55, 0.95, dEye);
+    c = lerp(c, lerp(sclera, amber, 0.55), edge * 0.65); // lid margin
     return float4(saturate(c), 1.0);
   }
 

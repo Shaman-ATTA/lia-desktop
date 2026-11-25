@@ -388,37 +388,29 @@ public sealed class HoloRenderer : IDisposable
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
 
-            // Head PS already paints holo sclera in the almond. Draw iris/pupil disc in front.
+            // Head PS paints holo sclera in the almond. Only draw iris disc on top —
+            // a full opaque sphere was covering that sclera and recreating black voids.
             if (_irisDisc != null)
             {
-                // Slightly proud of the face so iris sits on the painted sclera
                 var irisWorld =
-                    Matrix4x4.CreateScale(EyeRadius * 1.05f) *
-                    Matrix4x4.CreateTranslation(0, 0, 0.02f) *
+                    Matrix4x4.CreateScale(0.055f) * // large iris, sclera margin remains in head paint
                     eyeRot *
-                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.02f)) *
+                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.035f)) *
                     headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.25f);
+                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.3f);
                 _ctx.PSSetShader(_psEye);
                 _ctx.IASetVertexBuffer(0, _irisDisc.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_irisDisc.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
-            // Eyeball sphere under iris for 3D curvature / specular
-            WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.1f);
-            _ctx.PSSetShader(_psEye);
-            _ctx.IASetVertexBuffer(0, _eyeSphere!.Vb, stride, 0);
-            _ctx.IASetIndexBuffer(_eyeSphere.Ib, Format.R32_UInt, 0);
-            _ctx.DrawIndexed(_eyeSphere.IndexCount, 0, 0);
-
-            // Lids hug the eye opening — frame sclera, no black gap
+            // Lids frame the painted sclera + iris (hug the opening)
             var close = _freezeBlink ? 0f : lidClose;
-            var upperAngle = MathHelper.Lerp(-0.22f, 0.72f, close);
+            var upperAngle = MathHelper.Lerp(-0.18f, 0.72f, close);
             var upperWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.12f, EyeRadius * 1.08f, EyeRadius * 1.12f) *
+                Matrix4x4.CreateScale(0.090f, 0.055f, 0.090f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
-                Matrix4x4.CreateTranslation(center) *
+                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.02f)) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(upperWorld), cam, blinkAmt, 1.0f);
             _ctx.PSSetShader(_psLid);
@@ -426,16 +418,18 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.22f, 0.0f, close);
+            var lowerAngle = MathHelper.Lerp(0.18f, 0.0f, close);
             var lowerWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.10f, EyeRadius * 1.06f, EyeRadius * 1.10f) *
+                Matrix4x4.CreateScale(0.088f, 0.052f, 0.088f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
-                Matrix4x4.CreateTranslation(center) *
+                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.02f)) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(lowerWorld), cam, blinkAmt, 1.0f);
             _ctx.IASetVertexBuffer(0, _lidLower!.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_lidLower.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidLower.IndexCount, 0, 0);
+
+            _ = eyeWorld; // keep transform for future sphere restore
         }
 
         DrawOne(EyeL, left: true);
