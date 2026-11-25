@@ -8,6 +8,8 @@ on:
 jobs:
   smoke:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -66,10 +68,20 @@ jobs:
           $out = Join-Path $env:GITHUB_WORKSPACE "desktop_windows_runner.png"
           $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
           Get-Process | Where-Object { $_.ProcessName -match "Lia|electron" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          if (-not (Test-Path $out)) { throw "screenshot missing" }
+          Write-Host "screenshot ok size=$((Get-Item $out).Length) focused=$($script:target -ne [IntPtr]::Zero)"
+      # Prefer release asset over Actions artifacts (account artifact quota exhausted)
+      - name: Attach screenshot to release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release upload v0.1.0 desktop_windows_runner.png --repo "$GITHUB_REPOSITORY" --clobber
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: lia-windows-smoke
-          path: |
-            desktop_windows_runner.png
-            release/*.exe
-            release/*.zip
+          path: desktop_windows_runner.png
+          retention-days: 7
+          if-no-files-found: error
