@@ -21,13 +21,13 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
-        SetTitleBar(Root);
+        SetTitleBar(AppTitleBar); // dedicated drag region; caption buttons clear of НАСТРОЙКИ
         VoiceLine.Text = "VOICE  ОЖИДАНИЕ";
-        ModelLine.Text = "MODEL  —";
+        RefreshModelLine();
         Closed += OnClosed;
 
         _s.Log.Added += OnLog;
-        _s.Gemini.ModelChanged += m => DispatcherQueue.TryEnqueue(() => ModelLine.Text = $"MODEL  {m}");
+        _s.Gemini.ModelChanged += _ => DispatcherQueue.TryEnqueue(RefreshModelLine);
         _s.Agent.Mouth += (j, f, w) => DispatcherQueue.TryEnqueue(() =>
         {
             Holo.Renderer.Jaw = j;
@@ -50,7 +50,10 @@ public sealed partial class MainWindow : Window
                 {
                     StatusCaption.Text = "ОЖИДАНИЕ";
                     VoiceLine.Text = "VOICE  ОЖИДАНИЕ";
+                    Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";
                     Holo.Renderer.Jaw = 0;
+                    Holo.Renderer.Funnel = 0;
+                    Holo.Renderer.Wide = 0;
                 });
             }
             catch { /* */ }
@@ -61,12 +64,66 @@ public sealed partial class MainWindow : Window
         {
             var now = DateTime.Now;
             SysLine.Text = $"{now:yyyy.MM.dd}  {now:HH:mm:ss}  LINK OK";
-            SysPanel.Text = $"TIME  {now:HH:mm:ss}\nDATE  {now:yyyy.MM.dd}\nMODEL {_s.Gemini.ActiveModel}";
+            var model = ModelLabel();
+            SysPanel.Text = $"TIME  {now:HH:mm:ss}\nDATE  {now:yyyy.MM.dd}\nMODEL {model}";
+            // Keep STATUS MODEL in sync even before ModelChanged fires
+            if (ModelLine.Text is null || !ModelLine.Text.Contains(model, StringComparison.Ordinal))
+                ModelLine.Text = $"MODEL  {model}";
         };
         _clock.Start();
 
         Activated += OnActivated;
         foreach (var (line, detail) in _s.Log.Lines) AddLog(line, detail);
+
+        ApplySmokeOverrides();
+    }
+
+    void RefreshModelLine() => ModelLine.Text = $"MODEL  {ModelLabel()}";
+
+    string ModelLabel()
+    {
+        var cfg = _s.Secrets.Load();
+        if (cfg.Provider == "gemini" && string.IsNullOrWhiteSpace(cfg.ApiKey))
+            return "нет ключа";
+        if (!string.IsNullOrWhiteSpace(_s.Gemini.ActiveModel))
+            return _s.Gemini.ActiveModel;
+        if (!string.IsNullOrWhiteSpace(cfg.Model))
+            return cfg.Model;
+        return cfg.Provider == "ollama" ? "ollama" : "нет ключа";
+    }
+
+    void ApplySmokeOverrides()
+    {
+        // LIA_SMOKE_YAW=35 LIA_SMOKE_JAW=0.7 — CI capture modes
+        float? yaw = null, jaw = null;
+        if (float.TryParse(Environment.GetEnvironmentVariable("LIA_SMOKE_YAW"), out var y)) yaw = y;
+        if (float.TryParse(Environment.GetEnvironmentVariable("LIA_SMOKE_JAW"),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var j)) jaw = j;
+        foreach (var a in Environment.GetCommandLineArgs())
+        {
+            if (a.StartsWith("--smoke-yaw=", StringComparison.OrdinalIgnoreCase) &&
+                float.TryParse(a["--smoke-yaw=".Length..], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var y2)) yaw = y2;
+            if (a.StartsWith("--smoke-jaw=", StringComparison.OrdinalIgnoreCase) &&
+                float.TryParse(a["--smoke-jaw=".Length..], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var j2)) jaw = j2;
+        }
+        if (yaw.HasValue || jaw.HasValue)
+        {
+            Holo.Renderer.ForcePose(yaw, jaw);
+            if (jaw is > 0.05f)
+            {
+                StatusCaption.Text = "ГОВОРЮ";
+                VoiceLine.Text = "VOICE  ГОВОРЮ";
+                Subtitle.Text = "Демонстрация визем · губы открыты";
+            }
+            else if (yaw.HasValue)
+            {
+                StatusCaption.Text = "3/4";
+                Subtitle.Text = "Ракурс · idle orbit";
+            }
+        }
     }
 
     void OnActivated(object sender, WindowActivatedEventArgs args)
@@ -219,8 +276,8 @@ public sealed partial class MainWindow : Window
         _s.Secrets.Save(cfg);
         SettingsOverlay.Visibility = Visibility.Collapsed;
         await _s.Gemini.EnsureModelAsync();
-        ModelLine.Text = $"MODEL  {_s.Gemini.ActiveModel}";
-        _s.Log.Info($"Сохранено · {_s.Gemini.ActiveModel}");
+        RefreshModelLine();
+        _s.Log.Info($"Сохранено · {ModelLabel()}");
     }
 
     async void RefreshModels_Click(object sender, RoutedEventArgs e) => await RefreshModelsAsync();

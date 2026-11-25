@@ -39,6 +39,8 @@ struct Vertex
 
 public sealed class HoloRenderer : IDisposable
 {
+    static readonly Vector3 Amber = new(1f, 0.604f, 0.235f); // #FF9A3C
+
     ID3D11Device? _device;
     ID3D11DeviceContext? _ctx;
     IDXGISwapChain1? _swap;
@@ -52,7 +54,8 @@ public sealed class HoloRenderer : IDisposable
     ID3D11PixelShader? _psHead;
     ID3D11PixelShader? _psRing;
     ID3D11InputLayout? _layout;
-    ID3D11DepthStencilState? _dss;
+    ID3D11DepthStencilState? _dssWrite;
+    ID3D11DepthStencilState? _dssRead;
     ID3D11BlendState? _blendOpaque;
     ID3D11BlendState? _blendAlpha;
     ID3D11RasterizerState? _rs;
@@ -68,6 +71,8 @@ public sealed class HoloRenderer : IDisposable
     float _nextBlink = 2.5f;
     float _blinkT;
     bool _ready;
+    float _forcedYaw = float.NaN;
+    float _forcedJaw = float.NaN;
 
     public float Jaw { set => _jaw = value; }
     public float Funnel { set => _funnel = value; }
@@ -75,11 +80,17 @@ public sealed class HoloRenderer : IDisposable
     public float PoseYaw { set => _poseYaw = value; }
     public void SetPointer(float x, float y) { _ptrX = x; _ptrY = y; }
 
+    /// <summary>CI / demo overrides (NaN = idle animation).</summary>
+    public void ForcePose(float? yawDeg, float? jaw)
+    {
+        _forcedYaw = yawDeg.HasValue ? yawDeg.Value * MathF.PI / 180f : float.NaN;
+        _forcedJaw = jaw ?? float.NaN;
+    }
+
     public ID3D11Device? Device => _device;
 
     public void InitDevice()
     {
-        // CI / Server SKUs often lack a usable GPU — fall back to WARP.
         try
         {
             _device = D3D11.D3D11CreateDevice(
@@ -113,19 +124,26 @@ public sealed class HoloRenderer : IDisposable
             16, BindFlags.ConstantBuffer,
             ResourceUsage.Dynamic, CpuAccessFlags.Write, ResourceOptionFlags.None, 0));
 
-        _dss = _device.CreateDepthStencilState(new DepthStencilDescription
+        _dssWrite = _device.CreateDepthStencilState(new DepthStencilDescription
         {
             DepthEnable = true,
             DepthWriteMask = DepthWriteMask.All,
             DepthFunc = ComparisonFunction.LessEqual,
         });
+        _dssRead = _device.CreateDepthStencilState(new DepthStencilDescription
+        {
+            DepthEnable = true,
+            DepthWriteMask = DepthWriteMask.Zero,
+            DepthFunc = ComparisonFunction.LessEqual,
+        });
         _blendOpaque = _device.CreateBlendState(BlendDescription.Opaque);
         _blendAlpha = _device.CreateBlendState(BlendDescription.AlphaBlend);
+        // Mesh is authored CCW (glTF/Three) — treat CCW as front
         _rs = _device.CreateRasterizerState(new RasterizerDescription
         {
             CullMode = CullMode.Back,
             FillMode = FillMode.Solid,
-            FrontCounterClockwise = false,
+            FrontCounterClockwise = true,
             DepthClipEnable = true,
         });
 
@@ -182,41 +200,50 @@ public sealed class HoloRenderer : IDisposable
         _blinkT = Math.Max(0, _blinkT - dt);
         var blinkAmt = _blinkT > 0.07f ? (0.14f - _blinkT) / 0.07f : _blinkT / 0.07f;
 
+        var jaw = float.IsNaN(_forcedJaw) ? _jaw : _forcedJaw;
+        var funnel = float.IsNaN(_forcedJaw) ? _funnel : Math.Min(0.35f, _forcedJaw * 0.4f);
+        var wide = float.IsNaN(_forcedJaw) ? _wide : 0.08f;
+
         if (_mesh != null && _morphScratch != null)
         {
-            _mesh.Morph(Math.Min(0.72f, _jaw * 0.92f), _funnel * 0.55f, _wide * 0.55f, _morphScratch);
+            _mesh.Morph(Math.Min(0.72f, jaw * 0.92f), funnel * 0.55f, wide * 0.55f, _morphScratch);
             UploadHead(_morphScratch);
         }
 
         _ctx.OMSetRenderTargets(_rtv, _dsv);
         _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
-        _ctx.ClearRenderTargetView(_rtv, new Color4(0, 0, 0, 0));
+        _ctx.ClearRenderTargetView(_rtv, new Color4(0.02f, 0.015f, 0.04f, 1));
         _ctx.ClearDepthStencilView(_dsv, DepthStencilClearFlags.Depth, 1, 0);
         _ctx.IASetInputLayout(_layout);
         _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _ctx.VSSetShader(_vs);
         _ctx.RSSetState(_rs);
-        _ctx.OMSetDepthStencilState(_dss);
 
         var aspect = _width / (float)_height;
-        var orbit = MathF.Sin(_time * 0.11f) * 0.08f;
-        var cam = new Vector3(_ptrX * 0.12f + orbit, -0.04f + _ptrY * 0.06f, 2.55f);
-        var view = Matrix4x4.CreateLookAt(cam, new Vector3(0, -0.08f, 0), Vector3.UnitY);
-        var proj = Matrix4x4.CreatePerspectiveFieldOfView(30f * MathF.PI / 180f, aspect, 0.05f, 40f);
+        // Pull back + slight elevation so head+neck fit with margin
+        var orbit = MathF.Sin(_time * 0.09f) * 0.06f;
+        var cam = new Vector3(_ptrX * 0.1f + orbit, 0.02f + _ptrY * 0.04f, 3.35f);
+        var lookAt = new Vector3(0, -0.12f, 0);
+        var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
+        var proj = Matrix4x4.CreatePerspectiveFieldOfView(28f * MathF.PI / 180f, aspect, 0.05f, 40f);
         var viewProj = Matrix4x4.Transpose(view * proj);
 
-        var yaw = _poseYaw + MathF.Sin(_time * 0.32f) * 0.14f;
-        var pitch = MathF.Sin(_time * 0.27f) * 0.07f;
-        var breath = 1f + MathF.Sin(_time * 1.15f) * 0.012f;
-        var headModel = Matrix4x4.CreateScale(0.68f * breath)
+        var yaw = float.IsNaN(_forcedYaw)
+            ? _poseYaw + MathF.Sin(_time * 0.28f) * 0.22f   // gentle idle 3/4 swing
+            : _forcedYaw;
+        var pitch = MathF.Sin(_time * 0.23f) * 0.05f;
+        var breath = 1f + MathF.Sin(_time * 1.1f) * 0.01f;
+        // Smaller head so rings orbit clearly around it
+        var headModel = Matrix4x4.CreateScale(0.52f * breath)
                         * Matrix4x4.CreateRotationX(pitch)
                         * Matrix4x4.CreateRotationY(yaw)
-                        * Matrix4x4.CreateTranslation(0, -0.08f, 0);
+                        * Matrix4x4.CreateTranslation(0, -0.05f, 0);
         headModel = Matrix4x4.Transpose(headModel);
 
         WriteFrame(viewProj, headModel, cam, blinkAmt, 1.05f);
 
-        // Head opaque (in front of rings via depth + z placement)
+        // 1) Head opaque + depth write
+        _ctx.OMSetDepthStencilState(_dssWrite);
         _ctx.OMSetBlendState(_blendOpaque);
         _ctx.PSSetShader(_psHead);
         if (_headVb != null && _headIb != null && _mesh != null)
@@ -227,21 +254,22 @@ public sealed class HoloRenderer : IDisposable
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
 
-        // Rings — real 3D tori, depth-tested, behind face plane
+        // 2) Amber rings — depth-tested (behind head occluded), no depth write
+        _ctx.OMSetDepthStencilState(_dssRead);
         _ctx.OMSetBlendState(_blendAlpha);
         _ctx.PSSetShader(_psRing);
         var ringStride = (uint)Marshal.SizeOf<Vertex>();
         for (var i = 0; i < _rings.Count; i++)
         {
             var r = _rings[i];
+            // Orbit around head center; strong tilt so arcs clear eye/mouth band
             var rot = Matrix4x4.CreateFromYawPitchRoll(
                 r.BaseYaw + _time * r.SpinY,
-                r.BasePitch + MathF.Sin(_time * r.Wobble) * 0.06f,
+                r.BasePitch,
                 r.BaseRoll + _time * r.SpinZ);
             var model = Matrix4x4.CreateScale(1)
                         * rot
-                        * Matrix4x4.CreateTranslation(0, -0.02f + _ptrY * 0.02f, -0.55f + r.Z)
-                        * Matrix4x4.CreateRotationY(_ptrX * 0.04f);
+                        * Matrix4x4.CreateTranslation(0, -0.05f, -0.08f);
             model = Matrix4x4.Transpose(model);
             WriteFrame(viewProj, model, cam, 0, 1.0f);
             WriteRing(r.Color, r.Opacity);
@@ -265,10 +293,7 @@ public sealed class HoloRenderer : IDisposable
             Glow = glow,
             Blink = blink,
         };
-        unsafe
-        {
-            *(FrameCB*)mapped.DataPointer = cb;
-        }
+        unsafe { *(FrameCB*)mapped.DataPointer = cb; }
         _ctx.Unmap(_frameCb);
         _ctx.VSSetConstantBuffer(0, _frameCb);
         _ctx.PSSetConstantBuffer(0, _frameCb);
@@ -277,10 +302,7 @@ public sealed class HoloRenderer : IDisposable
     void WriteRing(Vector3 color, float opacity)
     {
         var mapped = _ctx!.Map(_ringCb!, MapMode.WriteDiscard, MapFlags.None);
-        unsafe
-        {
-            *(RingCB*)mapped.DataPointer = new RingCB { Color = color, Opacity = opacity };
-        }
+        unsafe { *(RingCB*)mapped.DataPointer = new RingCB { Color = color, Opacity = opacity }; }
         _ctx.Unmap(_ringCb);
         _ctx.PSSetConstantBuffer(1, _ringCb);
     }
@@ -316,23 +338,21 @@ public sealed class HoloRenderer : IDisposable
 
     void BuildRings()
     {
-        // Real 3D tori at 15–70° tilts, different depths — behind face plane
-        void Add(float radius, float tube, Vector3 color, float opacity, float pitch, float yaw, float roll, float z, float spinZ, float spinY = 0, float wobble = 0.2f, float arc = MathF.PI * 2)
+        // 3 thin amber tori, radius > head, high tilt so they clear the face band
+        void Add(float radius, float tube, float pitch, float yaw, float roll, float spinZ, float spinY = 0.02f, float opacity = 0.85f)
         {
-            var (vb, ib, count) = CreateTorus(radius, tube, arc, color);
-            _rings.Add(new RingMesh(vb, ib, count, color, opacity, pitch, yaw, roll, z, spinZ, spinY, wobble));
+            var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
+            _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        Add(0.88f, 0.028f, new Vector3(1f, 0.6f, 0.24f), 0.9f, 0.55f, 0.08f, 0, -0.05f, 0.22f);
-        Add(1.02f, 0.022f, new Vector3(0.35f, 0.84f, 1f), 0.72f, -0.72f, 0.2f, 0.1f, -0.12f, -0.16f, 0.05f);
-        Add(1.18f, 0.018f, new Vector3(1f, 0.6f, 0.24f), 0.55f, 1.05f, -0.12f, 0.25f, -0.28f, 0.11f, 0.05f);
-        Add(1.32f, 0.014f, new Vector3(0.35f, 0.84f, 1f), 0.4f, -0.95f, 0.35f, -0.2f, -0.42f, -0.08f);
-        Add(0.94f, 0.032f, new Vector3(1f, 0.6f, 0.24f), 0.92f, 0.48f, 0.1f, 0.85f, -0.08f, 0.3f, 0, 0.2f, MathF.PI * 0.62f);
-        Add(1.10f, 0.026f, new Vector3(0.35f, 0.84f, 1f), 0.75f, -0.65f, -0.15f, -1.15f, -0.1f, -0.24f, 0, 0.2f, MathF.PI * 0.5f);
+        // ~35–55° tilts; radius clearly outside scaled head (~0.52)
+        Add(0.95f, 0.012f, 0.72f, 0.05f, 0.15f, 0.18f, 0.015f, 0.9f);
+        Add(1.12f, 0.010f, -0.85f, 0.12f, -0.2f, -0.12f, 0.02f, 0.75f);
+        Add(1.28f, 0.008f, 1.05f, -0.08f, 0.35f, 0.08f, 0.01f, 0.55f);
     }
 
-    (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, Vector3 color)
+    (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
     {
-        const int seg = 96, sides = 12;
+        const int seg = 128, sides = 10;
         var verts = new List<Vertex>();
         var indices = new List<int>();
         var segs = Math.Max(8, (int)(seg * (arc / (MathF.PI * 2))));
@@ -349,7 +369,7 @@ public sealed class HoloRenderer : IDisposable
                     (radius + tube * MathF.Cos(v)) * sx,
                     tube * MathF.Sin(v));
                 var nrm = Vector3.Normalize(new Vector3(MathF.Cos(v) * cx, MathF.Cos(v) * sx, MathF.Sin(v)));
-                verts.Add(new Vertex { Pos = pos, Nrm = nrm, Col = new Vector4(color, 1) });
+                verts.Add(new Vertex { Pos = pos, Nrm = nrm, Col = new Vector4(Amber, 1) });
             }
         }
         for (var i = 0; i < segs; i++)
@@ -357,8 +377,9 @@ public sealed class HoloRenderer : IDisposable
         {
             var a = i * (sides + 1) + j;
             var b = a + sides + 1;
-            indices.Add(a); indices.Add(b); indices.Add(a + 1);
-            indices.Add(a + 1); indices.Add(b); indices.Add(b + 1);
+            // CCW winding
+            indices.Add(a); indices.Add(a + 1); indices.Add(b);
+            indices.Add(a + 1); indices.Add(b + 1); indices.Add(b);
         }
         var vb = _device!.CreateBuffer(verts.ToArray(), BindFlags.VertexBuffer);
         var ib = _device.CreateBuffer(indices.ToArray(), BindFlags.IndexBuffer);
@@ -392,7 +413,8 @@ public sealed class HoloRenderer : IDisposable
         _psHead?.Dispose();
         _psRing?.Dispose();
         _layout?.Dispose();
-        _dss?.Dispose();
+        _dssWrite?.Dispose();
+        _dssRead?.Dispose();
         _blendOpaque?.Dispose();
         _blendAlpha?.Dispose();
         _rs?.Dispose();
@@ -406,13 +428,13 @@ public sealed class HoloRenderer : IDisposable
         public ID3D11Buffer Vb, Ib;
         public uint IndexCount;
         public Vector3 Color;
-        public float Opacity, BasePitch, BaseYaw, BaseRoll, Z, SpinZ, SpinY, Wobble;
+        public float Opacity, BasePitch, BaseYaw, BaseRoll, SpinZ, SpinY;
         public RingMesh(ID3D11Buffer vb, ID3D11Buffer ib, uint count, Vector3 c, float o,
-            float pitch, float yaw, float roll, float z, float spinZ, float spinY, float wobble)
+            float pitch, float yaw, float roll, float spinZ, float spinY)
         {
             Vb = vb; Ib = ib; IndexCount = count; Color = c; Opacity = o;
-            BasePitch = pitch; BaseYaw = yaw; BaseRoll = roll; Z = z;
-            SpinZ = spinZ; SpinY = spinY; Wobble = wobble;
+            BasePitch = pitch; BaseYaw = yaw; BaseRoll = roll;
+            SpinZ = spinZ; SpinY = spinY;
         }
     }
 }

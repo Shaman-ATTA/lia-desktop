@@ -38,7 +38,6 @@ jobs:
       - name: Publish unpackaged self-contained
         shell: pwsh
         run: |
-          # VS MSBuild ships AppxPackage/Pri tasks that the .NET SDK host lacks (MSB4062).
           $proj = "LiaDesktop.WinUI\src\LiaDesktop\LiaDesktop.csproj"
           $out = Join-Path $PWD "publish\LiaDesktop"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
@@ -59,66 +58,29 @@ jobs:
             /p:PublishDir="$out\" `
             /p:PublishProtocol=FileSystem `
             /v:m
-          if (-not (Test-Path (Join-Path $out "LiaDesktop.exe"))) {
-            Get-ChildItem $out -ErrorAction SilentlyContinue | Select-Object -First 40
-            throw "LiaDesktop.exe missing after publish"
-          }
-          $pri = @(Get-ChildItem $out -Filter '*.pri' -Recurse | Select-Object -ExpandProperty FullName)
-          Write-Host "PRI files:`n$($pri -join "`n")"
-          if (-not ($pri | Where-Object { $_ -match 'resources\.pri$' -or $_ -match 'LiaDesktop' })) {
-            # WinUI often emits resources.pri at output root
-            if (-not (Test-Path (Join-Path $out 'resources.pri'))) {
-              Write-Warning "resources.pri missing — XAML may fail at runtime"
-              Get-ChildItem $out -Filter '*.pri' | Format-Table Name,Length
-            }
-          }
-          Get-ChildItem $out | Select-Object Name,Length | Format-Table
+          if (-not (Test-Path (Join-Path $out "LiaDesktop.exe"))) { throw "LiaDesktop.exe missing after publish" }
+          if (-not (Test-Path (Join-Path $out 'resources.pri'))) { Write-Warning "resources.pri missing" }
+          Get-ChildItem $out -Filter 'resources.pri' | Format-Table Name,Length
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-
-      - name: Note Playwright
-        run: echo "Playwright browsers install on first tool use (Microsoft.Playwright)"
 
       - name: Zip release
         shell: pwsh
         run: |
-          Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.3.0-win-x64.zip -Force
-          Get-Item LiaDesktop-0.3.0-win-x64.zip | Format-List Name,Length
+          Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.3.1-win-x64.zip -Force
+          Get-Item LiaDesktop-0.3.1-win-x64.zip | Format-List Name,Length
 
       - name: Smoke launch + screenshots + clean exit proof
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
+          $ErrorActionPreference = 'Stop'
           $exe = Join-Path $PWD 'publish/LiaDesktop/LiaDesktop.exe'
           if (-not (Test-Path $exe)) { throw "exe missing: $exe" }
 
           $before = Join-Path $PWD 'tasklist_before.txt'
           $after = Join-Path $PWD 'tasklist_after.txt'
-          $shot1 = Join-Path $PWD 'desktop_winui_front.png'
-          $shot2 = Join-Path $PWD 'desktop_winui_rings.png'
-
           "=== BEFORE LAUNCH ===" | Out-File $before
-          tasklist | Select-String -Pattern 'LiaDesktop|chrome|msedge|python' | Out-File $before -Append
-
-          $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
-          if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
-
-          $p = Start-Process -FilePath $exe -PassThru -WorkingDirectory (Split-Path $exe)
-          $alive = $false
-          for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Seconds 1
-            $p.Refresh()
-            if ($p.HasExited) {
-              Write-Host "LiaDesktop exited early code=$($p.ExitCode) after $($i+1)s"
-              if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
-              Get-ChildItem (Split-Path $exe) -Filter '*.dll' | Select-Object -First 5 Name
-              throw "LiaDesktop.exe exited before smoke window (exit $($p.ExitCode))"
-            }
-            $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
-            if ($proc) { $alive = $true; break }
-          }
-          if (-not $alive) { throw "LiaDesktop process not found" }
-          Start-Sleep -Seconds 12
+          tasklist | Select-String -Pattern 'LiaDesktop' | Out-File $before -Append
 
           Add-Type @"
           using System;
@@ -127,7 +89,6 @@ jobs:
           public class Win {
             public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
             [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
-            [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
             [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
             [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
             [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
@@ -137,86 +98,95 @@ jobs:
           }
           [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
           "@
+          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 
-          $script:hwnd = [IntPtr]::Zero
-          $targetPid = [uint32]$p.Id
-          for ($try = 0; $try -lt 20 -and $script:hwnd -eq [IntPtr]::Zero; $try++) {
+          function Find-Hwnd([uint32]$pid) {
+            $script:found = [IntPtr]::Zero
             [Win]::EnumWindows({
               param($h,$l)
               $outPid = [uint32]0
               [void][Win]::GetWindowThreadProcessId($h, [ref]$outPid)
-              if ($outPid -ne $targetPid) { return $true }
-              # Accept hidden windows too — we'll ShowWindow them
-              $script:hwnd = $h
+              if ($outPid -ne $pid) { return $true }
+              $script:found = $h
               return $false
             }, [IntPtr]::Zero)
-            if ($script:hwnd -eq [IntPtr]::Zero) { Start-Sleep -Seconds 1 }
-          }
-          Write-Host "hwnd=$($script:hwnd) pid=$targetPid"
-          if (Test-Path $bootLog) { Write-Host "--- boot.log ---"; Get-Content $bootLog | Out-Host }
-          if ($script:hwnd -eq [IntPtr]::Zero) {
-            throw "No window for LiaDesktop (see boot.log)"
+            return $script:found
           }
 
-          [void][Win]::ShowWindow($script:hwnd, 3)
-          Start-Sleep -Milliseconds 500
-          [void][Win]::SetForegroundWindow($script:hwnd)
-          Start-Sleep -Seconds 4
-
-          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-          function Capture($path) {
+          function Capture-Window([IntPtr]$hwnd, [string]$path) {
             $rect = New-Object RECT
-            if ([Win]::GetWindowRect($script:hwnd, [ref]$rect)) {
-              $w = [Math]::Max(100, $rect.R - $rect.L)
-              $h = [Math]::Max(100, $rect.B - $rect.T)
-              $bmp = New-Object System.Drawing.Bitmap $w, $h
-              $g = [System.Drawing.Graphics]::FromImage($bmp)
-              $g.CopyFromScreen($rect.L, $rect.T, 0, 0, (New-Object System.Drawing.Size $w,$h))
-              $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-              $g.Dispose(); $bmp.Dispose()
-              Write-Host "captured window $($rect.L),$($rect.T) ${w}x${h} -> $path"
-            } else {
-              throw "GetWindowRect failed"
+            if (-not [Win]::GetWindowRect($hwnd, [ref]$rect)) { throw "GetWindowRect failed" }
+            $w = [Math]::Max(100, $rect.R - $rect.L)
+            $h = [Math]::Max(100, $rect.B - $rect.T)
+            $bmp = New-Object System.Drawing.Bitmap $w, $h
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($rect.L, $rect.T, 0, 0, (New-Object System.Drawing.Size $w,$h))
+            $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose()
+            Write-Host "captured ${w}x${h} -> $path ($((Get-Item $path).Length) bytes)"
+          }
+
+          function Invoke-SmokeShot([string]$shotPath, [string[]]$args, [int]$warm=10) {
+            $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
+            if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
+            $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
+            for ($i = 0; $i -lt 25; $i++) {
+              Start-Sleep -Seconds 1
+              $p.Refresh()
+              if ($p.HasExited) {
+                if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
+                throw "exited early code=$($p.ExitCode) args=$($args -join ' ')"
+              }
+              $hwnd = Find-Hwnd ([uint32]$p.Id)
+              if ($hwnd -ne [IntPtr]::Zero -and $i -ge ($warm - 1)) { break }
+            }
+            Start-Sleep -Seconds ([Math]::Max(2, $warm - 5))
+            $hwnd = Find-Hwnd ([uint32]$p.Id)
+            if ($hwnd -eq [IntPtr]::Zero) {
+              if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
+              throw "no hwnd for $($args -join ' ')"
+            }
+            [void][Win]::ShowWindow($hwnd, 3)
+            Start-Sleep -Milliseconds 400
+            [void][Win]::SetForegroundWindow($hwnd)
+            Start-Sleep -Seconds 3
+            Capture-Window $hwnd $shotPath
+            # While-running proof (last shot)
+            "=== WHILE RUNNING ($($args -join ' ')) ===" | Out-File $after -Append
+            tasklist | Select-String -Pattern 'LiaDesktop' | Out-File $after -Append
+            [void][Win]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+            Start-Sleep -Seconds 6
+            if (-not $p.HasExited) { try { $p.Kill($true) } catch {} }
+            Start-Sleep -Seconds 2
+            if (Test-Path $bootLog) {
+              "`n=== BOOT ($($args -join ' ')) ===" | Out-File $after -Append
+              Get-Content $bootLog | Out-File $after -Append
             }
           }
-          Capture $shot1
-          Start-Sleep -Seconds 2
-          Capture $shot2
 
-          "=== WHILE RUNNING ===" | Out-File $after
-          tasklist | Select-String -Pattern 'LiaDesktop|chrome|msedge|python' | Out-File $after -Append
-          if (-not (tasklist | Select-String -Pattern 'LiaDesktop')) {
-            if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
-            throw "LiaDesktop not in tasklist while smoke expected it running"
-          }
-          if (Test-Path $bootLog) {
-            "`n=== BOOT LOG ===" | Out-File $after -Append
-            Get-Content $bootLog | Out-File $after -Append
-          }
+          "" | Out-File $after
+          # Front (yaw locked ~0), 3/4, speaking mouth
+          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front.png') @('--smoke-yaw=5') 12
+          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_threequarter.png') @('--smoke-yaw=32') 10
+          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_speaking.png') @('--smoke-yaw=12','--smoke-jaw=0.72') 10
 
-          # Graceful close via WM_CLOSE
-          if ($script:hwnd -ne [IntPtr]::Zero) {
-            [void][Win]::PostMessage($script:hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CLOSE
-          } else {
-            $p.CloseMainWindow() | Out-Null
-          }
-          Start-Sleep -Seconds 8
-          if (-not $p.HasExited) { try { $p.Kill($true) } catch {} }
+          # Rings alias for compatibility with prior asset name
+          Copy-Item (Join-Path $PWD 'desktop_winui_threequarter.png') (Join-Path $PWD 'desktop_winui_rings.png') -Force
 
-          Start-Sleep -Seconds 3
           "`n=== AFTER CLOSE ===" | Out-File $after -Append
           $left = tasklist | Select-String -Pattern 'LiaDesktop|Lia Assistant'
           $left | Out-File $after -Append
-          if ($left) {
-            Write-Warning "Leftover Lia processes:`n$left"
-            if ($left -match 'LiaDesktop') { throw "LiaDesktop still running after close" }
-          } else {
-            "OK: no LiaDesktop processes remain" | Out-File $after -Append
-          }
-          Write-Host "smoke ok shots=$([IO.File]::Exists($shot1))"
+          if ($left -match 'LiaDesktop') { throw "LiaDesktop still running after close" }
+          "OK: no LiaDesktop processes remain" | Out-File $after -Append
           Get-Content $after
 
-      # Actions artifact storage may be over quota — never fail the job on that.
+          # Basic visual QA: shots must not be tiny / near-white
+          foreach ($f in @('desktop_winui_front.png','desktop_winui_threequarter.png','desktop_winui_speaking.png')) {
+            $len = (Get-Item $f).Length
+            if ($len -lt 40000) { throw "$f too small ($len) — likely blank/error dialog" }
+          }
+          Write-Host "smoke ok"
+
       - name: Upload smoke artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -224,8 +194,10 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.3.0-win-x64.zip
+            LiaDesktop-0.3.1-win-x64.zip
             desktop_winui_front.png
+            desktop_winui_threequarter.png
+            desktop_winui_speaking.png
             desktop_winui_rings.png
             tasklist_before.txt
             tasklist_after.txt
@@ -240,17 +212,19 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.3.0** — WinUI 3 + DirectX 11 (ATTA CORP)
+          Lia Desktop **v0.3.1** — hologram / rings / HUD polish
 
-          - Unpackaged self-contained `LiaDesktop.exe`
-          - DX11 hologram + real 3D torus rings
-          - Gemini ListModels / 404 / 503 resilience
-          - Job Object clean exit (see `tasklist_after.txt`)
+          - Amber hologram shader (fresnel, Lambert/Blinn, scanlines, lips/eyes/blink)
+          - Thin amber 3D torus rings with depth occlusion
+          - Camera framing + idle 3/4; MODEL status; titlebar / subtitle layout
+          - Job Object clean exit (`tasklist_after.txt`)
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
-          for f in LiaDesktop-0.3.0-win-x64.zip desktop_winui_front.png desktop_winui_rings.png tasklist_before.txt tasklist_after.txt; do
+          for f in LiaDesktop-0.3.1-win-x64.zip \
+                   desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_speaking.png \
+                   desktop_winui_rings.png tasklist_before.txt tasklist_after.txt; do
             if [ -f "$f" ]; then
               gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber
             else
@@ -259,16 +233,15 @@ jobs:
           done
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      - name: Ensure v0.3.0 release on main
+      - name: Mirror assets to v0.3.1 on main pushes
         if: always() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.3.0
+          TAG=v0.3.1
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "WinUI 3 · DX11 · ATTA CORP"
-          for f in LiaDesktop-0.3.0-win-x64.zip desktop_winui_front.png desktop_winui_rings.png tasklist_before.txt tasklist_after.txt; do
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "WinUI 3 · hologram polish"
+          for f in LiaDesktop-0.3.1-win-x64.zip desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_speaking.png desktop_winui_rings.png tasklist_after.txt; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
           done
-          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

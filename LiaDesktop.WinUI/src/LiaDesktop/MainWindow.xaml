@@ -13,16 +13,16 @@
       <RowDefinition Height="72"/>
     </Grid.RowDefinitions>
 
-    <!-- Top bar -->
-    <Border Grid.Row="0" BorderBrush="{StaticResource LiaAmber}" BorderThickness="0,0,0,1" Padding="16,0">
+    <!-- Custom title bar drag region (leave right margin for caption buttons) -->
+    <Border x:Name="AppTitleBar" Grid.Row="0" BorderBrush="{StaticResource LiaAmber}" BorderThickness="0,0,0,1" Padding="16,0,160,0">
       <Grid>
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="12">
           <TextBlock Text="ЛИА · ATTA CORP · N-33" Foreground="{StaticResource LiaAmber}" FontWeight="SemiBold" FontSize="14" CharacterSpacing="40"/>
           <TextBlock Text="Доброй ночи, сэр." Foreground="{StaticResource LiaMuted}" FontSize="12" VerticalAlignment="Center"/>
         </StackPanel>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="16">
-          <TextBlock x:Name="SysLine" Foreground="{StaticResource LiaCyan}" FontSize="11" FontFamily="Consolas"/>
-          <Button Content="НАСТРОЙКИ" Click="Settings_Click" Style="{StaticResource AccentButtonStyle}"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="12" Margin="0,0,8,0">
+          <TextBlock x:Name="SysLine" Foreground="{StaticResource LiaCyan}" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center"/>
+          <Button Content="НАСТРОЙКИ" Click="Settings_Click" Style="{StaticResource AccentButtonStyle}" Padding="12,4"/>
         </StackPanel>
       </Grid>
     </Border>
@@ -34,7 +34,6 @@
         <ColumnDefinition Width="280"/>
       </Grid.ColumnDefinitions>
 
-      <!-- Status / Journal -->
       <StackPanel Grid.Column="0" Spacing="10">
         <Border Background="{StaticResource LiaPanel}" BorderBrush="{StaticResource LiaAmber}" BorderThickness="1" Padding="12" CornerRadius="2">
           <StackPanel Spacing="6">
@@ -59,20 +58,26 @@
         </Border>
       </StackPanel>
 
-      <!-- Hologram stage -->
+      <!-- Hologram stage: 3D viewport + caption strip below (no overlay on head) -->
       <Border Grid.Column="1" Margin="10,0" BorderBrush="{StaticResource LiaAmber}" BorderThickness="1" Background="#08050F">
         <Grid>
-          <render:HoloPanel x:Name="Holo"/>
-          <TextBlock x:Name="StatusCaption" Text="ОЖИДАНИЕ" Foreground="{StaticResource LiaAmber}"
-                     HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,36"
-                     FontSize="14" CharacterSpacing="120"/>
-          <TextBlock x:Name="Subtitle" Text="Скажите «Лиа» или нажмите микрофон"
-                     Foreground="{StaticResource LiaCyan}" Opacity="0.85"
-                     HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,14" FontSize="12"/>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <render:HoloPanel x:Name="Holo" Grid.Row="0"/>
+          <Border Grid.Row="1" Background="#E00A0714" BorderBrush="{StaticResource LiaAmber}" BorderThickness="0,1,0,0" Padding="8,10">
+            <StackPanel Spacing="2">
+              <TextBlock x:Name="StatusCaption" Text="ОЖИДАНИЕ" Foreground="{StaticResource LiaAmber}"
+                         HorizontalAlignment="Center" FontSize="13" CharacterSpacing="120"/>
+              <TextBlock x:Name="Subtitle" Text="Скажите «Лиа» или нажмите микрофон"
+                         Foreground="{StaticResource LiaCyan}" Opacity="0.9"
+                         HorizontalAlignment="Center" FontSize="12" TextWrapping="Wrap"/>
+            </StackPanel>
+          </Border>
         </Grid>
       </Border>
 
-      <!-- Dialog -->
       <Border Grid.Column="2" Background="{StaticResource LiaPanel}" BorderBrush="{StaticResource LiaAmber}" BorderThickness="1" Padding="12" CornerRadius="2">
         <StackPanel Spacing="10">
           <TextBlock Text="ДИАЛОГ" Foreground="{StaticResource LiaAmber}" FontSize="11" CharacterSpacing="80"/>
@@ -85,7 +90,6 @@
       </Border>
     </Grid>
 
-    <!-- Bottom nav / mic -->
     <Border Grid.Row="2" BorderBrush="{StaticResource LiaAmber}" BorderThickness="0,1,0,0" Background="#E00A0714">
       <Grid>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="28">
@@ -99,7 +103,6 @@
       </Grid>
     </Border>
 
-    <!-- Settings overlay -->
     <Grid x:Name="SettingsOverlay" Visibility="Collapsed" Background="#CC000000" Grid.RowSpan="3">
       <Border Width="440" Padding="20" Background="#FF120E1C" BorderBrush="{StaticResource LiaAmber}" BorderThickness="1"
               HorizontalAlignment="Center" VerticalAlignment="Center">

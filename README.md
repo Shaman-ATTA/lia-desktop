@@ -8,7 +8,7 @@ Windows App SDK / **WinUI 3** unpackaged self-contained app with **DirectX 11** 
 
 ## Install
 
-1. Download **LiaDesktop-0.3.0-win-x64.zip** from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
+1. Download **LiaDesktop-0.3.1-win-x64.zip** from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
 2. Unpack and run `LiaDesktop.exe`.
 3. **НАСТРОЙКИ** → Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Model is auto-picked via ListModels.
 

@@ -26,7 +26,8 @@ struct VSOut {
 };
 VSOut main(VSIn i) {
   VSOut o;
-  float4 wp = mul(float4(i.pos,1), model);
+  // Row-vector convention: model is Transpose(world)
+  float4 wp = mul(float4(i.pos, 1), model);
   o.world = wp.xyz;
   o.local = i.pos;
   o.nrm = normalize(mul(i.nrm, (float3x3)model));
@@ -36,6 +37,7 @@ VSOut main(VSIn i) {
 }
 """;
 
+    /// <summary>Amber F.R.I.D.A.Y.-style hologram: dark interior, fresnel rim, Lambert/Blinn, scanlines, features.</summary>
     public const string PixelHead = """
 cbuffer Frame : register(b0) {
   float4x4 viewProj;
@@ -57,34 +59,80 @@ float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
   float ndv = saturate(dot(N, V));
-  float fres = pow(1.0 - ndv, 2.15);
-  float rim = pow(1.0 - ndv, 3.6);
-  float scanWave = 0.5 + 0.5 * sin((i.world.y * 280.0 + time * 1.35) * 3.14159265);
-  float scan = pow(scanWave, 7.0) * 0.14;
-  float scanFine = pow(0.5 + 0.5 * sin((i.world.y * 520.0 - time * 0.9) * 3.14159265), 12.0) * 0.05;
-  float flick = (0.992 + 0.008 * sin(time * 18.0 + i.world.y * 7.0)) * max(glow, 0.78);
-  float3 deep = float3(0.018, 0.045, 0.085);
-  float3 cyan = float3(0.22, 0.92, 1.0);
-  float3 soft = float3(0.62, 0.88, 1.0);
-  float fill = saturate(0.16 + fres * 0.82 + rim * 0.3);
-  float3 base = lerp(deep, cyan, fill) * flick;
-  base += cyan * (scan + scanFine);
-  base += soft * rim * 0.48;
-  float feat = max(0.0, i.col.g - fres * 0.55);
-  base += cyan * feat * 0.7;
+
+  // Key + fill lights (world-ish)
+  float3 L1 = normalize(float3(0.35, 0.55, 0.75));
+  float3 L2 = normalize(float3(-0.55, 0.15, 0.45));
+  float diff = saturate(dot(N, L1)) * 0.55 + saturate(dot(N, L2)) * 0.28;
+  float3 H = normalize(L1 + V);
+  float spec = pow(saturate(dot(N, H)), 48.0) * 0.35;
+
+  float fres = pow(1.0 - ndv, 2.2);
+  float rim = pow(1.0 - ndv, 3.8);
+
+  // Fine horizontal scanlines (not coarse mannequin bars)
+  float scanWave = 0.5 + 0.5 * sin((i.local.y * 220.0 + time * 1.2) * 3.14159265);
+  float scan = pow(scanWave, 9.0) * 0.11;
+  float scanFine = pow(0.5 + 0.5 * sin((i.local.y * 480.0 - time * 0.85) * 3.14159265), 14.0) * 0.04;
+
+  float flick = (0.994 + 0.006 * sin(time * 14.0 + i.local.y * 5.0)) * max(glow, 0.82);
+
+  // Amber / gold palette (HUD match) — NOT neon cyan fill
+  float3 deep = float3(0.02, 0.01, 0.008);          // near-black interior
+  float3 amber = float3(1.0, 0.62, 0.22);            // #FF9E38-ish
+  float3 gold = float3(1.0, 0.78, 0.42);
+  float3 softRim = float3(1.0, 0.72, 0.38);
+
+  // Mostly dark shell + fresnel rim + soft Lambert
+  float shell = saturate(0.08 + fres * 0.72 + rim * 0.35 + diff * 0.22);
+  float3 base = lerp(deep, amber, shell) * flick;
+  base += amber * (scan + scanFine) * (0.55 + fres * 0.45);
+  base += softRim * rim * 0.55;
+  base += gold * spec;
+  base += amber * diff * 0.18;
+
+  // Vertex-color features: brows / lips / cheeks (g channel from mesh bake)
+  float feat = saturate(i.col.g * 1.15 - fres * 0.35);
+  float lipZone = smoothstep(0.12, -0.02, i.local.y) * smoothstep(0.55, 0.22, abs(i.local.x));
+  float browZone = smoothstep(0.18, 0.32, i.local.y) * smoothstep(0.42, 0.18, abs(i.local.x));
+  base += amber * feat * 0.85;
+  base += gold * lipZone * (0.25 + feat * 0.55);
+  base += amber * browZone * 0.22;
+
+  // Nose bridge hint from local geometry facing
+  float nose = saturate(1.0 - abs(i.local.x) * 9.0) * smoothstep(0.02, 0.18, i.local.y) * smoothstep(0.32, 0.12, i.local.y);
+  nose *= saturate(i.local.z * 2.2);
+  base += gold * nose * (0.18 + fres * 0.2);
+
+  // Real eyes: sclera + iris + blink
   float2 eyeL = float2(-0.155, 0.252);
   float2 eyeR = float2(0.152, 0.251);
-  float dL = length((i.local.xy - eyeL) / float2(0.055, 0.028));
-  float dR = length((i.local.xy - eyeR) / float2(0.055, 0.028));
-  float eyeMask = 1.0 - smoothstep(0.55, 1.15, min(dL, dR));
-  eyeMask *= smoothstep(0.25, 0.45, i.local.z);
-  float iris = 1.0 - smoothstep(0.15, 0.55, min(dL, dR));
-  base += float3(0.15, 0.75, 0.95) * eyeMask * (0.35 + 0.65 * (1.0 - blink)) * 0.55;
-  base += float3(0.4, 0.95, 1.0) * iris * (1.0 - blink) * 0.85;
-  base *= lerp(1.0, 0.22, eyeMask * blink);
-  float neck = smoothstep(-0.95, -0.58, i.world.y);
-  base *= neck;
-  return float4(base, 1.0);
+  float dL = length((i.local.xy - eyeL) / float2(0.052, 0.026));
+  float dR = length((i.local.xy - eyeR) / float2(0.052, 0.026));
+  float dEye = min(dL, dR);
+  float eyeMask = 1.0 - smoothstep(0.55, 1.2, dEye);
+  eyeMask *= smoothstep(0.22, 0.42, i.local.z);
+  float iris = 1.0 - smoothstep(0.12, 0.52, dEye);
+  float pupil = 1.0 - smoothstep(0.0, 0.22, dEye);
+  float open = 1.0 - blink;
+  float3 sclera = float3(0.95, 0.88, 0.72);
+  float3 irisCol = float3(0.55, 0.32, 0.08);
+  base = lerp(base, sclera * 0.55 + amber * 0.15, eyeMask * 0.65 * open);
+  base += irisCol * iris * open * 0.85;
+  base += float3(0.05, 0.03, 0.01) * pupil * open;
+  base += gold * eyeMask * open * 0.12;
+  // Blink closes the slit
+  base *= lerp(1.0, 0.12, eyeMask * blink);
+
+  // Smooth neck fade — no high-frequency scan on the cut (avoids speckles)
+  float neck = smoothstep(-0.92, -0.52, i.local.y);
+  float neckScanCut = lerp(1.0, 0.15, 1.0 - smoothstep(-0.7, -0.45, i.local.y));
+  base = lerp(base * neck, base * neck * (1.0 - (scan + scanFine) * 0.85), 1.0 - neckScanCut);
+
+  // Soft additive glow toward rim
+  base += amber * fres * 0.12 * glow;
+
+  return float4(saturate(base), 1.0);
 }
 """;
 
@@ -113,9 +161,11 @@ float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
   float ndv = saturate(dot(N, V));
-  float fres = pow(1.0 - ndv, 2.0);
-  float3 c = ringColor * (0.45 + fres * 0.85) * glow;
-  return float4(c, ringOpacity * (0.55 + fres * 0.45));
+  float fres = pow(1.0 - ndv, 1.8);
+  float3 c = ringColor * (0.35 + fres * 0.95) * glow;
+  // Thin bright rim
+  c += ringColor * pow(fres, 2.5) * 0.4;
+  return float4(c, ringOpacity * (0.4 + fres * 0.55));
 }
 """;
 }

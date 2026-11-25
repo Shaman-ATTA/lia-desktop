@@ -3,35 +3,21 @@
 **Repo:** https://github.com/Shaman-ATTA/lia-desktop  
 ATTA CORP · ЛИА / Lia Assistant · N-33 (personal).
 
-## v0.3.0 — WinUI 3 + DirectX 11
+## v0.3.1 — hologram polish
 
-- Stack: .NET 8 + WinUI 3 (Windows App SDK), unpackaged self-contained
-- Renderer: DirectX 11 via Vortice (`SwapChainPanel` + composition swapchain; WARP fallback)
-- Mesh: `Assets/models/lia_holo_mesh.bin` morphs (A ≤ O), blink, breath, amber hologram shader
-- Rings: real 3D torus meshes, tilted, depth-tested behind the head
-- Agent: Gemini (ListModels / 404 / 503) + Ollama; tools (files, PowerShell, Playwright, screenshot, SendInput)
-- Voice: Edge TTS `ru-RU-SvetlanaNeural` −4%; STT Windows.Media.SpeechRecognition ru-RU
-- Secrets: DPAPI; stop: «Лиа, стоп» / Ctrl+Alt+S
-- Exit: Job Object `KILL_ON_JOB_CLOSE`
+- Amber DX11 hologram (fresnel / Lambert-Blinn / scanlines / lips / eyes+blink)
+- Thin amber 3D rings with depth occlusion; camera framing + idle 3/4
+- HUD: titlebar clearance, subtitle below stage, MODEL status
 - Electron prototype: `legacy/electron/`
 
 ## Release
 
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.3.0
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.3.1
 
 | Asset | Notes |
 |------|--------|
-| `LiaDesktop-0.3.0-win-x64.zip` | Self-contained publish (~250 MB) |
-| `desktop_winui_front.png` | CI smoke: front HUD |
-| `desktop_winui_rings.png` | CI smoke: stage / rings |
+| `LiaDesktop-0.3.1-win-x64.zip` | Self-contained publish |
+| `desktop_winui_front.png` | Front view |
+| `desktop_winui_threequarter.png` | 3/4 yaw |
+| `desktop_winui_speaking.png` | Mouth open / viseme |
 | `tasklist_after.txt` | Clean-exit proof |
-
-## tasklist proof (CI)
-
-```
-=== WHILE RUNNING ===
-LiaDesktop.exe                 652 Console                    2    170,660 K
-
-=== AFTER CLOSE ===
-OK: no LiaDesktop processes remain
-```
