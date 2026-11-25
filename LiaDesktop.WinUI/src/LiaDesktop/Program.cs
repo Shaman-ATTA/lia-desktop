@@ -24,7 +24,7 @@ public static class Program
         {
             var ctx = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
             SynchronizationContext.SetSynchronizationContext(ctx);
-            _ = new App();
+            new App();
         });
     }
 }

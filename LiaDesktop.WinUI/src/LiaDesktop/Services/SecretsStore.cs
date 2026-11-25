@@ -70,9 +70,9 @@ public sealed class SecretsStore
     static LiaConfig Scrub(LiaConfig cfg)
     {
         var m = (cfg.Model ?? "").Replace("models/", "");
-        if (string.IsNullOrWhiteSpace(m) || Retired.Contains(m) || Retired.Contains(cfg.Model))
+        if (string.IsNullOrWhiteSpace(m) || Retired.Contains(m) || (!string.IsNullOrEmpty(cfg.Model) && Retired.Contains(cfg.Model)))
             cfg.Model = "";
-        if (string.IsNullOrWhiteSpace(cfg.VisionModel) || Retired.Contains(cfg.VisionModel))
+        if (string.IsNullOrWhiteSpace(cfg.VisionModel) || Retired.Contains(cfg.VisionModel!))
             cfg.VisionModel = cfg.Model;
         return cfg;
     }

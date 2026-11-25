@@ -244,7 +244,7 @@ public sealed class HoloRenderer : IDisposable
 
     void WriteFrame(Matrix4x4 vp, Matrix4x4 model, Vector3 cam, float blink, float glow)
     {
-        var mapped = _ctx!.Map(_frameCb, MapMode.WriteDiscard, MapFlags.None);
+        var mapped = _ctx!.Map(_frameCb!, MapMode.WriteDiscard, MapFlags.None);
         var cb = new FrameCB
         {
             ViewProj = vp,
@@ -265,7 +265,7 @@ public sealed class HoloRenderer : IDisposable
 
     void WriteRing(Vector3 color, float opacity)
     {
-        var mapped = _ctx!.Map(_ringCb, MapMode.WriteDiscard, MapFlags.None);
+        var mapped = _ctx!.Map(_ringCb!, MapMode.WriteDiscard, MapFlags.None);
         unsafe
         {
             *(RingCB*)mapped.DataPointer = new RingCB { Color = color, Opacity = opacity };

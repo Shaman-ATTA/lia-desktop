@@ -20,13 +20,14 @@ public sealed class SpeechListen : IDisposable
             await _rec.CompileConstraintsAsync();
             _rec.HypothesisGenerated += (_, e) =>
             {
-                var t = e.Result?.Text;
-                if (!string.IsNullOrWhiteSpace(t)) Hypothesis?.Invoke(t);
+                // HypothesisGeneratedEventArgs exposes Hypothesis.Text (not Result)
+                var t = e.Hypothesis?.Text;
+                if (!string.IsNullOrWhiteSpace(t)) Hypothesis?.Invoke(t!);
             };
             _rec.ContinuousRecognitionSession.ResultGenerated += (_, e) =>
             {
                 var t = e.Result?.Text;
-                if (!string.IsNullOrWhiteSpace(t)) FinalResult?.Invoke(t);
+                if (!string.IsNullOrWhiteSpace(t)) FinalResult?.Invoke(t!);
             };
             IsAvailable = true;
         }
