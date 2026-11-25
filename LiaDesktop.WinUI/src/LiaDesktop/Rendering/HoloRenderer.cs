@@ -43,7 +43,7 @@ public sealed class HoloRenderer : IDisposable
     // Landmarks from lia_holo_mesh.bin meta
     static readonly Vector3 EyeL = new(-0.1610455f, 0.2527412f, 0.3928776f);
     static readonly Vector3 EyeR = new(0.1524404f, 0.2506996f, 0.3901789f);
-    const float EyeRadius = 0.034f;
+    const float EyeRadius = 0.045f;
 
     ID3D11Device? _device;
     ID3D11DeviceContext? _ctx;
@@ -243,10 +243,10 @@ public sealed class HoloRenderer : IDisposable
         float fovDeg;
         if (_eyesCloseup)
         {
-            // Tight on both eyes — release close-up proof
-            lookAt = new Vector3(-0.004f, 0.22f, 0.12f);
-            cam = new Vector3(_ptrX * 0.05f, 0.24f, 1.15f);
-            fovDeg = 22f;
+            // Tight crop on both eyes (iris/pupil/spec must fill the frame)
+            lookAt = new Vector3(-0.004f, 0.12f, 0.18f);
+            cam = new Vector3(_ptrX * 0.03f, 0.13f, 0.72f);
+            fovDeg = 18f;
         }
         else
         {
@@ -372,10 +372,9 @@ public sealed class HoloRenderer : IDisposable
 
         void DrawOne(Vector3 eyeLocal, bool left)
         {
-            // Slightly forward so sphere sits in punched socket
-            var center = eyeLocal + new Vector3(0, 0, 0.008f);
-            // Convergence: each eye looks a bit toward midline + shared gaze
-            var converge = left ? 0.04f : -0.04f;
+            // Forward so sphere fills punched socket and reads at distance
+            var center = eyeLocal + new Vector3(0, 0.002f, 0.018f);
+            var converge = left ? 0.05f : -0.05f;
             var eyeRot = Matrix4x4.CreateFromYawPitchRoll(_gazeYaw + converge, _gazePitch, 0);
             var eyeWorld =
                 Matrix4x4.CreateScale(EyeRadius) *
@@ -383,16 +382,16 @@ public sealed class HoloRenderer : IDisposable
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
 
-            WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.1f);
+            WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.15f);
             _ctx.PSSetShader(_psEye);
             _ctx.IASetVertexBuffer(0, _eyeSphere.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_eyeSphere.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_eyeSphere.IndexCount, 0, 0);
 
-            // Upper lid: rotates down over eye (open ≈ -0.55 rad, closed ≈ +0.55)
-            var upperAngle = MathHelper.Lerp(-0.55f, 0.62f, lidClose);
+            // Upper lid: wide open rest so iris stays visible; closes on blink
+            var upperAngle = MathHelper.Lerp(-0.85f, 0.72f, lidClose);
             var upperWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.12f, EyeRadius * 1.05f, EyeRadius * 1.12f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.18f, EyeRadius * 1.08f, EyeRadius * 1.18f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
@@ -402,10 +401,9 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            // Lower lid: slight raise on blink
-            var lowerAngle = MathHelper.Lerp(0.42f, 0.12f, lidClose);
+            var lowerAngle = MathHelper.Lerp(0.55f, 0.08f, lidClose);
             var lowerWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.10f, EyeRadius * 0.95f, EyeRadius * 1.10f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.15f, EyeRadius * 0.95f, EyeRadius * 1.15f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
