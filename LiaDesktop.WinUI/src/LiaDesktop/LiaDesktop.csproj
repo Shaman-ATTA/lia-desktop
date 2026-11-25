@@ -14,7 +14,11 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <!-- Self-contained: skip auto Bootstrap (avoids "install Windows App Runtime" dialog) -->
     <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
-    <EnableMsixTooling>false</EnableMsixTooling>
+    <!-- Needed so PriGen emits resources.pri (ms-appx:///MainWindow.xaml) for unpackaged -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <EnableDefaultPriItems>true</EnableDefaultPriItems>
+    <AppxPackage>false</AppxPackage>
+    <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>false</PublishSingleFile>
     <PublishReadyToRun>false</PublishReadyToRun>

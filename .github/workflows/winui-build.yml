@@ -52,7 +52,9 @@ jobs:
             /p:SelfContained=true `
             /p:WindowsPackageType=None `
             /p:WindowsAppSDKSelfContained=true `
-            /p:EnableMsixTooling=false `
+            /p:EnableMsixTooling=true `
+            /p:AppxPackage=false `
+            /p:GenerateAppxPackageOnBuild=false `
             /p:PublishReadyToRun=false `
             /p:PublishDir="$out\" `
             /p:PublishProtocol=FileSystem `
@@ -60,6 +62,15 @@ jobs:
           if (-not (Test-Path (Join-Path $out "LiaDesktop.exe"))) {
             Get-ChildItem $out -ErrorAction SilentlyContinue | Select-Object -First 40
             throw "LiaDesktop.exe missing after publish"
+          }
+          $pri = @(Get-ChildItem $out -Filter '*.pri' -Recurse | Select-Object -ExpandProperty FullName)
+          Write-Host "PRI files:`n$($pri -join "`n")"
+          if (-not ($pri | Where-Object { $_ -match 'resources\.pri$' -or $_ -match 'LiaDesktop' })) {
+            # WinUI often emits resources.pri at output root
+            if (-not (Test-Path (Join-Path $out 'resources.pri'))) {
+              Write-Warning "resources.pri missing — XAML may fail at runtime"
+              Get-ChildItem $out -Filter '*.pri' | Format-Table Name,Length
+            }
           }
           Get-ChildItem $out | Select-Object Name,Length | Format-Table
         env:
