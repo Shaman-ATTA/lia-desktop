@@ -6,7 +6,7 @@ ATTA CORP · ЛИА / Lia Assistant · N-33 (personal).
 ## v0.3.0 — WinUI 3 + DirectX 11
 
 - Stack: .NET 8 + WinUI 3 (Windows App SDK), unpackaged self-contained
-- Renderer: DirectX 11 via Vortice (`SwapChainPanel` + composition swapchain)
+- Renderer: DirectX 11 via Vortice (`SwapChainPanel` + composition swapchain; WARP fallback)
 - Mesh: `Assets/models/lia_holo_mesh.bin` morphs (A ≤ O), blink, breath, amber hologram shader
 - Rings: real 3D torus meshes, tilted, depth-tested behind the head
 - Agent: Gemini (ListModels / 404 / 503) + Ollama; tools (files, PowerShell, Playwright, screenshot, SendInput)
@@ -15,15 +15,23 @@ ATTA CORP · ЛИА / Lia Assistant · N-33 (personal).
 - Exit: Job Object `KILL_ON_JOB_CLOSE`
 - Electron prototype: `legacy/electron/`
 
-## Artifacts (CI)
-
-| File | Notes |
-|------|--------|
-| `LiaDesktop-0.3.0-win-x64.zip` | Self-contained publish folder zip |
-| `desktop_winui_front.png` | Running app front view |
-| `desktop_winui_rings.png` | Rings / stage capture |
-| `tasklist_after.txt` | Clean-exit proof |
-
 ## Release
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.3.0
+
+| Asset | Notes |
+|------|--------|
+| `LiaDesktop-0.3.0-win-x64.zip` | Self-contained publish (~250 MB) |
+| `desktop_winui_front.png` | CI smoke: front HUD |
+| `desktop_winui_rings.png` | CI smoke: stage / rings |
+| `tasklist_after.txt` | Clean-exit proof |
+
+## tasklist proof (CI)
+
+```
+=== WHILE RUNNING ===
+LiaDesktop.exe                 652 Console                    2    170,660 K
+
+=== AFTER CLOSE ===
+OK: no LiaDesktop processes remain
+```
