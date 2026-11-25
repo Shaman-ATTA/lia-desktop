@@ -60,9 +60,9 @@ float4 main(PSIn i) : SV_TARGET {
   // Carve out full 3D socket volume (including recessed walls) — filled by sclera disc mesh
   float3 eyeCL = float3(-0.161, 0.253, 0.393);
   float3 eyeCR = float3(0.152, 0.251, 0.390);
-  float volL = length((i.local - eyeCL) / float3(0.100, 0.058, 0.095));
-  float volR = length((i.local - eyeCR) / float3(0.100, 0.058, 0.095));
-  if (min(volL, volR) < 1.05) discard;
+  float volL = length((i.local - eyeCL) / float3(0.082, 0.046, 0.070));
+  float volR = length((i.local - eyeCR) / float3(0.082, 0.046, 0.070));
+  if (min(volL, volR) < 1.0) discard;
 
   float dL = length((i.local.xy - eyeL) / float2(0.090, 0.048));
   float dR = length((i.local.xy - eyeR) / float2(0.090, 0.048));
@@ -152,8 +152,8 @@ float4 main(PSIn i) : SV_TARGET {
 
   float2 xy = i.local.xy;
   float r = length(xy);
-  float isDisc = saturate(1.0 - abs(i.local.z - 0.88) * 20.0);
   float isPlate = saturate(1.0 - abs(i.col.a - 0.5) * 20.0);
+  float isDisc = 1.0 - isPlate; // iris disc uses a=1
 
   float3 amber = float3(1.0, 0.62, 0.22);
   float3 gold = float3(1.0, 0.82, 0.48);

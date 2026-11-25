@@ -391,28 +391,30 @@ public sealed class HoloRenderer : IDisposable
             var converge = left ? 0.04f : -0.04f;
             var eyeRot = Matrix4x4.CreateFromYawPitchRoll(_gazeYaw + converge, _gazePitch, 0);
 
-            // 1) Large almond sclera — must fully cover carved hole
+            // Shared eye plane — oversized sclera covers carve silhouette from any angle
+            var eyePlane = center + new Vector3(0, 0, 0.04f);
+
             if (_scleraPlate != null)
             {
                 var scleraWorld =
-                    Matrix4x4.CreateScale(0.115f, 0.064f, 1f) *
+                    Matrix4x4.CreateScale(0.155f, 0.088f, 1f) *
                     eyeRot *
-                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.03f)) *
+                    Matrix4x4.CreateTranslation(eyePlane) *
                     headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(scleraWorld), cam, blinkAmt, 1.25f);
+                WriteFrame(viewProj, Matrix4x4.Transpose(scleraWorld), cam, blinkAmt, 1.3f);
                 _ctx.PSSetShader(_psEye);
                 _ctx.IASetVertexBuffer(0, _scleraPlate.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_scleraPlate.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(_scleraPlate.IndexCount, 0, 0);
             }
 
-            // 2) Large iris on sclera
             if (_irisDisc != null)
             {
+                // Flat disc in same plane as sclera (no baked z=0.88 offset) — rebuild uses z=0
                 var irisWorld =
-                    Matrix4x4.CreateScale(0.070f) *
+                    Matrix4x4.CreateScale(0.078f) *
                     eyeRot *
-                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.045f)) *
+                    Matrix4x4.CreateTranslation(eyePlane + new Vector3(0, 0, 0.002f)) *
                     headWorld;
                 WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.4f);
                 _ctx.PSSetShader(_psEye);
@@ -421,13 +423,12 @@ public sealed class HoloRenderer : IDisposable
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
-            // 3) Lids hug sclera rim
             var close = _freezeBlink ? 0f : lidClose;
-            var upperAngle = MathHelper.Lerp(-0.14f, 0.72f, close);
+            var upperAngle = MathHelper.Lerp(-0.12f, 0.72f, close);
             var upperWorld =
-                Matrix4x4.CreateScale(0.110f, 0.062f, 0.110f) *
+                Matrix4x4.CreateScale(0.145f, 0.082f, 0.145f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
-                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.035f)) *
+                Matrix4x4.CreateTranslation(eyePlane + new Vector3(0, 0, 0.004f)) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(upperWorld), cam, blinkAmt, 1.0f);
             _ctx.PSSetShader(_psLid);
@@ -435,11 +436,11 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.14f, 0.0f, close);
+            var lowerAngle = MathHelper.Lerp(0.12f, 0.0f, close);
             var lowerWorld =
-                Matrix4x4.CreateScale(0.108f, 0.058f, 0.108f) *
+                Matrix4x4.CreateScale(0.142f, 0.078f, 0.142f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
-                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.035f)) *
+                Matrix4x4.CreateTranslation(eyePlane + new Vector3(0, 0, 0.004f)) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(lowerWorld), cam, blinkAmt, 1.0f);
             _ctx.IASetVertexBuffer(0, _lidLower!.Vb, stride, 0);
@@ -543,11 +544,11 @@ public sealed class HoloRenderer : IDisposable
         return new PartMesh(vb, ib, (uint)indices.Count);
     }
 
-    /// <summary>Iris disc on unit-sphere +Z face — larger iris, sclera margin remains.</summary>
+    /// <summary>Flat iris disc in XY (z=0) — coplanar with sclera plate.</summary>
     PartMesh CreateIrisDisc(float radius, int segments)
     {
-        const float z = 0.88f;
-        var r = radius * 0.92f; // large iris on painted sclera
+        const float z = 0f;
+        var r = radius * 0.98f;
         var verts = new List<Vertex> { new() { Pos = new Vector3(0, 0, z), Nrm = Vector3.UnitZ, Col = Vector4.One } };
         for (var i = 0; i <= segments; i++)
         {
@@ -654,9 +655,9 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        Add(0.58f, 0.0022f, 15f, 0.02f, 0.05f, 0.12f, 0.01f, 0.88f);
-        Add(0.66f, 0.0019f, -35f, 0.08f, -0.1f, -0.09f, 0.014f, 0.75f);
-        Add(0.74f, 0.0016f, 70f, -0.05f, 0.12f, 0.06f, 0.008f, 0.62f);
+        Add(0.50f, 0.0020f, 15f, 0.02f, 0.05f, 0.12f, 0.01f, 0.88f);
+        Add(0.56f, 0.0017f, -35f, 0.08f, -0.1f, -0.09f, 0.014f, 0.75f);
+        Add(0.62f, 0.0014f, 70f, -0.05f, 0.12f, 0.06f, 0.008f, 0.62f);
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
