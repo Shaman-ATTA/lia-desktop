@@ -92,8 +92,25 @@ jobs:
           "=== BEFORE LAUNCH ===" | Out-File $before
           tasklist | Select-String -Pattern 'LiaDesktop|chrome|msedge|python' | Out-File $before -Append
 
+          $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
+          if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
+
           $p = Start-Process -FilePath $exe -PassThru -WorkingDirectory (Split-Path $exe)
-          Start-Sleep -Seconds 25
+          $alive = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) {
+              Write-Host "LiaDesktop exited early code=$($p.ExitCode) after $($i+1)s"
+              if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
+              Get-ChildItem (Split-Path $exe) -Filter '*.dll' | Select-Object -First 5 Name
+              throw "LiaDesktop.exe exited before smoke window (exit $($p.ExitCode))"
+            }
+            $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
+            if ($proc) { $alive = $true; break }
+          }
+          if (-not $alive) { throw "LiaDesktop process not found" }
+          Start-Sleep -Seconds 12
 
           Add-Type @"
           using System;
@@ -108,36 +125,51 @@ jobs:
             [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
             [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
             [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
           }
+          [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
           "@
 
           $script:hwnd = [IntPtr]::Zero
           $targetPid = [uint32]$p.Id
-          [Win]::EnumWindows({
-            param($h,$l)
-            if (-not [Win]::IsWindowVisible($h)) { return $true }
-            $outPid = [uint32]0
-            [void][Win]::GetWindowThreadProcessId($h, [ref]$outPid)
-            if ($outPid -ne $targetPid) { return $true }
-            $script:hwnd = $h
-            return $false
-          }, [IntPtr]::Zero)
-
-          if ($script:hwnd -ne [IntPtr]::Zero) {
-            [void][Win]::ShowWindow($script:hwnd, 3)
-            Start-Sleep -Milliseconds 400
-            [void][Win]::SetForegroundWindow($script:hwnd)
-            Start-Sleep -Seconds 3
+          for ($try = 0; $try -lt 10 -and $script:hwnd -eq [IntPtr]::Zero; $try++) {
+            [Win]::EnumWindows({
+              param($h,$l)
+              $outPid = [uint32]0
+              [void][Win]::GetWindowThreadProcessId($h, [ref]$outPid)
+              if ($outPid -ne $targetPid) { return $true }
+              if (-not [Win]::IsWindowVisible($h)) { return $true }
+              $script:hwnd = $h
+              return $false
+            }, [IntPtr]::Zero)
+            if ($script:hwnd -eq [IntPtr]::Zero) { Start-Sleep -Seconds 1 }
           }
+          Write-Host "hwnd=$($script:hwnd) pid=$targetPid"
+          if ($script:hwnd -eq [IntPtr]::Zero) {
+            if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
+            throw "No visible window for LiaDesktop"
+          }
+
+          [void][Win]::ShowWindow($script:hwnd, 3)
+          Start-Sleep -Milliseconds 500
+          [void][Win]::SetForegroundWindow($script:hwnd)
+          Start-Sleep -Seconds 4
 
           Add-Type -AssemblyName System.Windows.Forms,System.Drawing
           function Capture($path) {
-            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-            $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-            $g.Dispose(); $bmp.Dispose()
+            $rect = New-Object RECT
+            if ([Win]::GetWindowRect($script:hwnd, [ref]$rect)) {
+              $w = [Math]::Max(100, $rect.R - $rect.L)
+              $h = [Math]::Max(100, $rect.B - $rect.T)
+              $bmp = New-Object System.Drawing.Bitmap $w, $h
+              $g = [System.Drawing.Graphics]::FromImage($bmp)
+              $g.CopyFromScreen($rect.L, $rect.T, 0, 0, (New-Object System.Drawing.Size $w,$h))
+              $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+              $g.Dispose(); $bmp.Dispose()
+              Write-Host "captured window $($rect.L),$($rect.T) ${w}x${h} -> $path"
+            } else {
+              throw "GetWindowRect failed"
+            }
           }
           Capture $shot1
           Start-Sleep -Seconds 2
@@ -145,6 +177,14 @@ jobs:
 
           "=== WHILE RUNNING ===" | Out-File $after
           tasklist | Select-String -Pattern 'LiaDesktop|chrome|msedge|python' | Out-File $after -Append
+          if (-not (tasklist | Select-String -Pattern 'LiaDesktop')) {
+            if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
+            throw "LiaDesktop not in tasklist while smoke expected it running"
+          }
+          if (Test-Path $bootLog) {
+            "`n=== BOOT LOG ===" | Out-File $after -Append
+            Get-Content $bootLog | Out-File $after -Append
+          }
 
           # Graceful close via WM_CLOSE
           if ($script:hwnd -ne [IntPtr]::Zero) {

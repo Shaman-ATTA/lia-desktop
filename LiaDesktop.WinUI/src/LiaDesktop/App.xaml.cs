@@ -23,5 +23,15 @@ public partial class App : Application
         Services.Bootstrap();
         MainWindowInstance = new MainWindow();
         MainWindowInstance.Activate();
+        // Ensure a visible footprint even if DX init is slow (helps CI capture)
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(MainWindowInstance);
+            var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+            var appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
+            appWindow.Resize(new Windows.Graphics.SizeInt32(1280, 800));
+            appWindow.Show();
+        }
+        catch { /* */ }
     }
 }

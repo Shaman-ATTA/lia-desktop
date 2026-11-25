@@ -79,10 +79,21 @@ public sealed class HoloRenderer : IDisposable
 
     public void InitDevice()
     {
-        _device = D3D11.D3D11CreateDevice(
-            DriverType.Hardware,
-            DeviceCreationFlags.BgraSupport,
-            new[] { FeatureLevel.Level_11_0 });
+        // CI / Server SKUs often lack a usable GPU — fall back to WARP.
+        try
+        {
+            _device = D3D11.D3D11CreateDevice(
+                DriverType.Hardware,
+                DeviceCreationFlags.BgraSupport,
+                new[] { FeatureLevel.Level_11_0 });
+        }
+        catch
+        {
+            _device = D3D11.D3D11CreateDevice(
+                DriverType.Warp,
+                DeviceCreationFlags.BgraSupport,
+                new[] { FeatureLevel.Level_11_0 });
+        }
         _ctx = _device.ImmediateContext;
 
         _vs = CompileVS(HoloShaders.Vertex, out var vsBlob);
