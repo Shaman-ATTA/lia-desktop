@@ -83,6 +83,7 @@ public sealed class HoloRenderer : IDisposable
     ID3D11ShaderResourceView? _srvNormal;
     ID3D11ShaderResourceView? _srvOrm;
     ID3D11ShaderResourceView? _srvOpacity;
+    ID3D11ShaderResourceView? _srvFallback;
 
     PbrMesh? _mesh;
     float[]? _morphScratch;
@@ -242,10 +243,19 @@ public sealed class HoloRenderer : IDisposable
 
         LoadPbrPart(Path.Combine(dir, "lia_pbr_hair.bin"), ref _hairVb, ref _hairIb, ref _hairIndexCount);
 
-        _srvAlbedo = TryLoadTexturePng(Path.Combine(dir, "lia_pbr_albedo.png"));
-        _srvNormal = TryLoadTexturePng(Path.Combine(dir, "lia_pbr_normal.png"));
-        _srvOrm = TryLoadTexturePng(Path.Combine(dir, "lia_pbr_orm.png"));
-        _srvOpacity = TryLoadTexturePng(Path.Combine(dir, "lia_pbr_opacity.png"));
+        try
+        {
+            _srvAlbedo = TryLoadTexturePng(Path.Combine(dir, "lia_pbr_albedo.png"));
+            _srvNormal = TryLoadTexturePng(Path.Combine(dir, "lia_pbr_normal.png"));
+            _srvOrm = TryLoadTexturePng(Path.Combine(dir, "lia_pbr_orm.png"));
+            _srvOpacity = TryLoadTexturePng(Path.Combine(dir, "lia_pbr_opacity.png"));
+            Program.BootLog($"pbr tex albedo={_srvAlbedo != null} nrm={_srvNormal != null} orm={_srvOrm != null} op={_srvOpacity != null} verts={_mesh.VertexCount}");
+        }
+        catch (Exception ex)
+        {
+            Program.BootLog("texture load FATAL: " + ex);
+            throw;
+        }
     }
 
     void LoadPbrPart(string path, ref ID3D11Buffer? vb, ref ID3D11Buffer? ib, ref uint indexCount)
@@ -473,9 +483,10 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 1) Skin — PBR textures, light alpha on edges
+        // 1) Skin — PBR textures (no-cull: bake winding can flip)
         _ctx.OMSetDepthStencilState(_dssWrite);
-        _ctx.OMSetBlendState(_blendAlpha, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+        _ctx.OMSetBlendState(_blendOpaque, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+        _ctx.RSSetState(_rsNoCull);
         WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         BindSkinTextures();
         _ctx.PSSetShader(_psSkin);
@@ -485,7 +496,7 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_headIb, Format.R32_UInt, 0);
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
-        _ctx.OMSetBlendState(_blendOpaque, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+        _ctx.RSSetState(_rs);
 
         // 2) Eyes + cornea + lids
         DrawEyes(viewProj, headWorld, cam, blinkAmt);
@@ -540,14 +551,45 @@ public sealed class HoloRenderer : IDisposable
 
     void BindSkinTextures()
     {
-        if (_srvAlbedo == null || _srvNormal == null || _srvOrm == null) return;
-        _ctx!.PSSetShaderResources(0, new[] { _srvAlbedo, _srvNormal, _srvOrm });
+        EnsureFallbackTex();
+        _ctx!.PSSetShaderResources(0, new[] {
+            _srvAlbedo ?? _srvFallback!,
+            _srvNormal ?? _srvFallback!,
+            _srvOrm ?? _srvFallback!,
+        });
     }
 
     void BindHairTextures()
     {
-        if (_srvOpacity == null || _srvAlbedo == null) return;
-        _ctx!.PSSetShaderResources(0, new[] { _srvOpacity, _srvAlbedo });
+        EnsureFallbackTex();
+        _ctx!.PSSetShaderResources(0, new[] {
+            _srvOpacity ?? _srvFallback!,
+            _srvAlbedo ?? _srvFallback!,
+        });
+    }
+
+    void EnsureFallbackTex()
+    {
+        if (_srvFallback != null || _device == null) return;
+        var desc = new Texture2DDescription
+        {
+            Width = 1, Height = 1, MipLevels = 1, ArraySize = 1,
+            Format = Format.R8G8B8A8_UNorm,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Immutable,
+            BindFlags = BindFlags.ShaderResource,
+        };
+        // warm skin-ish pixel
+        byte[] px = [200, 150, 120, 255];
+        unsafe
+        {
+            fixed (byte* p = px)
+            {
+                var init = new SubresourceData(p, 4, 4);
+                var tex = _device.CreateTexture2D(desc, init);
+                _srvFallback = _device.CreateShaderResourceView(tex);
+            }
+        }
     }
 
     void UpdateBlink(float dt)
@@ -934,8 +976,16 @@ public sealed class HoloRenderer : IDisposable
 
     ID3D11PixelShader CompilePS(string src)
     {
-        var result = Compiler.Compile(src, "main", "ps.hlsl", "ps_5_0");
-        return _device!.CreatePixelShader(result.Span);
+        try
+        {
+            var result = Compiler.Compile(src, "main", "ps.hlsl", "ps_5_0");
+            return _device!.CreatePixelShader(result.Span);
+        }
+        catch (Exception ex)
+        {
+            Program.BootLog("CompilePS FATAL: " + ex.Message);
+            throw;
+        }
     }
 
     public void Dispose()
@@ -955,6 +1005,7 @@ public sealed class HoloRenderer : IDisposable
         _srvNormal?.Dispose();
         _srvOrm?.Dispose();
         _srvOpacity?.Dispose();
+        _srvFallback?.Dispose();
         _samplerLinearWrap?.Dispose();
         _frameCb?.Dispose();
         _ringCb?.Dispose();

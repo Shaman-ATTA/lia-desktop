@@ -50,6 +50,8 @@ struct PSIn {
 float3 unpackN(float3 t){ return normalize(t*2-1); }
 float4 main(PSIn i) : SV_TARGET {
   float3 albedo = albedoMap.Sample(samp, i.uv).rgb;
+  // Fallback if unbound / black atlas
+  if (dot(albedo, albedo) < 1e-6) albedo = float3(0.78, 0.55, 0.42);
   // sRGB-ish decode
   albedo = pow(max(albedo, 1e-4), 2.2);
   float3 nm = unpackN(normalMap.Sample(samp, i.uv).xyz);
@@ -81,11 +83,10 @@ float4 main(PSIn i) : SV_TARGET {
   color = lerp(color, color * float3(1.05, 0.95, 0.82), 0.18); // slight warm
   color += amber * fres * 0.22 * glow;
   color += amber * (scan + glitch);
-  float alpha = lerp(0.92, 0.72, fres * 0.55); // edge transparency only
-  // Tone map
+  // Opaque body — edge hologram via color only (alpha broke SwapChain clear look)
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
-  return float4(color, alpha);
+  return float4(color, 1.0);
 }";
 
     public const string PixelHair = @"

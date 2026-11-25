@@ -14,6 +14,7 @@ public sealed class HoloPanel : SwapChainPanel
     IDXGISwapChain1? _swap;
     DispatcherTimer? _timer;
     bool _inited;
+    int _tickErrors;
     DateTime _last = DateTime.UtcNow;
 
     public HoloRenderer Renderer => _renderer;
@@ -54,12 +55,21 @@ public sealed class HoloPanel : SwapChainPanel
                 var now = DateTime.UtcNow;
                 var dt = (float)(now - _last).TotalSeconds;
                 _last = now;
-                try { _renderer.Tick(Math.Clamp(dt, 0.001f, 0.1f)); } catch { /* */ }
+                try { _renderer.Tick(Math.Clamp(dt, 0.001f, 0.1f)); }
+                catch (Exception ex)
+                {
+                    if (_tickErrors < 3)
+                    {
+                        _tickErrors++;
+                        Program.BootLog("Tick: " + ex);
+                    }
+                }
             };
             _timer.Start();
         }
         catch (Exception ex)
         {
+            Program.BootLog("HoloPanel init FATAL: " + ex);
             System.Diagnostics.Debug.WriteLine("HoloPanel init: " + ex);
         }
     }
