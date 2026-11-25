@@ -388,42 +388,35 @@ public sealed class HoloRenderer : IDisposable
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
 
-            // 1) Almond sclera plate in the fissure — larger than punch, kills black void
-            if (_scleraPlate != null)
-            {
-                var plateWorld =
-                    Matrix4x4.CreateScale(0.10f / EyeRadius, 0.052f / EyeRadius, 1f) *
-                    Matrix4x4.CreateTranslation(0, 0, 0.72f) *
-                    eyeWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(plateWorld), cam, blinkAmt, 1.1f);
-                _ctx.PSSetShader(_psEye);
-                _ctx.IASetVertexBuffer(0, _scleraPlate.Vb, stride, 0);
-                _ctx.IASetIndexBuffer(_scleraPlate.Ib, Format.R32_UInt, 0);
-                _ctx.DrawIndexed(_scleraPlate.IndexCount, 0, 0);
-            }
-
-            // 2) Sclera sphere
-            WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.15f);
-            _ctx.PSSetShader(_psEye);
-            _ctx.IASetVertexBuffer(0, _eyeSphere!.Vb, stride, 0);
-            _ctx.IASetIndexBuffer(_eyeSphere.Ib, Format.R32_UInt, 0);
-            _ctx.DrawIndexed(_eyeSphere.IndexCount, 0, 0);
-
-            // 3) Iris disc (larger relative to eye)
+            // Head PS already paints holo sclera in the almond. Draw iris/pupil disc in front.
             if (_irisDisc != null)
             {
-                WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.25f);
+                // Slightly proud of the face so iris sits on the painted sclera
+                var irisWorld =
+                    Matrix4x4.CreateScale(EyeRadius * 1.05f) *
+                    Matrix4x4.CreateTranslation(0, 0, 0.02f) *
+                    eyeRot *
+                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.02f)) *
+                    headWorld;
+                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.25f);
                 _ctx.PSSetShader(_psEye);
                 _ctx.IASetVertexBuffer(0, _irisDisc.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_irisDisc.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
-            // 4) Lids hug the sphere — open slit shows sclera+iris only
+            // Eyeball sphere under iris for 3D curvature / specular
+            WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.1f);
+            _ctx.PSSetShader(_psEye);
+            _ctx.IASetVertexBuffer(0, _eyeSphere!.Vb, stride, 0);
+            _ctx.IASetIndexBuffer(_eyeSphere.Ib, Format.R32_UInt, 0);
+            _ctx.DrawIndexed(_eyeSphere.IndexCount, 0, 0);
+
+            // Lids hug the eye opening — frame sclera, no black gap
             var close = _freezeBlink ? 0f : lidClose;
-            var upperAngle = MathHelper.Lerp(-0.28f, 0.70f, close);
+            var upperAngle = MathHelper.Lerp(-0.22f, 0.72f, close);
             var upperWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.08f, EyeRadius * 1.05f, EyeRadius * 1.08f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.12f, EyeRadius * 1.08f, EyeRadius * 1.12f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
@@ -433,9 +426,9 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.28f, -0.02f, close);
+            var lowerAngle = MathHelper.Lerp(0.22f, 0.0f, close);
             var lowerWorld =
-                Matrix4x4.CreateScale(EyeRadius * 1.07f, EyeRadius * 1.04f, EyeRadius * 1.07f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.10f, EyeRadius * 1.06f, EyeRadius * 1.10f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
@@ -545,7 +538,7 @@ public sealed class HoloRenderer : IDisposable
     PartMesh CreateIrisDisc(float radius, int segments)
     {
         const float z = 0.88f;
-        var r = radius * 0.86f; // larger iris vs eye, thin sclera ring remains
+        var r = radius * 0.92f; // large iris on painted sclera
         var verts = new List<Vertex> { new() { Pos = new Vector3(0, 0, z), Nrm = Vector3.UnitZ, Col = Vector4.One } };
         for (var i = 0; i <= segments; i++)
         {

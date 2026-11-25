@@ -55,17 +55,30 @@ struct PSIn {
   float3 local : TEXCOORD2;
 };
 float4 main(PSIn i) : SV_TARGET {
-  // Tight fissure punch — filled by sclera plate + lids (never leave black void)
   float2 eyeL = float2(-0.161, 0.253);
   float2 eyeR = float2(0.152, 0.251);
-  float dL = length((i.local.xy - eyeL) / float2(0.058, 0.028));
-  float dR = length((i.local.xy - eyeR) / float2(0.058, 0.028));
+  // Almond open-eye region — paint holo sclera (never discard to black void)
+  float dL = length((i.local.xy - eyeL) / float2(0.078, 0.040));
+  float dR = length((i.local.xy - eyeR) / float2(0.078, 0.040));
   float dEye = min(dL, dR);
-  if (dEye < 0.88 && i.local.z > 0.32) discard;
+  float inSocket = (1.0 - smoothstep(0.75, 1.05, dEye)) * smoothstep(0.28, 0.36, i.local.z);
 
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
   float ndv = saturate(dot(N, V));
+
+  if (inSocket > 0.04) {
+    float3 amber = float3(1.0, 0.62, 0.22);
+    float3 gold = float3(1.0, 0.78, 0.42);
+    float3 sclera = float3(0.93, 0.84, 0.64);
+    float3 c = sclera * (0.78 + 0.22 * ndv);
+    c += amber * pow(1.0 - ndv, 2.2) * 0.35;
+    c += gold * 0.08;
+    // Soft lid-line at almond edge
+    float edge = smoothstep(0.7, 1.0, dEye);
+    c = lerp(c, amber * 0.45, edge * 0.55);
+    return float4(saturate(c), 1.0);
+  }
 
   float3 L1 = normalize(float3(0.35, 0.55, 0.75));
   float3 L2 = normalize(float3(-0.55, 0.15, 0.45));
@@ -108,10 +121,6 @@ float4 main(PSIn i) : SV_TARGET {
              * smoothstep(-0.05, 0.08, i.local.y) * smoothstep(0.28, 0.12, i.local.y);
   nose *= saturate(i.local.z * 2.0);
   base += gold * nose * (0.22 + fres * 0.22);
-
-  // Soft lid-line rim around the fissure
-  float socketRim = (1.0 - smoothstep(0.85, 1.15, dEye)) * smoothstep(0.28, 0.36, i.local.z);
-  base += amber * socketRim * 0.4;
 
   float neck = smoothstep(-0.92, -0.52, i.local.y);
   float neckScanCut = lerp(1.0, 0.15, 1.0 - smoothstep(-0.7, -0.45, i.local.y));
