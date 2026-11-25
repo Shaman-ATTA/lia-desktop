@@ -65,11 +65,8 @@ jobs:
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
 
-      - name: Install Playwright browsers
-        run: |
-          cd publish/LiaDesktop
-          ./LiaDesktop.exe --help 2>$null; exit 0
-        continue-on-error: true
+      - name: Note Playwright
+        run: echo "Playwright browsers install on first tool use (Microsoft.Playwright)"
 
       - name: Zip release
         shell: pwsh
@@ -132,22 +129,22 @@ jobs:
 
           $script:hwnd = [IntPtr]::Zero
           $targetPid = [uint32]$p.Id
-          for ($try = 0; $try -lt 10 -and $script:hwnd -eq [IntPtr]::Zero; $try++) {
+          for ($try = 0; $try -lt 20 -and $script:hwnd -eq [IntPtr]::Zero; $try++) {
             [Win]::EnumWindows({
               param($h,$l)
               $outPid = [uint32]0
               [void][Win]::GetWindowThreadProcessId($h, [ref]$outPid)
               if ($outPid -ne $targetPid) { return $true }
-              if (-not [Win]::IsWindowVisible($h)) { return $true }
+              # Accept hidden windows too — we'll ShowWindow them
               $script:hwnd = $h
               return $false
             }, [IntPtr]::Zero)
             if ($script:hwnd -eq [IntPtr]::Zero) { Start-Sleep -Seconds 1 }
           }
           Write-Host "hwnd=$($script:hwnd) pid=$targetPid"
+          if (Test-Path $bootLog) { Write-Host "--- boot.log ---"; Get-Content $bootLog | Out-Host }
           if ($script:hwnd -eq [IntPtr]::Zero) {
-            if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
-            throw "No visible window for LiaDesktop"
+            throw "No window for LiaDesktop (see boot.log)"
           }
 
           [void][Win]::ShowWindow($script:hwnd, 3)
