@@ -64,7 +64,7 @@ jobs:
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
 
-      - name: Shrink publish (locales / pdbs / junk)
+      - name: Shrink publish (locales / pdbs / Playwright non-Windows)
         shell: pwsh
         run: |
           $out = Join-Path $PWD 'publish\LiaDesktop'
@@ -73,23 +73,31 @@ jobs:
           Get-ChildItem $out -Recurse -Include *.pdb,*.xml -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -notmatch 'resources' } | Remove-Item -Force -ErrorAction SilentlyContinue
           # Culture satellite folders except en*
-          Get-ChildItem $out -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.Name -match '^[a-z]{2}([-_][A-Za-z]+)?$' -and $_.Name -notmatch '^en') {
-              Write-Host "rm culture $($_.Name)"
+          Get-ChildItem $out -Recurse -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^[a-z]{2}([-_][A-Za-z0-9]+)*$' -and $_.Name -notmatch '^en' } |
+            ForEach-Object {
+              Write-Host "rm culture $($_.FullName.Substring($out.Length))"
               Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
             }
+          # Playwright ships node for darwin/linux/win — keep win32_x64 only (~80MB).
+          # Browsers are NOT bundled; runtime uses installed Edge (channel=msedge).
+          $pwNode = Join-Path $out '.playwright\node'
+          if (Test-Path $pwNode) {
+            Get-ChildItem $pwNode -Directory | Where-Object { $_.Name -ne 'win32_x64' } | ForEach-Object {
+              Write-Host "rm playwright node $($_.Name)"
+              Remove-Item $_.FullName -Recurse -Force
+            }
           }
-          # Nested culture folders under runtimes / Microsoft.WindowsApp*
-          Get-ChildItem $out -Recurse -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^[a-z]{2}([-_][A-Za-z]+)?$' -and $_.Name -notmatch '^en' } |
-            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-          # Never ship Playwright browser cache
           Get-ChildItem $out -Recurse -Directory -Filter '.local-browsers' -ErrorAction SilentlyContinue |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          Get-ChildItem $out -Recurse -Directory -Filter 'ms-playwright' -ErrorAction SilentlyContinue |
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          # Optional unused WinAppSDK bits (safe for this app — no widgets / WebView host)
+          foreach ($pat in @('Microsoft.Windows.Widgets.dll','Microsoft.Windows.Widgets.winmd','Microsoft.DiaSymReader.Native.amd64.dll')) {
+            $f = Join-Path $out $pat
+            if (Test-Path $f) { Remove-Item $f -Force; Write-Host "rm $pat" }
+          }
           $after = (Get-ChildItem $out -Recurse -File | Measure-Object Length -Sum).Sum
           Write-Host ("publish before={0:N0} after={1:N0} saved={2:N0}" -f $before,$after,($before-$after))
+          if ($after -gt 280MB) { Write-Warning "publish still large: $after" }
 
       - name: Zip release (max compression)
         shell: pwsh
