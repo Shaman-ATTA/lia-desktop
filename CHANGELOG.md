@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.1 — Framing, lashes, holo veil, rings, FXAA
+
+- Zoom out ~20%; neck stump dissolves into darkness
+- Dark alpha-tested lashes/hair (no gold sparkle)
+- Eyes close-up frames both eyes
+- Amber holo veil restored (~18% tint, scanlines, fresnel rim)
+- Thinner larger amber rings; depth-occluded back half
+- FXAA post-pass (smooths WARP/MSAA=1 hair edges)
+
 ## v0.5.0 — Photoreal PBR hologram head
 
 - Replaced MakeHuman/MPFB head with **Microsoft Rocketbox Female_Adult_07** (MIT)

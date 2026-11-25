@@ -1,6 +1,6 @@
 namespace LiaDesktop.Rendering;
 
-/// <summary>HLSL — photoreal PBR skin/eyes/hair with a subtle amber hologram veil.</summary>
+/// <summary>HLSL — photoreal PBR skin/eyes/hair with a subtle amber hologram veil + FXAA.</summary>
 public static class HoloShaders
 {
     public const string Vertex = @"
@@ -68,15 +68,28 @@ float4 main(PSIn i) : SV_TARGET {
   float sss = saturate(1.0 - abs(i.local.x)*8.0) * 0.12;
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
   float3 color = diffuse + key * spec;
-  float fres = pow(1.0 - saturate(dot(N,V)), 2.8);
-  float scan = 0.012 * sin((i.world.y + time*0.12)*110.0);
+
+  // Subtle amber hologram veil (~18% tint, thin scanlines, fresnel rim)
+  float ndv = saturate(dot(N,V));
+  float fres = pow(1.0 - ndv, 2.6);
+  float scan = 0.022 * sin((i.world.y + time*0.14)*125.0);
   float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.04, 0.96, 0.88), 0.12);
-  color += amber * fres * 0.10 * glow;
+  color = lerp(color, color * float3(1.10, 0.90, 0.70), 0.18);
+  color += amber * fres * 0.22 * glow;
   color += amber * scan;
+  // Soft silhouette dissolve into void (edge transparency feel)
+  float edgeKeep = lerp(0.62, 1.0, saturate(ndv * 1.25 + 0.05));
+  color *= edgeKeep;
+  // Neck stump → darkness (local Y: chin~0.37, neck stump~0.20)
+  float neck = smoothstep(0.195, 0.335, i.local.y);
+  color *= neck;
+
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
-  return float4(color, 1.0);
+  // Alpha dissolve at neck for holo cut (blended over black clear)
+  float alpha = lerp(0.0, 1.0, neck);
+  alpha *= lerp(0.78, 1.0, saturate(ndv * 1.1 + 0.15));
+  return float4(color, alpha);
 }";
 
     public const string PixelHair = @"
@@ -98,23 +111,29 @@ struct PSIn {
 };
 float4 main(PSIn i) : SV_TARGET {
   float4 op = opacityMap.Sample(samp, i.uv);
-  // Opacity atlas: RGB = hair color, A (or luma) = coverage. Do NOT sample head albedo (wrong UVs → white fringe).
   float a = op.a;
   if (a < 0.02) a = max(op.r, max(op.g, op.b));
-  clip(a - 0.32);
+  // Hard alpha-test kills sparkly fringe / MSAA glitter on lash cards
+  clip(a - 0.42);
+
+  // Force dark hair/lash color — never additive gold/white
   float3 hairCol = op.rgb;
-  if (dot(hairCol, hairCol) < 0.001) hairCol = float3(0.10, 0.06, 0.04);
-  hairCol = lerp(float3(0.07, 0.04, 0.03), hairCol, 0.85);
+  float luma = dot(hairCol, float3(0.299, 0.587, 0.114));
+  // Lash cards often have pale RGB with coverage in A → crush to dark brown/black
+  if (luma > 0.25 || a < 0.72)
+    hairCol = float3(0.04, 0.025, 0.018);
+  else
+    hairCol = lerp(float3(0.05, 0.03, 0.02), hairCol * 0.55, 0.7);
+  hairCol = min(hairCol, float3(0.14, 0.09, 0.06));
+
   float3 N = normalize(i.nrm);
-  float3 V = normalize(camPos - i.world);
   float3 L = normalize(float3(0.3, 0.7, 0.6));
   float ndl = saturate(dot(N,L)*0.5+0.5);
-  float fres = pow(1.0 - saturate(dot(N,V)), 2.2);
-  float strand = 0.04 * sin(i.uv.x * 180.0 + i.uv.y * 30.0);
-  float3 color = hairCol * (0.40 + ndl * 0.70) + float3(1,0.75,0.45) * fres * 0.08 + strand;
-  color = lerp(color, color * float3(1.06, 0.92, 0.78), 0.12);
-  color = pow(saturate(color / (1.0+color*0.5)), 1.0/2.2);
-  return float4(color, saturate(a));
+  // No amber fresnel / strand sparkle on hair or lashes
+  float3 color = hairCol * (0.45 + ndl * 0.55);
+  color = pow(saturate(color), 1.0/2.2);
+  // Opaque-ish after clip (premultiplied-safe)
+  return float4(color, 1.0);
 }";
 
     public const string PixelEye = @"
@@ -136,7 +155,6 @@ float4 main(PSIn i) : SV_TARGET {
   float3 V = normalize(camPos - i.world);
   float3 L = normalize(float3(0.3, 0.5, 0.8));
   float wrap = saturate((dot(N,L)+0.4)/1.4);
-  // Warm off-white sclera (not blown-out white)
   float3 sclera = float3(0.78, 0.72, 0.68);
   float3 color = sclera * (0.40 + wrap * 0.55);
   float fres = pow(1.0 - saturate(dot(N,V)), 3.0);
@@ -165,7 +183,6 @@ float4 main(PSIn i) : SV_TARGET {
   clip(0.98 - r);
   float angle = atan2(p.y, p.x);
   float radial = 0.55 + 0.45 * sin(angle * 14.0 + r * 9.0);
-  // Hazel/green matching Rocketbox f007 eye atlas
   float3 iris = lerp(float3(0.12, 0.18, 0.08), float3(0.42, 0.48, 0.22), radial);
   iris = lerp(iris, float3(0.55, 0.52, 0.28), saturate(1.0 - r * 1.2) * 0.35);
   float pupil = smoothstep(0.28, 0.18, r);
@@ -201,7 +218,6 @@ struct PSIn {
 float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
-  // Front hemisphere only — avoid milky backfaces
   float facing = saturate(dot(N, V));
   clip(facing - 0.15);
   float3 L = normalize(float3(0.4, 0.7, 0.5));
@@ -258,9 +274,60 @@ struct PSIn {
 float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
-  float fres = pow(1.0 - saturate(dot(N,V)), 2.0);
-  float pulse = 0.85 + 0.15 * sin(time * 2.2 + i.local.x * 6.0);
-  float3 c = color * (0.55 + fres * 0.9) * pulse;
-  return float4(c, saturate(opacity * (0.55 + fres * 0.45)));
+  float fres = pow(1.0 - saturate(dot(N,V)), 2.4);
+  float pulse = 0.90 + 0.10 * sin(time * 1.6 + i.local.x * 4.0);
+  // Soft amber, not bright yellow
+  float3 c = color * (0.40 + fres * 0.55) * pulse;
+  return float4(c, saturate(opacity * (0.40 + fres * 0.35)));
+}";
+
+    /// <summary>Fullscreen triangle VS — SV_VertexID 0..2.</summary>
+    public const string VertexFxaa = @"
+struct VSOut { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; };
+VSOut main(uint id:SV_VertexID) {
+  VSOut o;
+  o.uv = float2((id << 1) & 2, id & 2);
+  o.pos = float4(o.uv * float2(2, -2) + float2(-1, 1), 0, 1);
+  return o;
+}";
+
+    /// <summary>Lightweight FXAA 3.11-ish quality preset.</summary>
+    public const string PixelFxaa = @"
+Texture2D sceneTex : register(t0);
+SamplerState samp : register(s0);
+cbuffer FxaaCB : register(b0) {
+  float2 invSize;
+  float2 _pad;
+};
+struct PSIn { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; };
+float4 main(PSIn i) : SV_TARGET {
+  float3 rgbM = sceneTex.SampleLevel(samp, i.uv, 0).rgb;
+  float3 rgbNW = sceneTex.SampleLevel(samp, i.uv + float2(-1,-1)*invSize, 0).rgb;
+  float3 rgbNE = sceneTex.SampleLevel(samp, i.uv + float2( 1,-1)*invSize, 0).rgb;
+  float3 rgbSW = sceneTex.SampleLevel(samp, i.uv + float2(-1, 1)*invSize, 0).rgb;
+  float3 rgbSE = sceneTex.SampleLevel(samp, i.uv + float2( 1, 1)*invSize, 0).rgb;
+  float3 lumaW = float3(0.299, 0.587, 0.114);
+  float lM = dot(rgbM, lumaW);
+  float lNW = dot(rgbNW, lumaW);
+  float lNE = dot(rgbNE, lumaW);
+  float lSW = dot(rgbSW, lumaW);
+  float lSE = dot(rgbSE, lumaW);
+  float lMin = min(lM, min(min(lNW,lNE), min(lSW,lSE)));
+  float lMax = max(lM, max(max(lNW,lNE), max(lSW,lSE)));
+  float2 dir;
+  dir.x = -((lNW + lNE) - (lSW + lSE));
+  dir.y =  ((lNW + lSW) - (lNE + lSE));
+  float dirReduce = max((lNW + lNE + lSW + lSE) * 0.03125, 0.0078125);
+  float rcpDir = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+  dir = clamp(dir * rcpDir, float2(-8,-8), float2(8,8)) * invSize;
+  float3 rgbA = 0.5 * (
+    sceneTex.SampleLevel(samp, i.uv + dir * (1.0/3.0 - 0.5), 0).rgb +
+    sceneTex.SampleLevel(samp, i.uv + dir * (2.0/3.0 - 0.5), 0).rgb);
+  float3 rgbB = rgbA * 0.5 + 0.25 * (
+    sceneTex.SampleLevel(samp, i.uv + dir * -0.5, 0).rgb +
+    sceneTex.SampleLevel(samp, i.uv + dir *  0.5, 0).rgb);
+  float lB = dot(rgbB, lumaW);
+  if (lB < lMin || lB > lMax) return float4(rgbA, 1);
+  return float4(rgbB, 1);
 }";
 }

@@ -1,5 +1,12 @@
 # Lia Desktop — ship report
 
+## v0.5.1 — polish
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.1
+
+Framing zoom-out + neck dissolve · dark lashes · dual-eye close-up · holo veil · orbit rings · FXAA.  
+Same Rocketbox `Female_Adult_07` MIT asset.
+
 ## v0.5.0 — photoreal PBR head
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.0

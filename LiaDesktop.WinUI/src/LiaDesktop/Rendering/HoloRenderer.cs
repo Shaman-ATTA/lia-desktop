@@ -32,6 +32,13 @@ struct RingCB
 }
 
 [StructLayout(LayoutKind.Sequential)]
+struct FxaaCB
+{
+    public Vector2 InvSize;
+    public Vector2 Pad;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 struct Vertex
 {
     public Vector3 Pos;
@@ -41,7 +48,7 @@ struct Vertex
 
 public sealed class HoloRenderer : IDisposable
 {
-    static readonly Vector3 Amber = new(1f, 0.604f, 0.235f);
+    static readonly Vector3 Amber = new(1f, 0.55f, 0.22f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
     const float HeadScale = 2.85f;
@@ -54,17 +61,22 @@ public sealed class HoloRenderer : IDisposable
     IDXGISwapChain1? _swap;
     ID3D11Texture2D? _msaaColor;
     ID3D11Texture2D? _msaaDepth;
+    ID3D11Texture2D? _sceneColor;
     ID3D11RenderTargetView? _rtvMsaa;
     ID3D11DepthStencilView? _dsvMsaa;
-    ID3D11RenderTargetView? _rtvResolve;
+    ID3D11RenderTargetView? _rtvScene;
+    ID3D11ShaderResourceView? _srvScene;
+    ID3D11RenderTargetView? _rtvSwap;
     ID3D11Buffer? _frameCb;
     ID3D11Buffer? _ringCb;
+    ID3D11Buffer? _fxaaCb;
     ID3D11Buffer? _headVb;
     ID3D11Buffer? _headIb;
     ID3D11Buffer? _hairVb;
     ID3D11Buffer? _hairIb;
     uint _hairIndexCount;
     ID3D11VertexShader? _vs;
+    ID3D11VertexShader? _vsFxaa;
     ID3D11PixelShader? _psSkin;
     ID3D11PixelShader? _psHair;
     ID3D11PixelShader? _psEye;
@@ -72,14 +84,17 @@ public sealed class HoloRenderer : IDisposable
     ID3D11PixelShader? _psCornea;
     ID3D11PixelShader? _psLid;
     ID3D11PixelShader? _psRing;
+    ID3D11PixelShader? _psFxaa;
     ID3D11InputLayout? _layout;
     ID3D11DepthStencilState? _dssWrite;
     ID3D11DepthStencilState? _dssRead;
+    ID3D11DepthStencilState? _dssOff;
     ID3D11BlendState? _blendOpaque;
     ID3D11BlendState? _blendAlpha;
     ID3D11RasterizerState? _rs;
     ID3D11RasterizerState? _rsNoCull;
     ID3D11SamplerState? _samplerLinearWrap;
+    ID3D11SamplerState? _samplerLinearClamp;
     ID3D11ShaderResourceView? _srvAlbedo;
     ID3D11ShaderResourceView? _srvNormal;
     ID3D11ShaderResourceView? _srvOrm;
@@ -156,6 +171,7 @@ public sealed class HoloRenderer : IDisposable
         _ctx = _device.ImmediateContext;
 
         _vs = CompileVS(HoloShaders.Vertex, out var vsBlob);
+        _vsFxaa = CompileVS(HoloShaders.VertexFxaa, out var _fxaaBlob);
         _psSkin = CompilePS(HoloShaders.PixelSkin);
         _psHair = CompilePS(HoloShaders.PixelHair);
         _psEye = CompilePS(HoloShaders.PixelEye);
@@ -163,6 +179,7 @@ public sealed class HoloRenderer : IDisposable
         _psCornea = CompilePS(HoloShaders.PixelCornea);
         _psLid = CompilePS(HoloShaders.PixelLid);
         _psRing = CompilePS(HoloShaders.PixelRing);
+        _psFxaa = CompilePS(HoloShaders.PixelFxaa);
         _layout = _device.CreateInputLayout(new[]
         {
             new InputElementDescription("POSITION", 0, Format.R32G32B32_Float, 0, 0),
@@ -174,6 +191,9 @@ public sealed class HoloRenderer : IDisposable
             (uint)Marshal.SizeOf<FrameCB>(), BindFlags.ConstantBuffer,
             ResourceUsage.Dynamic, CpuAccessFlags.Write, ResourceOptionFlags.None, 0));
         _ringCb = _device.CreateBuffer(new BufferDescription(
+            16, BindFlags.ConstantBuffer,
+            ResourceUsage.Dynamic, CpuAccessFlags.Write, ResourceOptionFlags.None, 0));
+        _fxaaCb = _device.CreateBuffer(new BufferDescription(
             16, BindFlags.ConstantBuffer,
             ResourceUsage.Dynamic, CpuAccessFlags.Write, ResourceOptionFlags.None, 0));
 
@@ -188,6 +208,12 @@ public sealed class HoloRenderer : IDisposable
             DepthEnable = true,
             DepthWriteMask = DepthWriteMask.Zero,
             DepthFunc = ComparisonFunction.LessEqual,
+        });
+        _dssOff = _device.CreateDepthStencilState(new DepthStencilDescription
+        {
+            DepthEnable = false,
+            DepthWriteMask = DepthWriteMask.Zero,
+            DepthFunc = ComparisonFunction.Always,
         });
         _blendOpaque = _device.CreateBlendState(BlendDescription.Opaque);
         _blendAlpha = _device.CreateBlendState(BlendDescription.AlphaBlend);
@@ -213,6 +239,17 @@ public sealed class HoloRenderer : IDisposable
             AddressU = TextureAddressMode.Wrap,
             AddressV = TextureAddressMode.Wrap,
             AddressW = TextureAddressMode.Wrap,
+            MaxAnisotropy = 1,
+            ComparisonFunc = ComparisonFunction.Never,
+            MinLOD = 0,
+            MaxLOD = float.MaxValue,
+        });
+        _samplerLinearClamp = _device.CreateSamplerState(new SamplerDescription
+        {
+            Filter = Filter.MinMagMipLinear,
+            AddressU = TextureAddressMode.Clamp,
+            AddressV = TextureAddressMode.Clamp,
+            AddressW = TextureAddressMode.Clamp,
             MaxAnisotropy = 1,
             ComparisonFunc = ComparisonFunction.Never,
             MinLOD = 0,
@@ -347,11 +384,29 @@ public sealed class HoloRenderer : IDisposable
         _dsvMsaa?.Dispose();
         _msaaColor?.Dispose();
         _msaaDepth?.Dispose();
-        _rtvResolve?.Dispose();
+        _rtvScene?.Dispose();
+        _srvScene?.Dispose();
+        _sceneColor?.Dispose();
+        _rtvSwap?.Dispose();
         _swap = swap;
 
         using var bb = swap.GetBuffer<ID3D11Texture2D>(0);
-        _rtvResolve = _device.CreateRenderTargetView(bb);
+        _rtvSwap = _device.CreateRenderTargetView(bb);
+
+        // Scene color (non-MSAA) — resolve target + FXAA source
+        _sceneColor = _device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = (uint)_width,
+            Height = (uint)_height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = Format.B8G8R8A8_UNorm,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
+        });
+        _rtvScene = _device.CreateRenderTargetView(_sceneColor);
+        _srvScene = _device.CreateShaderResourceView(_sceneColor);
 
         var sample = new SampleDescription(MsaaCount, 0);
         try
@@ -397,7 +452,7 @@ public sealed class HoloRenderer : IDisposable
         });
         _dsvMsaa = _device.CreateDepthStencilView(_msaaDepth);
         _msaaSamples = (int)sample.Count;
-        Program.BootLog($"RT {_width}x{_height} msaa={_msaaSamples}");
+        Program.BootLog($"RT {_width}x{_height} msaa={_msaaSamples} fxaa=1");
     }
 
     public IDXGIFactory2 GetDxgiFactory()
@@ -409,7 +464,8 @@ public sealed class HoloRenderer : IDisposable
 
     public void Tick(float dt)
     {
-        if (!_ready || _device == null || _ctx == null || _rtvMsaa == null || _dsvMsaa == null || _swap == null || _rtvResolve == null)
+        if (!_ready || _device == null || _ctx == null || _rtvMsaa == null || _dsvMsaa == null ||
+            _swap == null || _rtvScene == null || _rtvSwap == null || _srvScene == null)
             return;
         _time += dt;
 
@@ -436,8 +492,8 @@ public sealed class HoloRenderer : IDisposable
             UploadHead(_morphScratch);
         }
 
-        // Prefer drawing straight into the swapchain when MSAA is unavailable (CI/WARP).
-        var drawRtv = _msaaSamples > 1 ? _rtvMsaa! : _rtvResolve!;
+        // Scene → MSAA RT (or scene color when MSAA unavailable); FXAA to swapchain after.
+        var drawRtv = _msaaSamples > 1 ? _rtvMsaa! : _rtvScene!;
         var drawDsv = _dsvMsaa!;
         _ctx.OMSetRenderTargets(drawRtv, drawDsv);
         _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
@@ -456,25 +512,26 @@ public sealed class HoloRenderer : IDisposable
         float nearPlane = 0.08f;
         if (_eyesCloseup)
         {
-            // Eyes ≈ local ( ±0.03, 0.43, 0.05 ) * HeadScale + HeadTransY
-            lookAt = new Vector3(0f, 0.165f, 0.12f);
-            cam = new Vector3(0f, 0.17f, 0.72f);
-            fovDeg = 16f;
+            // Frame both eyes: world eye Y≈0.15, span≈0.185
+            lookAt = new Vector3(0f, 0.155f, 0.08f);
+            cam = new Vector3(0f, 0.155f, 1.15f);
+            fovDeg = 22f;
             nearPlane = 0.08f;
         }
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.08f;
-            cam = new Vector3(orbit, 0.08f, 2.15f);
-            lookAt = new Vector3(0, 0.05f, 0.05f);
-            fovDeg = 28f;
+            cam = new Vector3(orbit, 0.06f, 2.70f);
+            lookAt = new Vector3(0, 0.02f, 0.02f);
+            fovDeg = 30f;
         }
         else
         {
+            // Zoom out ~20% so crown + upper neck fit with margin
             var orbit = MathF.Sin(_time * 0.09f) * 0.05f;
-            cam = new Vector3(orbit, 0.08f, 2.25f);
-            lookAt = new Vector3(0, 0.05f, 0.05f);
-            fovDeg = 24f;
+            cam = new Vector3(orbit, 0.04f, 2.75f);
+            lookAt = new Vector3(0, 0.02f, 0.02f);
+            fovDeg = 26f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
         var proj = Matrix4x4.CreatePerspectiveFieldOfView(fovDeg * MathF.PI / 180f, aspect, nearPlane, 40f);
@@ -491,9 +548,9 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 1) Skin — PBR textures (no-cull: bake winding can flip)
+        // 1) Skin — PBR + neck alpha dissolve (no-cull: bake winding can flip)
         _ctx.OMSetDepthStencilState(_dssWrite);
-        _ctx.OMSetBlendState(_blendOpaque, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+        _ctx.OMSetBlendState(_blendAlpha, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
         _ctx.RSSetState(_rsNoCull);
         WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         BindSkinTextures();
@@ -506,14 +563,14 @@ public sealed class HoloRenderer : IDisposable
         }
         _ctx.RSSetState(_rs);
 
-        // 2) Eyes + cornea + lids
+        // 2) Eyes + cornea
         DrawEyes(viewProj, headWorld, cam, blinkAmt);
 
-        // 3) Hair — alpha, depth-tested, no depth write, no cull
+        // 3) Hair/lashes — alpha-tested dark cards (opaque after clip)
         if (_hairVb != null && _hairIb != null && _hairIndexCount > 0)
         {
             _ctx.OMSetDepthStencilState(_dssRead);
-            _ctx.OMSetBlendState(_blendAlpha);
+            _ctx.OMSetBlendState(_blendOpaque);
             _ctx.RSSetState(_rsNoCull);
             WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
             BindHairTextures();
@@ -524,7 +581,7 @@ public sealed class HoloRenderer : IDisposable
             _ctx.RSSetState(_rs);
         }
 
-        // 4) Rings
+        // 4) Rings — depth-tested so back half occluded by head; large orbit
         _ctx.OMSetDepthStencilState(_dssRead);
         _ctx.OMSetBlendState(_blendAlpha);
         _ctx.RSSetState(_rsNoCull);
@@ -538,9 +595,10 @@ public sealed class HoloRenderer : IDisposable
                 r.BaseYaw + _time * r.SpinY * spinBoost,
                 r.BasePitch,
                 r.BaseRoll + _time * r.SpinZ * spinBoost);
-            var model = Matrix4x4.Transpose(rot * Matrix4x4.CreateTranslation(0, 0.04f, 0.07f));
+            // Center on head; no forward bias that cuts across the face
+            var model = Matrix4x4.Transpose(rot * Matrix4x4.CreateTranslation(0, 0.06f, 0.0f));
             WriteFrame(viewProj, model, cam, 0, 1f);
-            WriteRing(r.Color, _ringsShowcase ? Math.Min(1f, r.Opacity * 1.15f) : r.Opacity);
+            WriteRing(r.Color, _ringsShowcase ? Math.Min(0.55f, r.Opacity * 1.1f) : r.Opacity);
             _ctx.IASetVertexBuffer(0, r.Vb, stride, 0);
             _ctx.IASetIndexBuffer(r.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(r.IndexCount, 0, 0);
@@ -550,13 +608,50 @@ public sealed class HoloRenderer : IDisposable
         _ctx.OMSetDepthStencilState(_dssWrite);
         _ctx.OMSetBlendState(_blendOpaque);
 
-        if (_msaaSamples > 1 && _msaaColor != null)
-        {
-            using var bb = _swap.GetBuffer<ID3D11Texture2D>(0);
-            _ctx.ResolveSubresource(bb, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
-        }
-        // When msaa==1 we already drew into the swapchain RTV
+        // Resolve MSAA → scene color (or already drew into scene)
+        if (_msaaSamples > 1 && _msaaColor != null && _sceneColor != null)
+            _ctx.ResolveSubresource(_sceneColor, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
+
+        ApplyFxaa();
         _swap.Present(1, PresentFlags.None);
+    }
+
+    void ApplyFxaa()
+    {
+        if (_ctx == null || _rtvSwap == null || _srvScene == null || _psFxaa == null || _vsFxaa == null || _fxaaCb == null)
+            return;
+        _ctx.OMSetRenderTargets(_rtvSwap, null);
+        _ctx.OMSetDepthStencilState(_dssOff);
+        _ctx.OMSetBlendState(_blendOpaque);
+        _ctx.RSSetState(_rs);
+        _ctx.IASetInputLayout(null);
+        _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+        _ctx.VSSetShader(_vsFxaa);
+        _ctx.PSSetShader(_psFxaa);
+        _ctx.PSSetShaderResources(0, new[] { _srvScene });
+        if (_samplerLinearClamp != null)
+            _ctx.PSSetSamplers(0, new[] { _samplerLinearClamp });
+
+        var mapped = _ctx.Map(_fxaaCb, MapMode.WriteDiscard, MapFlags.None);
+        unsafe
+        {
+            *(FxaaCB*)mapped.DataPointer = new FxaaCB
+            {
+                InvSize = new Vector2(1f / Math.Max(1, _width), 1f / Math.Max(1, _height)),
+            };
+        }
+        _ctx.Unmap(_fxaaCb, 0);
+        _ctx.PSSetConstantBuffer(0, _fxaaCb);
+        _ctx.Draw(3, 0);
+
+        // Unbind SRV so next frame can use scene as RT
+        _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
+        _ctx.VSSetShader(_vs);
+        _ctx.IASetInputLayout(_layout);
+        if (_samplerLinearWrap != null)
+            _ctx.PSSetSamplers(0, new[] { _samplerLinearWrap });
+        _ctx.VSSetConstantBuffer(0, _frameCb);
+        _ctx.PSSetConstantBuffer(0, _frameCb);
     }
 
     void BindSkinTextures()
@@ -920,9 +1015,10 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        Add(0.42f, 0.0018f, 15f, 0.02f, 0.05f, 0.12f, 0.01f, 0.88f);
-        Add(0.48f, 0.0015f, -35f, 0.08f, -0.1f, -0.09f, 0.014f, 0.75f);
-        Add(0.54f, 0.0012f, 70f, -0.05f, 0.12f, 0.06f, 0.008f, 0.62f);
+        // Large thin amber orbits — outside face silhouette; depth test dims back half
+        Add(0.78f, 0.00055f, 18f, 0.02f, 0.04f, 0.10f, 0.009f, 0.38f);
+        Add(0.90f, 0.00048f, -32f, 0.06f, -0.08f, -0.07f, 0.012f, 0.32f);
+        Add(1.02f, 0.00042f, 62f, -0.04f, 0.10f, 0.05f, 0.007f, 0.26f);
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
@@ -998,16 +1094,22 @@ public sealed class HoloRenderer : IDisposable
         _srvOrm?.Dispose();
         _srvOpacity?.Dispose();
         _srvFallback?.Dispose();
+        _srvScene?.Dispose();
         _samplerLinearWrap?.Dispose();
+        _samplerLinearClamp?.Dispose();
         _frameCb?.Dispose();
         _ringCb?.Dispose();
+        _fxaaCb?.Dispose();
         _rtvMsaa?.Dispose();
         _dsvMsaa?.Dispose();
         _msaaColor?.Dispose();
         _msaaDepth?.Dispose();
-        _rtvResolve?.Dispose();
+        _rtvScene?.Dispose();
+        _sceneColor?.Dispose();
+        _rtvSwap?.Dispose();
         _swap?.Dispose();
         _vs?.Dispose();
+        _vsFxaa?.Dispose();
         _psSkin?.Dispose();
         _psHair?.Dispose();
         _psEye?.Dispose();
@@ -1015,9 +1117,11 @@ public sealed class HoloRenderer : IDisposable
         _psCornea?.Dispose();
         _psLid?.Dispose();
         _psRing?.Dispose();
+        _psFxaa?.Dispose();
         _layout?.Dispose();
         _dssWrite?.Dispose();
         _dssRead?.Dispose();
+        _dssOff?.Dispose();
         _blendOpaque?.Dispose();
         _blendAlpha?.Dispose();
         _rs?.Dispose();
