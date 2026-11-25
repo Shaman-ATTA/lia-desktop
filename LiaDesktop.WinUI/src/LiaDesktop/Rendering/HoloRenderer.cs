@@ -388,29 +388,43 @@ public sealed class HoloRenderer : IDisposable
                 Matrix4x4.CreateTranslation(center) *
                 headWorld;
 
-            // Head PS paints holo sclera in the almond. Only draw iris disc on top —
-            // a full opaque sphere was covering that sclera and recreating black voids.
+            // 1) Large almond sclera disc fills the carved socket (holo-tinted white)
+            if (_scleraPlate != null)
+            {
+                var scleraWorld =
+                    Matrix4x4.CreateScale(0.105f, 0.058f, 1f) *
+                    eyeRot *
+                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.025f)) *
+                    headWorld;
+                WriteFrame(viewProj, Matrix4x4.Transpose(scleraWorld), cam, blinkAmt, 1.2f);
+                _ctx.PSSetShader(_psEye);
+                _ctx.IASetVertexBuffer(0, _scleraPlate.Vb, stride, 0);
+                _ctx.IASetIndexBuffer(_scleraPlate.Ib, Format.R32_UInt, 0);
+                _ctx.DrawIndexed(_scleraPlate.IndexCount, 0, 0);
+            }
+
+            // 2) Iris/pupil on top — larger relative to the eye opening
             if (_irisDisc != null)
             {
                 var irisWorld =
-                    Matrix4x4.CreateScale(0.055f) * // large iris, sclera margin remains in head paint
+                    Matrix4x4.CreateScale(0.062f) *
                     eyeRot *
-                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.035f)) *
+                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.040f)) *
                     headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.3f);
+                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.35f);
                 _ctx.PSSetShader(_psEye);
                 _ctx.IASetVertexBuffer(0, _irisDisc.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_irisDisc.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
-            // Lids frame the painted sclera + iris (hug the opening)
+            // 3) Lids hug the sclera disc edges
             var close = _freezeBlink ? 0f : lidClose;
-            var upperAngle = MathHelper.Lerp(-0.18f, 0.72f, close);
+            var upperAngle = MathHelper.Lerp(-0.16f, 0.72f, close);
             var upperWorld =
-                Matrix4x4.CreateScale(0.090f, 0.055f, 0.090f) *
+                Matrix4x4.CreateScale(0.100f, 0.058f, 0.100f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
-                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.02f)) *
+                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.030f)) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(upperWorld), cam, blinkAmt, 1.0f);
             _ctx.PSSetShader(_psLid);
@@ -418,18 +432,18 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.18f, 0.0f, close);
+            var lowerAngle = MathHelper.Lerp(0.16f, 0.0f, close);
             var lowerWorld =
-                Matrix4x4.CreateScale(0.088f, 0.052f, 0.088f) *
+                Matrix4x4.CreateScale(0.098f, 0.055f, 0.098f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
-                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.02f)) *
+                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.030f)) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(lowerWorld), cam, blinkAmt, 1.0f);
             _ctx.IASetVertexBuffer(0, _lidLower!.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_lidLower.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidLower.IndexCount, 0, 0);
 
-            _ = eyeWorld; // keep transform for future sphere restore
+            _ = eyeWorld;
         }
 
         DrawOne(EyeL, left: true);
