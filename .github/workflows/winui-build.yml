@@ -37,8 +37,8 @@ jobs:
 
       - name: Publish unpackaged self-contained
         run: |
-          # Force SDK 8 via global.json; WinUI PriGen breaks on SDK 11
-          $env:DOTNET_ROOT = "${env:ProgramFiles}\dotnet"
+          # Force SDK 8 via global.json + stripped 9+/11 SDKs (PriGen MSB4062 on newer SDKs)
+          dotnet --version
           dotnet publish LiaDesktop.WinUI/src/LiaDesktop/LiaDesktop.csproj `
             -c Release -r win-x64 `
             --self-contained true `
@@ -49,7 +49,6 @@ jobs:
             -o publish/LiaDesktop
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-          DOTNET_ROLL_FORWARD: LatestFeature
 
       - name: Install Playwright browsers
         run: |
