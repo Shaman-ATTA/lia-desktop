@@ -55,13 +55,13 @@ struct PSIn {
   float3 local : TEXCOORD2;
 };
 float4 main(PSIn i) : SV_TARGET {
-  // Narrow palpebral punch only — lids + sclera fill the almond (no black void)
+  // Tight fissure punch — filled by sclera plate + lids (never leave black void)
   float2 eyeL = float2(-0.161, 0.253);
   float2 eyeR = float2(0.152, 0.251);
-  float dL = length((i.local.xy - eyeL) / float2(0.072, 0.036));
-  float dR = length((i.local.xy - eyeR) / float2(0.072, 0.036));
+  float dL = length((i.local.xy - eyeL) / float2(0.058, 0.028));
+  float dR = length((i.local.xy - eyeR) / float2(0.058, 0.028));
   float dEye = min(dL, dR);
-  if (dEye < 0.92 && i.local.z > 0.30) discard;
+  if (dEye < 0.88 && i.local.z > 0.32) discard;
 
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
@@ -155,17 +155,18 @@ float4 main(PSIn i) : SV_TARGET {
   float isDisc = saturate(1.0 - abs(i.local.z - 0.88) * 20.0);
   float front = max(saturate(i.local.z * 1.6 + 0.2), isDisc);
 
-  // Hologram-tinted sclera (not chalk-white, not dark void)
+  // Bright hologram-tinted sclera — must read as “eye white”, not dark void
   float3 amber = float3(1.0, 0.62, 0.22);
   float3 gold = float3(1.0, 0.78, 0.42);
-  float3 sclera = float3(0.78, 0.68, 0.52);
+  float3 sclera = float3(0.92, 0.82, 0.62);
   float3 irisOuter = float3(0.32, 0.14, 0.04);
   float3 irisInner = float3(0.82, 0.45, 0.14);
   float3 pupil = float3(0.01, 0.008, 0.005);
 
-  // Larger iris relative to eye, still with sclera margin
-  float irisR = lerp(0.78, 0.82, isDisc);
-  float pupilR = lerp(0.30, 0.34, isDisc);
+  // Larger iris; sclera plate (col.a≈0.5) forces full sclera fill
+  float isPlate = saturate(1.0 - abs(i.col.a - 0.5) * 20.0);
+  float irisR = lerp(0.82, 0.88, isDisc) * (1.0 - isPlate);
+  float pupilR = lerp(0.32, 0.36, isDisc) * (1.0 - isPlate);
   float irisMask = (1.0 - smoothstep(irisR * 0.86, irisR, r)) * front;
   float pupilMask = (1.0 - smoothstep(pupilR * 0.7, pupilR, r)) * front;
   float limbus = smoothstep(irisR * 0.78, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.1, r)) * front;
@@ -175,15 +176,16 @@ float4 main(PSIn i) : SV_TARGET {
   float3 iris = lerp(irisInner, irisOuter, saturate(r / max(irisR, 1e-3))) * spoke;
 
   float fres = pow(1.0 - ndv, 2.2);
-  float3 col = sclera * (0.55 + diff * 0.4);
-  col += amber * fres * 0.22; // holo tint on sclera
-  col = lerp(col, iris, irisMask);
-  col = lerp(col, pupil, pupilMask);
-  col += gold * limbus * 0.45;
-  col += float3(1.0, 0.96, 0.88) * spec * irisMask * 0.85;
-  float2 catchUv = xy - float2(0.16, 0.12) * irisR;
-  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.11 * irisR, length(catchUv))) * irisMask * 0.8;
-  col += amber * pow(1.0 - ndv, 2.5) * 0.12 * glow;
+  float3 col = sclera * (0.72 + diff * 0.35);
+  col += amber * fres * 0.28;
+  col += gold * isPlate * 0.12;
+  col = lerp(col, iris, irisMask * (1.0 - isPlate));
+  col = lerp(col, pupil, pupilMask * (1.0 - isPlate));
+  col += gold * limbus * 0.45 * (1.0 - isPlate);
+  col += float3(1.0, 0.96, 0.88) * spec * irisMask * 0.85 * (1.0 - isPlate);
+  float2 catchUv = xy - float2(0.16, 0.12) * max(irisR, 0.2);
+  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.11 * max(irisR, 0.2), length(catchUv))) * irisMask * 0.8 * (1.0 - isPlate);
+  col += amber * pow(1.0 - ndv, 2.5) * 0.14 * glow;
 
   return float4(saturate(col), 1.0);
 }
