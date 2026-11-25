@@ -50,8 +50,10 @@ Settings → provider **Ollama** → Base URL `http://127.0.0.1:11434/v1`.
 
 ## CI
 
-- `.github/workflows/build-windows.yml` — pack portable + zip; upload artifact; release on `v*` tags  
-- `.github/workflows/windows-smoke.yml` — pack, launch EXE, focus «Lia Assistant», screenshot  
+- `.github/workflows/build-windows.yml` — pack portable + zip; publish EXE/ZIP on `v*` tags (no bulky Actions artifacts — account quota)  
+- `.github/workflows/windows-smoke.yml` — pack, launch EXE, focus «Lia Assistant», screenshot → attach PNG to release  
+- Pack + screenshot steps already green on `windows-latest`; only artifact upload failed until quota workaround  
+
 
 ## Gaps
 
