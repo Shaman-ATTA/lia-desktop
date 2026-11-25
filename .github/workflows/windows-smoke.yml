@@ -77,7 +77,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release upload v0.1.0 desktop_windows_runner.png --repo "$GITHUB_REPOSITORY" --clobber
+          TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName')
+          if [ -z "$TAG" ]; then TAG=v0.2.0; fi
+          gh release upload "$TAG" desktop_windows_runner.png --repo "$GITHUB_REPOSITORY" --clobber
+          echo "uploaded desktop_windows_runner.png → $TAG"
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
