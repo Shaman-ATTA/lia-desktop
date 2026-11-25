@@ -64,7 +64,7 @@ await new Promise((resolve, reject) => {
       '-i',
       path.join(out, 'desktop_speaking.png'),
       '-vf',
-      'crop=480:360:460:200',
+      'crop=480:380:460:200',
       path.join(out, 'desktop_mouth_crop.png'),
     ],
     { stdio: 'inherit' },

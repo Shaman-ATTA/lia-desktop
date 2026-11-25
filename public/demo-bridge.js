@@ -93,7 +93,7 @@
     },
     speakOpen: () => {
       emit('voice:state', { state: 'SPEAKING', text: 'Аа…' })
-      emit('debug:mouth', { jaw: 0.62, funnel: 0.08, wide: 0.12, speaking: true, poseYaw: 0 })
+      emit('debug:mouth', { jaw: 0.75, funnel: 0.04, wide: 0.08, speaking: true, poseYaw: 0 })
     },
     rotate: (yaw = Math.PI / 6) => {
       emit('voice:state', { state: 'IDLE' })

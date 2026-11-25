@@ -179,8 +179,8 @@ export default function App() {
       const t = performance.now() - speakStartedAt.current
       const text = speakTextRef.current
       if (!text) {
-        const amp = 0.78 + 0.14 * Math.sin(t / 150)
-        setMouth({ jaw: Math.min(0.72, amp * 0.62), funnel: 0.05, wide: 0.12 })
+        const amp = 0.82 + 0.12 * Math.sin(t / 140)
+        setMouth({ jaw: Math.min(0.72, amp * 0.7), funnel: 0.04, wide: 0.1 })
         return
       }
       const b = boundariesRef.current.find(
