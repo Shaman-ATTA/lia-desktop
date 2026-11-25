@@ -36,17 +36,32 @@ jobs:
         run: dotnet test LiaDesktop.WinUI/tests/LiaDesktop.Tests/LiaDesktop.Tests.csproj -c Release --nologo
 
       - name: Publish unpackaged self-contained
+        shell: pwsh
         run: |
-          # Force SDK 8 via global.json + stripped 9+/11 SDKs (PriGen MSB4062 on newer SDKs)
-          dotnet --version
-          dotnet publish LiaDesktop.WinUI/src/LiaDesktop/LiaDesktop.csproj `
-            -c Release -r win-x64 `
-            --self-contained true `
-            -p:WindowsPackageType=None `
-            -p:WindowsAppSDKSelfContained=true `
-            -p:PublishReadyToRun=false `
-            -p:EnableMsixTooling=false `
-            -o publish/LiaDesktop
+          # VS MSBuild ships AppxPackage/Pri tasks that the .NET SDK host lacks (MSB4062).
+          $proj = "LiaDesktop.WinUI\src\LiaDesktop\LiaDesktop.csproj"
+          $out = Join-Path $PWD "publish\LiaDesktop"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          msbuild $proj `
+            /restore `
+            /t:Publish `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:RuntimeIdentifier=win-x64 `
+            /p:TargetFramework=net8.0-windows10.0.19041.0 `
+            /p:SelfContained=true `
+            /p:WindowsPackageType=None `
+            /p:WindowsAppSDKSelfContained=true `
+            /p:EnableMsixTooling=false `
+            /p:PublishReadyToRun=false `
+            /p:PublishDir="$out\" `
+            /p:PublishProtocol=FileSystem `
+            /v:m
+          if (-not (Test-Path (Join-Path $out "LiaDesktop.exe"))) {
+            Get-ChildItem $out -ErrorAction SilentlyContinue | Select-Object -First 40
+            throw "LiaDesktop.exe missing after publish"
+          }
+          Get-ChildItem $out | Select-Object Name,Length | Format-Table
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
 
