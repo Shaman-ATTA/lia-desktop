@@ -4,10 +4,10 @@
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.4.1
 
-| Asset | Notes |
-|-------|-------|
-| `LiaDesktop-0.4.1-win-x64.zip` | Portable (shrunk) |
-| `LiaDesktop-0.4.1-setup.exe` | Per-user Inno installer |
+| Asset | Size | Notes |
+|-------|------|-------|
+| `LiaDesktop-0.4.1-win-x64.zip` | **92.7 MB** (−63% vs ~250) | Portable; Playwright win32-only + Edge channel |
+| `LiaDesktop-0.4.1-setup.exe` | **65.1 MB** | Per-user Inno, no admin |
 | `desktop_winui_front.png` | Lips amber, eyes almond |
 | `desktop_winui_threequarter.png` | 3/4 |
 | `desktop_winui_profile.png` | Profile |
