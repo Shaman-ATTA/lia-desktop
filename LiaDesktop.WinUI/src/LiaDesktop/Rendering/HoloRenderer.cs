@@ -630,13 +630,22 @@ public sealed class HoloRenderer : IDisposable
             _ctx.ResolveSubresource(_sceneColor, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
         // msaa==1 already drew into _rtvScene
 
-        // Always blit scene → swap first (known-good), then FXAA overwrite
-        using (var bb = _swap.GetBuffer<ID3D11Texture2D>(0))
+        // Blit scene → swap. FXAA only when MSAA unavailable (CI/WARP often has MSAA=4).
+        if (_msaaSamples <= 1)
         {
+            if (!ApplyFxaa())
+            {
+                using var bb = _swap.GetBuffer<ID3D11Texture2D>(0);
+                if (_sceneColor != null)
+                    _ctx.CopyResource(bb, _sceneColor);
+            }
+        }
+        else
+        {
+            using var bb = _swap.GetBuffer<ID3D11Texture2D>(0);
             if (_sceneColor != null)
                 _ctx.CopyResource(bb, _sceneColor);
         }
-        ApplyFxaa(); // best-effort AA; CopyResource already filled swap
         _swap.Present(1, PresentFlags.None);
     }
 
