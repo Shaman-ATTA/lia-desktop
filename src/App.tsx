@@ -1,33 +1,58 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { HologramView } from './face/HologramView'
 import { SettingsModal } from './pages/SettingsModal'
 import { useSpeechRecognition } from './hooks/useSpeech'
+import { useSysReadout } from './hooks/useSysReadout'
+import { BootOverlay } from './components/BootOverlay'
+import { ScrambleText } from './components/ScrambleText'
 import './styles/app.css'
 
 type Tab = 'home' | 'dialog' | 'agent' | 'more'
 type VoiceState = 'IDLE' | 'LISTENING' | 'THINKING' | 'SPEAKING'
 
-const GREETING_TITLE = 'Доброй ночи, сэр.'
+const GREETING = 'Доброй ночи, сэр.'
 const GREETING_SUB = 'Я готова к диалогу и локальным навыкам.'
-
 const STOP_RE = /лиа[,\s]+стоп/i
 
+function MicIcon({ listening }: { listening: boolean }) {
+  return (
+    <svg className="mic-svg" viewBox="0 0 24 24" aria-hidden>
+      <rect x="9" y="2" width="6" height="11" rx="3" fill="currentColor" />
+      <path
+        d="M5 11a7 7 0 0 0 14 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path d="M12 18v3M9 21h6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      {listening && <circle className="mic-pulse-ring" cx="12" cy="8" r="9" />}
+    </svg>
+  )
+}
+
 export default function App() {
+  const [booted, setBooted] = useState(() => new URLSearchParams(location.search).has('noboot'))
   const [tab, setTab] = useState<Tab>('home')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [voice, setVoice] = useState<VoiceState>('IDLE')
   const [statusSub, setStatusSub] = useState('Скажите «Лиа» или нажмите микрофон')
+  const [subtitle, setSubtitle] = useState(GREETING_SUB)
   const [transcript, setTranscript] = useState('')
   const [log, setLog] = useState<string[]>([])
   const [controlling, setControlling] = useState(false)
   const [confirmPrompt, setConfirmPrompt] = useState<string | null>(null)
   const [mouth, setMouth] = useState({ jaw: 0, funnel: 0, wide: 0 })
   const [textInput, setTextInput] = useState('')
+  const [poseYaw, setPoseYaw] = useState(0)
+  const [motionBoost, setMotionBoost] = useState(1)
+  const [parallax, setParallax] = useState({ x: 0, y: 0 })
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const queueRef = useRef<string[]>([])
   const speakTextRef = useRef('')
   const boundariesRef = useRef<{ offsetMs: number; durationMs: number; charStart: number; charEnd: number }[]>([])
   const speakStartedAt = useRef(0)
+  const sys = useSysReadout(booted)
 
   const pushLog = useCallback((line: string) => {
     setLog((prev) => [...prev.slice(-120), line])
@@ -48,11 +73,24 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const x = (e.clientX / window.innerWidth) * 2 - 1
+      const y = (e.clientY / window.innerHeight) * 2 - 1
+      setParallax({ x, y })
+    }
+    window.addEventListener('pointermove', onMove)
+    return () => window.removeEventListener('pointermove', onMove)
+  }, [])
+
+  useEffect(() => {
     const offs = [
       window.lia.on('voice:state', (p) => {
         const s = p as { state: VoiceState; text?: string }
         setVoice(s.state)
-        if (s.text) setStatusSub(s.text.slice(0, 100))
+        if (s.text) {
+          setStatusSub(s.text.slice(0, 100))
+          setSubtitle(s.text.slice(0, 140))
+        }
       }),
       window.lia.on('voice:audio-chunk', (p) => {
         const c = p as { path: string; index: number; dataUrl?: string }
@@ -71,6 +109,7 @@ export default function App() {
         }
         speakTextRef.current = r.text
         boundariesRef.current = r.boundaries || []
+        setSubtitle(r.text.slice(0, 160))
         if (!queueRef.current.length && r.dataUrl) {
           queueRef.current.push(r.dataUrl)
           speakStartedAt.current = performance.now()
@@ -93,6 +132,7 @@ export default function App() {
           pushLog(`✓ ${e.tool}: ${summary}`)
         } else if (e.text) {
           pushLog(`${e.type}: ${e.text}`)
+          if (e.type === 'done') setSubtitle(e.text.slice(0, 160))
         }
       }),
       window.lia.on('agent:confirm', (p) => {
@@ -103,12 +143,19 @@ export default function App() {
         setConfirmPrompt(null)
         setVoice('IDLE')
         setStatusSub('Остановлено')
+        setSubtitle('Остановлено · Ctrl+Alt+S')
         audioRef.current?.pause()
         queueRef.current = []
       }),
-      // Capture harness: force mouth open without audio
       window.lia.on('debug:mouth', (p) => {
-        const m = p as { jaw: number; funnel?: number; wide?: number; speaking?: boolean }
+        const m = p as {
+          jaw: number
+          funnel?: number
+          wide?: number
+          speaking?: boolean
+          poseYaw?: number
+          motionBoost?: number
+        }
         if (m.speaking) setVoice('SPEAKING')
         else if (m.jaw <= 0.05) setVoice('IDLE')
         setMouth({
@@ -116,13 +163,14 @@ export default function App() {
           funnel: m.funnel ?? 0,
           wide: m.wide ?? 0,
         })
-        if (m.speaking) setStatusSub('Демо анимации рта')
+        if (typeof m.poseYaw === 'number') setPoseYaw(m.poseYaw)
+        if (typeof m.motionBoost === 'number') setMotionBoost(m.motionBoost)
+        if (m.speaking) setStatusSub('Речь · анимация рта')
       }),
     ]
     return () => offs.forEach((off) => off())
   }, [playNext, pushLog])
 
-  // Drive visemes from word boundaries while speaking
   useEffect(() => {
     if (voice !== 'SPEAKING') return
     let raf = 0
@@ -131,24 +179,23 @@ export default function App() {
       const t = performance.now() - speakStartedAt.current
       const text = speakTextRef.current
       if (!text) {
-        // Forced open for capture / silent demo
-        const amp = 0.72 + 0.12 * Math.sin(t / 160)
-        setMouth({ jaw: Math.min(0.58, amp * 0.55), funnel: 0, wide: 0.15 })
+        const amp = 0.78 + 0.14 * Math.sin(t / 150)
+        setMouth({ jaw: Math.min(0.72, amp * 0.62), funnel: 0.05, wide: 0.12 })
         return
       }
       const b = boundariesRef.current.find(
         (x) => t >= x.offsetMs && t <= x.offsetMs + Math.max(90, x.durationMs),
       )
-      const amp = 0.62 + 0.28 * Math.abs(Math.sin(t / 130))
+      const amp = 0.68 + 0.3 * Math.abs(Math.sin(t / 120))
       if (b) {
         void window.lia.visemeShape(text, b.charStart, b.charEnd, amp).then((m) => {
-          setMouth({ jaw: Math.max(0.35, m.jaw), funnel: m.funnel, wide: m.wide })
+          setMouth({ jaw: Math.max(0.38, m.jaw), funnel: m.funnel, wide: m.wide })
         })
       } else {
         setMouth((prev) => ({
-          jaw: Math.max(0.28, prev.jaw * 0.92),
-          funnel: prev.funnel * 0.9,
-          wide: prev.wide * 0.9,
+          jaw: Math.max(0.3, prev.jaw * 0.9),
+          funnel: prev.funnel * 0.88,
+          wide: prev.wide * 0.88,
         }))
       }
     }
@@ -161,6 +208,7 @@ export default function App() {
     if (!t) return
     setVoice('THINKING')
     setStatusSub('Думаю…')
+    setSubtitle(t)
     setControlling(true)
     try {
       await window.lia.runAgent(t)
@@ -198,6 +246,7 @@ export default function App() {
       setTranscript('')
       setVoice('LISTENING')
       setStatusSub('Слушаю')
+      setSubtitle('Слушаю…')
       start()
     }
   }
@@ -205,23 +254,50 @@ export default function App() {
   const statusLine = useMemo(() => {
     switch (voice) {
       case 'SPEAKING':
-        return 'Говорю'
+        return 'ГОВОРЮ'
       case 'LISTENING':
-        return 'Слушаю'
+        return 'СЛУШАЮ'
       case 'THINKING':
-        return 'Думаю'
+        return 'АНАЛИЗ'
       default:
-        return listening ? 'Слушаю' : 'В режиме ожидания'
+        return listening ? 'СЛУШАЮ' : 'ОЖИДАНИЕ'
     }
   }, [voice, listening])
 
-  return (
-    <div className="app">
-      {controlling && <div className="banner-controlling">Лиа управляет · Ctrl+Alt+S / «Лиа, стоп»</div>}
+  const panelStyle = (side: 'left' | 'right'): CSSProperties => {
+    const sx = side === 'left' ? 1 : -1
+    return {
+      transform: `perspective(900px) rotateY(${parallax.x * 4 * sx}deg) translate3d(${parallax.x * 6 * sx}px, ${parallax.y * -4}px, 0)`,
+    }
+  }
 
-      <header className="topbar">
+  return (
+    <div className={`app ${booted ? 'booted' : ''}`}>
+      {!booted && <BootOverlay onDone={() => setBooted(true)} />}
+
+      <div className="hud-bg" aria-hidden>
+        <div className="hex-grid" />
+        <div className="scan-sweep" />
+        <div className="vignette" />
+      </div>
+
+      {controlling && (
+        <div className="banner-controlling">
+          Лиа управляет · Ctrl+Alt+S / «Лиа, стоп»
+        </div>
+      )}
+
+      <header className="topbar hud-chrome">
         <div className="brand">
-          ЛИА<span>ATTA CORP · N-33</span>
+          <ScrambleText text="ЛИА" active={booted} />
+          <span>ATTA CORP · N-33</span>
+        </div>
+        <div className="sys-strip">
+          <span>{sys.date}</span>
+          <span className="sys-time">{sys.time}</span>
+          <span>CPU {sys.cpu}%</span>
+          <span>RAM {sys.ram}%</span>
+          <span>{sys.net}</span>
         </div>
         <div className="top-actions">
           <button className="ghost-btn" onClick={() => setSettingsOpen(true)}>
@@ -231,28 +307,72 @@ export default function App() {
       </header>
 
       <div className="greeting-block">
-        <div className="greeting-title">{GREETING_TITLE}</div>
-        <div className="greeting-sub">{GREETING_SUB}</div>
+        <div className="greeting-title">
+          <ScrambleText text={GREETING} active={booted} />
+        </div>
       </div>
 
       <div className="main">
+        <aside className="side left hud-panel" style={panelStyle('left')}>
+          <div className="panel-bracket">
+            <h3>СТАТУС</h3>
+            <div className="readout">
+              <div>
+                <em>VOICE</em> {statusLine}
+              </div>
+              <div>
+                <em>AGENT</em> {controlling ? 'ACTIVE' : 'STANDBY'}
+              </div>
+              <div>
+                <em>MESH</em> GLB · 3D
+              </div>
+              <div>
+                <em>LINK</em> {sys.net}
+              </div>
+            </div>
+          </div>
+          <div className="panel-bracket grow">
+            <h3>ЖУРНАЛ</h3>
+            <div className="log" data-testid="action-log">
+              {log.length === 0 && <div className="log-empty">Нет задач</div>}
+              {log.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+            </div>
+          </div>
+        </aside>
+
         <div className="stage-wrap">
-          <HologramView mouth={mouth} speaking={voice === 'SPEAKING'} />
-          <div className={`status ${voice === 'SPEAKING' ? 'speaking' : ''}`}>
-            {statusLine.toUpperCase()}
-            <span className="status-sub">{statusSub}</span>
+          <div className="stage-frame">
+            <span className="corner tl" />
+            <span className="corner tr" />
+            <span className="corner bl" />
+            <span className="corner br" />
+            <HologramView
+              mouth={mouth}
+              speaking={voice === 'SPEAKING' || listening}
+              poseYaw={poseYaw}
+              motionBoost={motionBoost}
+            />
+            <div className={`status ${voice === 'SPEAKING' ? 'speaking' : ''}`}>
+              <ScrambleText text={statusLine} active={voice !== 'IDLE'} />
+              <span className="status-sub">{statusSub}</span>
+            </div>
+          </div>
+          <div className="hud-subtitle" data-testid="hud-subtitle">
+            {subtitle}
           </div>
         </div>
 
-        <aside className="side">
-          <div className="panel">
-            <h3>Диалог</h3>
+        <aside className="side right hud-panel" style={panelStyle('right')}>
+          <div className="panel-bracket">
+            <h3>ДИАЛОГ</h3>
             <div className="transcript">{transcript || 'Скажите задачу или нажмите микрофон…'}</div>
             <div className="chat-input">
               <input
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
-                placeholder="Текст…"
+                placeholder="Команда…"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     void handleUserText(textInput)
@@ -268,20 +388,26 @@ export default function App() {
                 }}
                 aria-label="Отправить"
               >
-                →
+                ›
               </button>
             </div>
-            {!supported && (
-              <p className="hint">Web Speech недоступен — используйте текстовый ввод.</p>
-            )}
+            {!supported && <p className="hint">Web Speech недоступен — текст.</p>}
           </div>
-          <div className="panel log-panel">
-            <h3>Журнал действий</h3>
-            <div className="log" data-testid="action-log">
-              {log.length === 0 && <div>Пока пусто</div>}
-              {log.map((l, i) => (
-                <div key={i}>{l}</div>
-              ))}
+          <div className="panel-bracket grow">
+            <h3>СИСТЕМА</h3>
+            <div className="readout">
+              <div>
+                <em>TIME</em> {sys.time}
+              </div>
+              <div>
+                <em>DATE</em> {sys.date}
+              </div>
+              <div>
+                <em>CPU</em> {sys.cpu}%
+              </div>
+              <div>
+                <em>MEM</em> {sys.ram}%
+              </div>
             </div>
           </div>
         </aside>
@@ -291,25 +417,31 @@ export default function App() {
         <nav className="nav-glass">
           <button className={`nav-item ${tab === 'home' ? 'active' : ''}`} onClick={() => setTab('home')}>
             <span className="nav-ico" aria-hidden>
-              ▦
+              ⌂
             </span>
             <span>Главная</span>
           </button>
           <button className={`nav-item ${tab === 'dialog' ? 'active' : ''}`} onClick={() => setTab('dialog')}>
             <span className="nav-ico" aria-hidden>
-              ◢
+              ◈
             </span>
             <span>Диалог</span>
           </button>
 
           <div className="mic-slot">
-            <button className={`mic ${listening ? 'active' : ''}`} onClick={toggleMic} aria-label="Микрофон" />
+            <button
+              className={`mic ${listening ? 'active' : ''}`}
+              onClick={toggleMic}
+              aria-label="Микрофон"
+            >
+              <MicIcon listening={listening} />
+            </button>
             <span className="mic-label">{listening ? 'Слушаю…' : 'Микрофон'}</span>
           </div>
 
           <button className={`nav-item ${tab === 'agent' ? 'active' : ''}`} onClick={() => setTab('agent')}>
             <span className="nav-ico" aria-hidden>
-              △
+              ⬡
             </span>
             <span>Агент</span>
           </button>
@@ -321,7 +453,7 @@ export default function App() {
             }}
           >
             <span className="nav-ico" aria-hidden>
-              ···
+              ☰
             </span>
             <span>Ещё</span>
           </button>

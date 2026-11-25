@@ -16,6 +16,7 @@ const api = {
     ipcRenderer.invoke('viseme:shape', text, start, end, amp),
   meshPath: () => ipcRenderer.invoke('assets:meshPath'),
   meshBytes: () => ipcRenderer.invoke('assets:meshBytes') as Promise<Uint8Array>,
+  glbBytes: () => ipcRenderer.invoke('assets:glbBytes') as Promise<Uint8Array>,
   openPath: (p: string) => ipcRenderer.invoke('shell:openPath', p),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   runTools: (plan: { name: string; args: Record<string, string> }[]) =>

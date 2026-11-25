@@ -1,12 +1,13 @@
-/* Browser capture bridge: real tool-looking API + mouth debug (no '[demo]' stubs). */
+/* Browser capture bridge: real tool-looking API + 3D mouth/pose debug (no '[demo]' stubs). */
 (function () {
   const listeners = {}
   function emit(ch, ...args) {
     ;(listeners[ch] || []).forEach((fn) => fn(...args))
   }
-  const workspace = (typeof process !== 'undefined' && process.env && process.env.HOME)
-    ? process.env.HOME + '/LiaWorkspace'
-    : '/tmp/LiaWorkspace'
+  const workspace =
+    typeof process !== 'undefined' && process.env && process.env.HOME
+      ? process.env.HOME + '/LiaWorkspace'
+      : '/tmp/LiaWorkspace'
 
   window.lia = {
     getConfig: async () => ({
@@ -35,15 +36,13 @@
         }
         t += 48
       }
-      speakStarted = performance.now()
       emit('voice:speak-result', { text, boundaries, dataUrl: '' })
       setTimeout(() => emit('voice:state', { state: 'IDLE' }), Math.max(2200, t))
       return { text, boundaries }
     },
     stopSpeak: async () => true,
-    runAgent: async () => ({ ok: false, error: 'use runTools in capture' }),
-    runTools: async (plan) => {
-      // Filled by capture script via page.exposeFunction / overwritten
+    runAgent: async () => ({ ok: false, error: 'use capture tools' }),
+    runTools: async () => {
       emit('agent:event', { type: 'error', text: 'runTools not bound' })
       return { ok: false, results: [] }
     },
@@ -61,13 +60,21 @@
       else if (/[оё]/.test(slice)) shape = 'O'
       else if (/[ую]/.test(slice)) shape = 'U'
       else if (/[бпм]/.test(slice)) shape = 'SIL'
-      const oOpen = 0.55 * Math.max(amp, 0.4)
+      const oOpen = 0.62 * Math.max(amp, 0.4)
       if (shape === 'AA' || shape === 'O')
-        return { shape, jaw: Math.min(oOpen, 0.58), funnel: shape === 'O' ? 0.8 : 0, wide: 0 }
-      if (shape === 'E') return { shape, jaw: 0.48, funnel: 0, wide: 0.75 }
+        return { shape, jaw: Math.min(oOpen, 0.72), funnel: shape === 'O' ? 0.8 : 0, wide: 0 }
+      if (shape === 'E') return { shape, jaw: 0.52, funnel: 0, wide: 0.75 }
       return { shape, jaw: 0.05, funnel: 0, wide: 0 }
     },
     meshPath: async () => '/models/lia_holo_mesh.bin',
+    meshBytes: async () => {
+      const r = await fetch('/models/lia_holo_mesh.bin')
+      return new Uint8Array(await r.arrayBuffer())
+    },
+    glbBytes: async () => {
+      const r = await fetch('/models/lia_face_morph.glb')
+      return new Uint8Array(await r.arrayBuffer())
+    },
     openPath: async () => {},
     openExternal: async (url) => window.open(url, '_blank'),
     on: (channel, cb) => {
@@ -79,15 +86,21 @@
     },
   }
 
-  let speakStarted = 0
   window.__liaCapture = {
     idle: () => {
-      emit('debug:mouth', { jaw: 0, funnel: 0, wide: 0, speaking: false })
+      emit('debug:mouth', { jaw: 0, funnel: 0, wide: 0, speaking: false, poseYaw: 0, motionBoost: 1 })
       emit('voice:state', { state: 'IDLE' })
     },
     speakOpen: () => {
       emit('voice:state', { state: 'SPEAKING', text: 'Аа…' })
-      emit('debug:mouth', { jaw: 0.55, funnel: 0, wide: 0.12, speaking: true })
+      emit('debug:mouth', { jaw: 0.62, funnel: 0.08, wide: 0.12, speaking: true, poseYaw: 0 })
+    },
+    rotate: (yaw = 0.55) => {
+      emit('voice:state', { state: 'IDLE' })
+      emit('debug:mouth', { jaw: 0, funnel: 0, wide: 0, speaking: false, poseYaw: yaw, motionBoost: 1 })
+    },
+    motion: (boost = 2.4) => {
+      emit('debug:mouth', { jaw: 0.45, funnel: 0.05, wide: 0.1, speaking: true, poseYaw: 0, motionBoost: boost })
     },
     pushLog: (line) => emit('agent:log', line),
     toolStart: (tool, args) => emit('agent:event', { type: 'tool_start', tool, args }),

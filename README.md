@@ -1,14 +1,14 @@
 # Lia Assistant (Windows)
 
-**ATTA CORP** · personal, non-commercial use · separate from the Android N-33 app.
+**ATTA CORP** · personal, non-commercial · separate from Android N-33.
 
-Premium Russian desktop assistant with holographic Лиа, free Gemini/Ollama agent tools, edge-tts voice, and PC control (files, PowerShell, Playwright, screen).
+Holographic Russian desktop assistant: real **3D GLB** Лиа in three.js, Stark-style amber HUD, free Gemini/Ollama agent tools, edge-tts, PC control.
 
 ## Install (Windows 11 x64)
 
-1. Download the latest portable EXE from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
+1. Download the portable EXE from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
 2. Run `LiaAssistant-*-win-x64.exe`.
-3. **Настройки** → paste a free Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (model `gemini-2.0-flash`), or point to local Ollama (`http://127.0.0.1:11434/v1`).
+3. **Настройки** → free Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (`gemini-2.0-flash`), or Ollama (`http://127.0.0.1:11434/v1`).
 
 ## Develop
 
@@ -17,12 +17,12 @@ npm install
 pip install edge-tts
 npx playwright install chromium
 npm run dev
-npm run pack:win   # portable + zip (set CSC_IDENTITY_AUTO_DISCOVERY=false on CI)
+npm run pack:win   # portable + zip (CSC_IDENTITY_AUTO_DISCOVERY=false on CI)
 ```
 
 ## Docs
 
-See `DESKTOP_REPORT.md` for voice/LLM choices, safety (Ctrl+Alt+S / «Лиа, стоп»), and gaps.
+See `DESKTOP_REPORT.md` for the v0.2.0 HUD redesign, 3D notes, and gaps.
 
 ## License
 

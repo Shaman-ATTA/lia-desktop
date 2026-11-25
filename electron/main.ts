@@ -262,6 +262,19 @@ function registerIpc() {
     }
     throw new Error('lia_holo_mesh.bin not found in ' + candidates.join(' | '))
   })
+  ipcMain.handle('assets:glbBytes', () => {
+    const candidates = [
+      assetsPath('models', 'lia_face_morph.glb'),
+      path.join(app.getAppPath(), 'dist', 'models', 'lia_face_morph.glb'),
+      path.join(app.getAppPath(), 'public', 'models', 'lia_face_morph.glb'),
+      path.join(__dirname, '..', 'public', 'models', 'lia_face_morph.glb'),
+      path.join(__dirname, '..', 'assets', 'models', 'lia_face_morph.glb'),
+    ]
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return fs.readFileSync(p)
+    }
+    throw new Error('lia_face_morph.glb not found in ' + candidates.join(' | '))
+  })
 
   ipcMain.handle('shell:openPath', (_e, p: string) => shell.openPath(p))
   ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url))

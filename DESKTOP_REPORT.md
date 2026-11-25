@@ -1,72 +1,41 @@
-# Lia Assistant — Windows Desktop (N-33 FREE / personal)
+# Lia Assistant Windows v0.2.0 — HUD redesign report
 
-**ATTA CORP · app name «Lia Assistant» · assistant «Лиа»**  
-Personal, non-commercial use. No Pro gating. No store listing required.  
-**Repo:** https://github.com/Shaman-ATTA/lia-desktop (separate from Android N-33).
+**Repo:** https://github.com/Shaman-ATTA/lia-desktop  
+**ATTA CORP · ЛИА / Lia Assistant · N-33** (personal). Android untouched.
 
-## Tech
+## What changed (v0.2.0)
 
-| Layer | Choice |
-|-------|--------|
-| Shell | Electron 33 + Vite + React |
-| 3D | three.js + `lia_holo_mesh.bin` (same CPU morphs as Android) + hologram shader (thin scanlines, rim, flicker, neck fade). Framed frontal head; almond mouth cavity (no black slit). `lia_face_morph.glb` shipped for reference |
-| Visemes | Port of `RussianVisemes` / A capped to O amplitude |
-| LLM (default) | **Google Gemini free tier** (`gemini-2.0-flash`) — vision + tool calling |
-| LLM (offline) | **Ollama** OpenAI-compatible (`http://127.0.0.1:11434/v1`) |
-| TTS | **edge-tts `ru-RU-SvetlanaNeural` @ −4%** (DariyaNeural absent from Edge catalog). Sentence-chunk streaming |
-| STT | Chromium/Electron **Web Speech API `ru-RU`** |
-| Agent | Node tool loop: files, PowerShell, Playwright Chromium (isolated profile), screenshots, mouse/keyboard — **real runs, no `[demo]` stubs** |
-| Secrets | Local encrypted config — **Windows DPAPI** (`ProtectedData`), AES-256-GCM elsewhere |
+### A — Quality fixes
+1. **Head scale** — GLB bust fitted to ~65–75% of the central stage (closer camera + larger fit).
+2. **Neck** — custom holo shader alpha falloff; transparent WebGL clear (no dark neck blob).
+3. **Mic** — SVG microphone icon + listening pulse ring (amber → cyan when active).
+4. **Mouth** — GLB morph `jawOpen` / funnel / smile; flat GLB cavity card hidden; soft BackSide bowl only when open.
+5. Polish — scramble text, boot sequence, HUD subtitles, parallax side panels, system readout.
 
-## Install (Windows 11 x64)
+### B — Stark-like holographic HUD (original)
+- Fullscreen dark HUD, amber primary + cyan accents; cyan 3D head for contrast.
+- **Real 3D** `lia_face_morph.glb` in three.js (depth, rim lights, drag rotate, idle sway, blink morphs).
+- **3D HUD** in the same scene: tilted torus rings/arcs, tick marks, radial voice waveform, octahedron markers; camera drift + mouse parallax.
+- Overlay panels: angled brackets, hex/grid, scan sweep, time/date/CPU/RAM/net, status + task log.
+- Fonts bundled locally: Orbitron, Rajdhani, Exo 2.
+- Boot scramble overlay; dialog as HUD subtitle line.
+- Branding only: ЛИА / Lia Assistant / ATTA CORP (no Marvel names/marks).
 
-1. Download portable EXE from **[Releases v0.1.0](https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.1.0)**.
-2. Run `LiaAssistant-0.1.0-win-x64.exe`. First launch creates `%APPDATA%\lia-assistant\` and `~\LiaWorkspace\`.
-3. **Настройки** → paste free Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) → model `gemini-2.0-flash`.
+## Stack
+Electron 33 · Vite · React · three.js + GLTFLoader · Gemini/Ollama · edge-tts SvetlanaNeural · Playwright agent tools · DPAPI secrets.
 
-### Ollama (fully offline)
+## Captures
+| File | Content |
+|------|---------|
+| `desktop_idle.png` | HUD idle, frontal 3D head + rings |
+| `desktop_speaking.png` | Mouth open via morphs |
+| `desktop_head_rotated.png` | Yawed head (3D depth) |
+| `desktop_agent_file.png` | Real list_dir + write_file log |
+| `desktop_lia_boot_speak.mp4` | Boot + speaking with camera/head motion |
 
-```bash
-ollama pull qwen2.5-vl
-```
-
-Settings → provider **Ollama** → Base URL `http://127.0.0.1:11434/v1`.
-
-## Safety
-
-- Always-on-top banner «Лиа управляет» while tools run  
-- Stop: voice **«Лиа, стоп»** or hotkey **Ctrl+Alt+S**  
-- Delete / overwrite outside workspace / dangerous shell → confirm  
-- Action log in UI  
-
-## Captures (quality review)
-
-- `desktop_idle.png` — frontal framed head, fine scanlines, closed mouth, glass UI + nav  
-- `desktop_speaking.png` — mouth open almond cavity (no black slit), eyes/lips visible  
-- `desktop_agent_file.png` — real `list_dir` + `write_file` → `LiaWorkspace/lia_note.txt`  
-- `desktop_agent_browser.png` — real Playwright `browser_open` example.com + screenshot  
-- `desktop_lia_speak_demo.mp4` — speaking loop  
-- `desktop_windows_runner.png` — Windows GHA / packaged EXE smoke (Lia window focused)
-
-## CI
-
-- `.github/workflows/build-windows.yml` — pack portable + zip; publish EXE/ZIP on `v*` tags (no bulky Actions artifacts — account quota)  
-- `.github/workflows/windows-smoke.yml` — pack, launch EXE, focus «Lia Assistant», screenshot → attach PNG to release  
-- Pack + screenshot steps already green on `windows-latest`; only artifact upload failed until quota workaround  
-
+## Release
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.2.0
 
 ## Gaps
-
-- STT offline (Vosk/whisper) not bundled — Web Speech only  
-- First TTS chunk latency depends on Edge network (~1–2.5s cold)  
-- Android Origin repo remains untouched (`:app` only; no desktop merge)
-
-## Dev
-
-```bash
-npm install
-pip install edge-tts
-npx playwright install chromium
-npm run dev
-npm run pack:win   # CSC_IDENTITY_AUTO_DISCOVERY=false on CI
-```
+- Actions artifact quota still exhausted on the account — smoke PNG attaches to **Releases**, not Actions artifacts.
+- STT remains Web Speech; first TTS chunk needs Edge network.
