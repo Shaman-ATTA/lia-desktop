@@ -91,38 +91,45 @@ float4 main(PSIn i) : SV_TARGET {
   base += gold * spec;
   base += amber * diff * 0.18;
 
-  // Vertex-color features: brows / lips / cheeks (g channel from mesh bake)
+  // Vertex-color features + landmarks from lia_holo_mesh.bin meta
   float feat = saturate(i.col.g * 1.15 - fres * 0.35);
-  float lipZone = smoothstep(0.12, -0.02, i.local.y) * smoothstep(0.55, 0.22, abs(i.local.x));
-  float browZone = smoothstep(0.18, 0.32, i.local.y) * smoothstep(0.42, 0.18, abs(i.local.x));
+  // Lips around mouth_center y≈-0.098, z≈0.56
+  float lipZone = smoothstep(-0.02, -0.06, i.local.y) * smoothstep(-0.22, -0.10, i.local.y)
+                * smoothstep(0.22, 0.10, abs(i.local.x)) * smoothstep(0.35, 0.48, i.local.z);
+  float browZone = smoothstep(0.30, 0.36, i.local.y) * smoothstep(0.44, 0.34, i.local.y)
+                 * smoothstep(0.38, 0.16, abs(i.local.x));
   base += amber * feat * 0.85;
-  base += gold * lipZone * (0.25 + feat * 0.55);
-  base += amber * browZone * 0.22;
+  base += gold * lipZone * (0.45 + feat * 0.7);
+  base += amber * browZone * 0.28;
 
-  // Nose bridge hint from local geometry facing
-  float nose = saturate(1.0 - abs(i.local.x) * 9.0) * smoothstep(0.02, 0.18, i.local.y) * smoothstep(0.32, 0.12, i.local.y);
-  nose *= saturate(i.local.z * 2.2);
-  base += gold * nose * (0.18 + fres * 0.2);
+  // Nose bridge (subnasale ≈ -0.06 → brow)
+  float nose = saturate(1.0 - abs(i.local.x) * 10.0)
+             * smoothstep(-0.05, 0.08, i.local.y) * smoothstep(0.28, 0.12, i.local.y);
+  nose *= saturate(i.local.z * 2.0);
+  base += gold * nose * (0.22 + fres * 0.22);
 
-  // Real eyes: sclera + iris + blink
-  float2 eyeL = float2(-0.155, 0.252);
+  // Real eyes from mesh landmarks eye_L / eye_R (z≈0.39)
+  float2 eyeL = float2(-0.161, 0.253);
   float2 eyeR = float2(0.152, 0.251);
-  float dL = length((i.local.xy - eyeL) / float2(0.052, 0.026));
-  float dR = length((i.local.xy - eyeR) / float2(0.052, 0.026));
+  float dL = length((i.local.xy - eyeL) / float2(0.068, 0.032));
+  float dR = length((i.local.xy - eyeR) / float2(0.068, 0.032));
   float dEye = min(dL, dR);
-  float eyeMask = 1.0 - smoothstep(0.55, 1.2, dEye);
-  eyeMask *= smoothstep(0.22, 0.42, i.local.z);
-  float iris = 1.0 - smoothstep(0.12, 0.52, dEye);
-  float pupil = 1.0 - smoothstep(0.0, 0.22, dEye);
+  float eyeMask = 1.0 - smoothstep(0.45, 1.05, dEye);
+  eyeMask *= smoothstep(0.28, 0.38, i.local.z);
+  float iris = 1.0 - smoothstep(0.08, 0.48, dEye);
+  float pupil = 1.0 - smoothstep(0.0, 0.18, dEye);
   float open = 1.0 - blink;
-  float3 sclera = float3(0.95, 0.88, 0.72);
-  float3 irisCol = float3(0.55, 0.32, 0.08);
-  base = lerp(base, sclera * 0.55 + amber * 0.15, eyeMask * 0.65 * open);
-  base += irisCol * iris * open * 0.85;
-  base += float3(0.05, 0.03, 0.01) * pupil * open;
-  base += gold * eyeMask * open * 0.12;
+  float3 sclera = float3(1.0, 0.92, 0.78);
+  float3 irisCol = float3(0.42, 0.22, 0.06);
+  // Bright sclera so eyes read as open (not dark sockets)
+  base = lerp(base, sclera * 0.85 + amber * 0.08, eyeMask * 0.92 * open);
+  base += irisCol * iris * open * 1.1;
+  base += float3(0.02, 0.015, 0.01) * pupil * open * 1.4;
+  base += gold * eyeMask * open * 0.18;
+  // Spec highlight on iris
+  base += float3(1.0, 0.95, 0.85) * pow(saturate(1.0 - length((i.local.xy - (dL < dR ? eyeL : eyeR)) / float2(0.02, 0.02) - float2(0.25, -0.2))), 8.0) * open * iris;
   // Blink closes the slit
-  base *= lerp(1.0, 0.12, eyeMask * blink);
+  base = lerp(base, amber * 0.08, eyeMask * blink);
 
   // Smooth neck fade — no high-frequency scan on the cut (avoids speckles)
   float neck = smoothstep(-0.92, -0.52, i.local.y);

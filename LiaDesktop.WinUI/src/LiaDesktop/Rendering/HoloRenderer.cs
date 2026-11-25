@@ -73,6 +73,7 @@ public sealed class HoloRenderer : IDisposable
     bool _ready;
     float _forcedYaw = float.NaN;
     float _forcedJaw = float.NaN;
+    bool _freezeBlink;
 
     public float Jaw { set => _jaw = value; }
     public float Funnel { set => _funnel = value; }
@@ -80,11 +81,12 @@ public sealed class HoloRenderer : IDisposable
     public float PoseYaw { set => _poseYaw = value; }
     public void SetPointer(float x, float y) { _ptrX = x; _ptrY = y; }
 
-    /// <summary>CI / demo overrides (NaN = idle animation).</summary>
+    /// <summary>CI / demo overrides (NaN = idle animation). Freezes blink open for screenshots.</summary>
     public void ForcePose(float? yawDeg, float? jaw)
     {
         _forcedYaw = yawDeg.HasValue ? yawDeg.Value * MathF.PI / 180f : float.NaN;
         _forcedJaw = jaw ?? float.NaN;
+        _freezeBlink = yawDeg.HasValue || jaw.HasValue;
     }
 
     public ID3D11Device? Device => _device;
@@ -196,9 +198,17 @@ public sealed class HoloRenderer : IDisposable
         if (!_ready || _device == null || _ctx == null || _rtv == null || _dsv == null || _swap == null) return;
         _time += dt;
 
-        if (_time > _nextBlink) { _blinkT = 0.14f; _nextBlink = _time + 2.8f + Random.Shared.NextSingle() * 3.5f; }
-        _blinkT = Math.Max(0, _blinkT - dt);
-        var blinkAmt = _blinkT > 0.07f ? (0.14f - _blinkT) / 0.07f : _blinkT / 0.07f;
+        if (!_freezeBlink)
+        {
+            if (_time > _nextBlink) { _blinkT = 0.14f; _nextBlink = _time + 2.8f + Random.Shared.NextSingle() * 3.5f; }
+            _blinkT = Math.Max(0, _blinkT - dt);
+        }
+        else
+        {
+            _blinkT = 0;
+        }
+        var blinkAmt = _freezeBlink ? 0f
+            : (_blinkT > 0.07f ? (0.14f - _blinkT) / 0.07f : _blinkT / 0.07f);
 
         var jaw = float.IsNaN(_forcedJaw) ? _jaw : _forcedJaw;
         var funnel = float.IsNaN(_forcedJaw) ? _funnel : Math.Min(0.35f, _forcedJaw * 0.4f);
@@ -345,9 +355,9 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        Add(1.05f, 0.010f, 1.22f, 0.04f, 0.18f, 0.14f, 0.012f, 0.88f);  // ~70°
-        Add(1.22f, 0.009f, -1.30f, 0.10f, -0.22f, -0.10f, 0.018f, 0.72f); // ~-74°
-        Add(1.38f, 0.007f, 1.38f, -0.06f, 0.28f, 0.07f, 0.009f, 0.55f);  // ~79°
+        Add(1.05f, 0.006f, 1.22f, 0.04f, 0.18f, 0.14f, 0.012f, 0.82f);  // ~70°
+        Add(1.22f, 0.005f, -1.30f, 0.10f, -0.22f, -0.10f, 0.018f, 0.68f); // ~-74°
+        Add(1.38f, 0.0045f, 1.38f, -0.06f, 0.28f, 0.07f, 0.009f, 0.52f); // ~79°
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)

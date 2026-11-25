@@ -118,10 +118,15 @@ public sealed partial class MainWindow : Window
                 VoiceLine.Text = "VOICE  ГОВОРЮ";
                 Subtitle.Text = "Демонстрация визем · губы открыты";
             }
-            else if (yaw.HasValue)
+            else if (yaw is { } yAbs && Math.Abs(yAbs) >= 20f)
             {
                 StatusCaption.Text = "3/4";
                 Subtitle.Text = "Ракурс · idle orbit";
+            }
+            else if (yaw.HasValue)
+            {
+                StatusCaption.Text = "ФРОНТ";
+                Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";
             }
         }
     }
