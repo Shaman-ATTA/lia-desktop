@@ -42,7 +42,9 @@ public sealed class HoloPanel : SwapChainPanel
         try
         {
             _renderer.InitDevice();
-            var mesh = Path.Combine(AppContext.BaseDirectory, "Assets", "models", "lia_holo_mesh.bin");
+            var mesh = Path.Combine(AppContext.BaseDirectory, "Assets", "models", "lia_pbr_head.bin");
+            if (!File.Exists(mesh))
+                mesh = Path.Combine(AppContext.BaseDirectory, "Assets", "models", "lia_holo_mesh.bin");
             if (File.Exists(mesh)) _renderer.LoadMesh(mesh);
             _inited = true;
             CreateSwapChain();

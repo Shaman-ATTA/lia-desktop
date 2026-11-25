@@ -30,7 +30,7 @@
     <AssemblyName>LiaDesktop</AssemblyName>
     <Product>Lia Assistant</Product>
     <Company>ATTA CORP</Company>
-    <Version>0.4.1</Version>
+    <Version>0.5.0</Version>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <!-- Shrink satellite assemblies — keep en only -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -52,16 +52,25 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Assets\models\lia_holo_mesh.bin">
+    <Content Include="Assets\models\lia_pbr_head.bin">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="Assets\models\lia_holo_hair.bin">
+    <Content Include="Assets\models\lia_pbr_hair.bin">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="Assets\models\lia_holo_lashes.bin">
+    <Content Include="Assets\models\lia_pbr_meta.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="Assets\models\lia_holo_brows.bin">
+    <Content Include="Assets\models\lia_pbr_albedo.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\models\lia_pbr_normal.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\models\lia_pbr_orm.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\models\lia_pbr_opacity.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="Assets\app.ico">

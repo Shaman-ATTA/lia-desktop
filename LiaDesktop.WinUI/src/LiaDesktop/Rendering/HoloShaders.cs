@@ -1,403 +1,273 @@
 namespace LiaDesktop.Rendering;
 
+/// <summary>HLSL — photoreal PBR skin/eyes/hair with a subtle amber hologram veil.</summary>
 public static class HoloShaders
 {
-    public const string Vertex = """
+    public const string Vertex = @"
 cbuffer Frame : register(b0) {
-  float4x4 viewProj;
-  float4x4 model;
-  float3 camPos;
-  float time;
-  float glow;
-  float blink;
-  float2 _pad;
+  row_major float4x4 viewProj;
+  row_major float4x4 model;
+  float3 camPos; float time;
+  float glow; float blink; float2 pad;
 };
-struct VSIn {
-  float3 pos : POSITION;
-  float3 nrm : NORMAL;
-  float4 col : COLOR;
-};
+struct VSIn { float3 pos:POSITION; float3 nrm:NORMAL; float2 uv:TEXCOORD0; };
 struct VSOut {
-  float4 pos : SV_POSITION;
-  float3 world : TEXCOORD0;
-  float3 nrm : TEXCOORD1;
-  float4 col : COLOR;
-  float3 local : TEXCOORD2;
+  float4 pos:SV_POSITION;
+  float3 world:TEXCOORD0;
+  float3 nrm:TEXCOORD1;
+  float2 uv:TEXCOORD2;
+  float3 local:TEXCOORD3;
 };
 VSOut main(VSIn i) {
   VSOut o;
-  float4 wp = mul(float4(i.pos, 1), model);
+  float4 wp = mul(float4(i.pos,1), model);
   o.world = wp.xyz;
-  o.local = i.pos;
   o.nrm = normalize(mul(i.nrm, (float3x3)model));
-  o.col = i.col;
+  o.uv = i.uv;
+  o.local = i.pos;
   o.pos = mul(wp, viewProj);
   return o;
-}
-""";
+}";
 
-    /// <summary>Amber hologram female head — wrap lighting, fine scanlines, glitch shimmer.</summary>
-    public const string PixelHead = """
+    public const string PixelSkin = @"
 cbuffer Frame : register(b0) {
-  float4x4 viewProj;
-  float4x4 model;
-  float3 camPos;
-  float time;
-  float glow;
-  float blink;
-  float2 _pad;
+  row_major float4x4 viewProj;
+  row_major float4x4 model;
+  float3 camPos; float time;
+  float glow; float blink; float2 pad;
 };
+Texture2D albedoMap : register(t0);
+Texture2D normalMap : register(t1);
+Texture2D ormMap    : register(t2);
+SamplerState samp   : register(s0);
 struct PSIn {
-  float4 pos : SV_POSITION;
-  float3 world : TEXCOORD0;
-  float3 nrm : TEXCOORD1;
-  float4 col : COLOR;
-  float3 local : TEXCOORD2;
+  float4 pos:SV_POSITION;
+  float3 world:TEXCOORD0;
+  float3 nrm:TEXCOORD1;
+  float2 uv:TEXCOORD2;
+  float3 local:TEXCOORD3;
 };
+float3 unpackN(float3 t){ return normalize(t*2-1); }
 float4 main(PSIn i) : SV_TARGET {
-  float2 eyeL = float2(-0.157, 0.250);
-  float2 eyeR = float2( 0.157, 0.250);
-  // Almond fissure sized to smaller natural eyes
-  float dL = length((i.local.xy - eyeL) / float2(0.040, 0.020));
-  float dR = length((i.local.xy - eyeR) / float2(0.040, 0.020));
-  float dEye = min(dL, dR);
-  if (dEye < 0.98 && i.local.z > 0.28) discard;
-
-  float3 N = normalize(i.nrm);
+  float3 albedo = albedoMap.Sample(samp, i.uv).rgb;
+  // sRGB-ish decode
+  albedo = pow(max(albedo, 1e-4), 2.2);
+  float3 nm = unpackN(normalMap.Sample(samp, i.uv).xyz);
+  // Tangent-ish: blend map into geometric normal (cheap, no TBN)
+  float3 N = normalize(normalize(i.nrm) + nm * float3(1,1,0.55) * 0.55);
   float3 V = normalize(camPos - i.world);
-  float ndv = saturate(dot(N, V));
-
-  float3 L1 = normalize(float3(0.35, 0.55, 0.75));
-  float3 L2 = normalize(float3(-0.55, 0.20, 0.40));
-  float3 L3 = normalize(float3(0.0, -0.4, 0.5)); // soft fill / wrap
-  float wrap = saturate((dot(N, L1) + 0.35) / 1.35);
-  float diff = wrap * 0.55 + saturate(dot(N, L2)) * 0.28 + saturate(dot(N, L3) + 0.2) * 0.18;
-  float3 H = normalize(L1 + V);
-  float spec = pow(saturate(dot(N, H)), 64.0) * 0.32;
-
-  float fres = pow(1.0 - ndv, 2.0);
-  float rim = pow(1.0 - ndv, 4.2);
-
-  // Finer scanlines
-  float scanWave = 0.5 + 0.5 * sin((i.local.y * 380.0 + time * 1.35) * 3.14159265);
-  float scan = pow(scanWave, 12.0) * 0.09;
-  float scanFine = pow(0.5 + 0.5 * sin((i.local.y * 820.0 - time * 1.1) * 3.14159265), 18.0) * 0.035;
-  // Tasteful glitch shimmer
-  float glitch = step(0.992, frac(sin(dot(i.local.xy + time * 0.07, float2(12.9898,78.233))) * 43758.5453));
-  float flick = (0.992 + 0.008 * sin(time * 11.0 + i.local.y * 6.0)) * max(glow, 0.85);
-
-  float3 deep = float3(0.018, 0.010, 0.008);
-  float3 amber = float3(1.0, 0.62, 0.22);
-  float3 gold = float3(1.0, 0.80, 0.45);
-  float3 softRim = float3(1.0, 0.74, 0.40);
-  float3 blush = float3(1.0, 0.45, 0.32);
-
-  float shell = saturate(0.10 + fres * 0.68 + rim * 0.38 + diff * 0.24);
-  float3 base = lerp(deep, amber, shell) * flick;
-  base += amber * (scan + scanFine) * (0.5 + fres * 0.5);
-  base += softRim * rim * 0.62;
-  base += gold * spec;
-  base += amber * diff * 0.20;
-  base += amber * glitch * 0.55;
-
-  float feat = saturate(i.col.g * 0.55 - fres * 0.25);
-  // Lips — same amber family, slightly darker/saturated; cupid's bow, NO bloom
-  float lipY = i.local.y + 0.06;
-  float lipZone = smoothstep(0.035, -0.005, abs(lipY) - 0.01)
-                * smoothstep(0.14, 0.05, abs(i.local.x))
-                * smoothstep(0.32, 0.42, i.local.z);
-  // Upper/lower split + cupid's bow dip at center
-  float upperLip = saturate(1.0 - abs(lipY - 0.012) / 0.018) * lipZone;
-  float lowerLip = saturate(1.0 - abs(lipY + 0.016) / 0.022) * lipZone;
-  float cupid = saturate(1.0 - abs(i.local.x) / 0.025) * upperLip;
-  float lipLine = saturate(1.0 - abs(lipY) / 0.006) * lipZone; // seam between lips
-  float3 lipTint = float3(0.78, 0.38, 0.22); // darker saturated amber
-  base = lerp(base, base * float3(0.92, 0.72, 0.62) + lipTint * 0.22, saturate(upperLip + lowerLip) * 0.85);
-  base *= 1.0 - lipLine * 0.18; // visible lip seam
-  base *= 1.0 - cupid * 0.08;   // cupid's bow shadow
-  // Soft mouth cavity — dark amber, never emissive white/teeth bloom
-  float cavity = smoothstep(0.38, 0.48, i.local.z) * smoothstep(-0.02, -0.08, i.local.y)
-               * smoothstep(-0.14, -0.05, i.local.y) * smoothstep(0.08, 0.02, abs(i.local.x));
-  base = lerp(base, deep * 1.5, cavity * 0.45 * (1.0 - lipZone));
-
-  float browZone = smoothstep(0.30, 0.355, i.local.y) * smoothstep(0.42, 0.36, i.local.y)
-                 * smoothstep(0.34, 0.12, abs(i.local.x)) * smoothstep(0.22, 0.36, i.local.z);
-  float cheek = smoothstep(0.05, 0.14, abs(i.local.x)) * smoothstep(0.28, 0.18, abs(i.local.x))
-              * smoothstep(0.02, 0.10, i.local.y) * smoothstep(0.22, 0.08, i.local.y)
-              * smoothstep(0.20, 0.35, i.local.z);
-  base += amber * feat * 0.22;
-  base += amber * browZone * 0.12 * diff;
-  base += blush * cheek * 0.12;
-
-  float nose = saturate(1.0 - abs(i.local.x) * 12.0)
-             * smoothstep(-0.02, 0.10, i.local.y) * smoothstep(0.26, 0.10, i.local.y);
-  nose *= saturate(i.local.z * 2.2);
-  base += gold * nose * (0.10 + fres * 0.12);
-
-  float neck = smoothstep(-0.55, -0.25, i.local.y);
-  float neckScanCut = lerp(1.0, 0.18, 1.0 - smoothstep(-0.45, -0.22, i.local.y));
-  base = lerp(base * neck, base * neck * (1.0 - (scan + scanFine) * 0.8), 1.0 - neckScanCut);
-  base += amber * fres * 0.14 * glow;
-
-  return float4(saturate(base), 1.0);
-}
-""";
-
-    /// <summary>Hair volume — same amber hologram, lower opacity + scanlines.</summary>
-    public const string PixelHair = """
-cbuffer Frame : register(b0) {
-  float4x4 viewProj;
-  float4x4 model;
-  float3 camPos;
-  float time;
-  float glow;
-  float blink;
-  float2 _pad;
-};
-struct PSIn {
-  float4 pos : SV_POSITION;
-  float3 world : TEXCOORD0;
-  float3 nrm : TEXCOORD1;
-  float4 col : COLOR;
-  float3 local : TEXCOORD2;
-};
-float4 main(PSIn i) : SV_TARGET {
-  float3 N = normalize(i.nrm);
-  float3 V = normalize(camPos - i.world);
-  float ndv = saturate(dot(N, V));
-  float fres = pow(1.0 - ndv, 1.6);
-  float3 L = normalize(float3(0.3, 0.7, 0.5));
-  float diff = saturate(dot(N, L)) * 0.45 + 0.25;
-  float3 amber = float3(1.0, 0.62, 0.22);
-  float3 gold = float3(1.0, 0.78, 0.42);
-  float scan = pow(0.5 + 0.5 * sin(i.local.y * 520.0 + time * 1.4), 14.0) * 0.10;
-  // Finer strand detail
-  float strand = 0.78 + 0.12 * sin(i.local.x * 160.0 + i.local.z * 70.0)
-               + 0.10 * sin(i.local.x * 340.0 - i.local.y * 90.0);
-  float3 c = lerp(amber * 0.35, gold, fres * 0.65 + diff * 0.28) * strand * glow;
-  c += amber * scan * 0.85;
-  float a = saturate(0.20 + fres * 0.42 + scan * 0.15) * 0.70;
-  return float4(c, a);
-}
-""";
-
-    /// <summary>Sclera — soft pale amber blended with skin family (no grey/silver).</summary>
-    public const string PixelEye = """
-cbuffer Frame : register(b0) {
-  float4x4 viewProj;
-  float4x4 model;
-  float3 camPos;
-  float time;
-  float glow;
-  float blink;
-  float2 _pad;
-};
-struct PSIn {
-  float4 pos : SV_POSITION;
-  float3 world : TEXCOORD0;
-  float3 nrm : TEXCOORD1;
-  float4 col : COLOR;
-  float3 local : TEXCOORD2;
-};
-float4 main(PSIn i) : SV_TARGET {
-  float3 N = normalize(i.nrm);
-  float3 V = normalize(camPos - i.world);
-  float ndv = saturate(dot(N, V));
   float3 L = normalize(float3(0.35, 0.55, 0.75));
-  float wrap = saturate((dot(N, L) + 0.3) / 1.3);
-  float fres = pow(1.0 - ndv, 2.4);
+  float3 H = normalize(L+V);
+  float wrap = saturate((dot(N,L)+0.45)/1.45); // SSS-ish wrap
+  float ndl = saturate(dot(N,L));
+  float rough = ormMap.Sample(samp, i.uv).g;
+  float specPow = lerp(96.0, 12.0, rough);
+  float spec = pow(saturate(dot(N,H)), specPow) * (1.0 - rough) * 0.55;
+  // Warm key + cool fill
+  float3 key = float3(1.00, 0.92, 0.82);
+  float3 fill = float3(0.45, 0.55, 0.75);
+  float3 ambient = float3(0.18, 0.16, 0.15);
+  float3 diffuse = albedo * (ambient + key * wrap * 0.95 + fill * (1.0-ndl) * 0.22);
+  // Cheek/ear SSS boost
+  float sss = saturate(1.0 - abs(i.local.x)*4.0) * saturate(0.55 - i.local.y) * 0.15;
+  diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
+  float3 color = diffuse + key * spec;
 
-  float3 amber = float3(1.0, 0.62, 0.22);
-  // Soft pale amber — skin-adjacent, never grey metal
-  float3 sclera = float3(0.72, 0.52, 0.32);
-  float limb = saturate(1.0 - length(i.local.xy) * 1.05);
-  float3 c = sclera * (0.55 + wrap * 0.35) * (0.65 + limb * 0.4);
-  c += amber * fres * 0.18 * glow;
-  c = lerp(c, amber * 0.45, (1.0 - limb) * 0.25); // soft corner blend to skin tone
-  return float4(saturate(c), 1.0);
-}
-""";
+  // --- Subtle hologram veil (do NOT blow out) ---
+  float fres = pow(1.0 - saturate(dot(N,V)), 2.4);
+  float scan = 0.04 * sin((i.world.y + time*0.15)*140.0);
+  float glitch = 0.015 * step(0.985, frac(sin(dot(i.uv, float2(12.9,78.2))+time)*43758.5));
+  float3 amber = float3(1.0, 0.62, 0.28);
+  color = lerp(color, color * float3(1.05, 0.95, 0.82), 0.18); // slight warm
+  color += amber * fres * 0.22 * glow;
+  color += amber * (scan + glitch);
+  float alpha = lerp(0.92, 0.72, fres * 0.55); // edge transparency only
+  // Tone map
+  color = color / (1.0 + color * 0.65);
+  color = pow(saturate(color), 1.0/2.2);
+  return float4(color, alpha);
+}";
 
-    /// <summary>Iris — amber glow, dark pupil, one small catchlight (not metallic).</summary>
-    public const string PixelIris = """
+    public const string PixelHair = @"
 cbuffer Frame : register(b0) {
-  float4x4 viewProj;
-  float4x4 model;
-  float3 camPos;
-  float time;
-  float glow;
-  float blink;
-  float2 _pad;
+  row_major float4x4 viewProj;
+  row_major float4x4 model;
+  float3 camPos; float time;
+  float glow; float blink; float2 pad;
+};
+Texture2D opacityMap : register(t0);
+Texture2D albedoMap  : register(t1);
+SamplerState samp    : register(s0);
+struct PSIn {
+  float4 pos:SV_POSITION;
+  float3 world:TEXCOORD0;
+  float3 nrm:TEXCOORD1;
+  float2 uv:TEXCOORD2;
+  float3 local:TEXCOORD3;
+};
+float4 main(PSIn i) : SV_TARGET {
+  float4 op = opacityMap.Sample(samp, i.uv);
+  float a = max(op.a, max(op.r, max(op.g, op.b)));
+  clip(a - 0.12);
+  float3 alb = albedoMap.Sample(samp, i.uv).rgb;
+  // If opacity atlas is greyscale cards, tint with warm brown + albedo sample
+  float3 hairCol = lerp(float3(0.12, 0.07, 0.04), alb, 0.55);
+  float3 N = normalize(i.nrm);
+  float3 V = normalize(camPos - i.world);
+  float3 L = normalize(float3(0.3, 0.7, 0.6));
+  float ndl = saturate(dot(N,L)*0.5+0.5);
+  float fres = pow(1.0 - saturate(dot(N,V)), 2.0);
+  float strand = 0.08 * sin(i.uv.x * 220.0 + i.uv.y * 40.0);
+  float3 color = hairCol * (0.35 + ndl * 0.75) + float3(1,0.7,0.4) * fres * 0.15 + strand;
+  color = lerp(color, color * float3(1.1, 0.9, 0.7), 0.2);
+  color = pow(saturate(color / (1.0+color*0.5)), 1.0/2.2);
+  return float4(color, saturate(a * 0.92));
+}";
+
+    public const string PixelEye = @"
+cbuffer Frame : register(b0) {
+  row_major float4x4 viewProj;
+  row_major float4x4 model;
+  float3 camPos; float time;
+  float glow; float blink; float2 pad;
 };
 struct PSIn {
-  float4 pos : SV_POSITION;
-  float3 world : TEXCOORD0;
-  float3 nrm : TEXCOORD1;
-  float4 col : COLOR;
-  float3 local : TEXCOORD2;
+  float4 pos:SV_POSITION;
+  float3 world:TEXCOORD0;
+  float3 nrm:TEXCOORD1;
+  float2 uv:TEXCOORD2;
+  float3 local:TEXCOORD3;
+};
+float4 main(PSIn i) : SV_TARGET {
+  // Soft pale sclera (not grey metal)
+  float3 N = normalize(i.nrm);
+  float3 V = normalize(camPos - i.world);
+  float3 L = normalize(float3(0.3, 0.5, 0.8));
+  float wrap = saturate((dot(N,L)+0.4)/1.4);
+  float3 sclera = float3(0.86, 0.78, 0.70);
+  float3 color = sclera * (0.35 + wrap * 0.7);
+  float fres = pow(1.0 - saturate(dot(N,V)), 3.0);
+  color += float3(1,0.85,0.6) * fres * 0.12;
+  color = pow(saturate(color), 1.0/2.2);
+  return float4(color, 1);
+}";
+
+    public const string PixelIris = @"
+cbuffer Frame : register(b0) {
+  row_major float4x4 viewProj;
+  row_major float4x4 model;
+  float3 camPos; float time;
+  float glow; float blink; float2 pad;
+};
+struct PSIn {
+  float4 pos:SV_POSITION;
+  float3 world:TEXCOORD0;
+  float3 nrm:TEXCOORD1;
+  float2 uv:TEXCOORD2;
+  float3 local:TEXCOORD3;
+};
+float4 main(PSIn i) : SV_TARGET {
+  float2 p = i.uv * 2 - 1;
+  float r = length(p);
+  clip(0.98 - r);
+  // Hazel-brown photoreal iris
+  float angle = atan2(p.y, p.x);
+  float radial = 0.55 + 0.45 * sin(angle * 14.0 + r * 9.0);
+  float3 iris = lerp(float3(0.18, 0.10, 0.05), float3(0.45, 0.28, 0.12), radial);
+  iris = lerp(iris, float3(0.55, 0.40, 0.22), saturate(1.0 - r * 1.2) * 0.35);
+  // Pupil
+  float pupil = smoothstep(0.28, 0.18, r);
+  iris = lerp(iris, float3(0.02, 0.01, 0.01), pupil);
+  // Limbus
+  iris *= smoothstep(1.0, 0.72, r);
+  // Wet cornea catchlight (single small specular)
+  float3 V = normalize(camPos - i.world);
+  float3 N = normalize(i.nrm);
+  float3 L = normalize(float3(0.45, 0.65, 0.55));
+  float3 H = normalize(L+V);
+  float catchl = pow(saturate(dot(N,H)), 220.0);
+  // Offset catchlight blob in UV
+  float2 c = p - float2(-0.22, 0.28);
+  float blob = saturate(1.0 - length(c)/0.12);
+  float3 color = iris + float3(1,1,1) * (catchl * 0.55 + blob * blob * 0.85);
+  // Subtle amber holo
+  color = lerp(color, color * float3(1.08, 0.95, 0.75), 0.15);
+  color = pow(saturate(color), 1.0/2.2);
+  return float4(color, 1);
+}";
+
+    public const string PixelCornea = @"
+cbuffer Frame : register(b0) {
+  row_major float4x4 viewProj;
+  row_major float4x4 model;
+  float3 camPos; float time;
+  float glow; float blink; float2 pad;
+};
+struct PSIn {
+  float4 pos:SV_POSITION;
+  float3 world:TEXCOORD0;
+  float3 nrm:TEXCOORD1;
+  float2 uv:TEXCOORD2;
+  float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
-  float3 L = normalize(float3(0.4, 0.55, 0.7));
-  float3 H = normalize(L + V);
-  float spec = pow(saturate(dot(N, H)), 96.0);
+  float3 L = normalize(float3(0.4, 0.7, 0.5));
+  float3 H = normalize(L+V);
+  float fres = pow(1.0 - saturate(dot(N,V)), 3.5);
+  float spec = pow(saturate(dot(N,H)), 320.0);
+  float3 color = float3(0.9, 0.95, 1.0) * (fres * 0.35 + spec * 0.9);
+  return float4(color, saturate(fres * 0.55 + spec));
+}";
 
-  float2 xy = i.local.xy;
-  float r = length(xy);
-  float irisR = 0.98;
-  float pupilR = 0.30;
-  float irisMask = 1.0 - smoothstep(irisR * 0.88, irisR, r);
-  float pupilMask = 1.0 - smoothstep(pupilR * 0.55, pupilR, r);
-  float limbus = smoothstep(irisR * 0.72, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.05, r));
-
-  float ang = atan2(xy.y, xy.x);
-  float spoke = 0.80 + 0.20 * sin(ang * 10.0 + r * 12.0);
-  float3 amber = float3(1.0, 0.62, 0.22);
-  float3 irisOuter = float3(0.55, 0.28, 0.08);
-  float3 irisInner = float3(0.95, 0.55, 0.16);
-  float3 pupil = float3(0.02, 0.012, 0.008);
-  float3 iris = lerp(irisInner, irisOuter, saturate(r / irisR)) * spoke;
-
-  float3 col = iris * irisMask;
-  col = lerp(col, pupil, pupilMask);
-  col += amber * limbus * 0.45;
-  col += amber * irisMask * 0.22 * glow; // soft iris glow
-  // One small catchlight only — not chrome ball
-  float2 catchUv = xy - float2(0.18, 0.16);
-  float catchlight = (1.0 - smoothstep(0.0, 0.08, length(catchUv))) * irisMask;
-  col += float3(1.0, 0.95, 0.85) * catchlight * 0.9;
-  col += float3(1.0, 0.96, 0.88) * spec * 0.25 * irisMask;
-  return float4(saturate(col), 1.0);
-}
-""";
-
-    /// <summary>Eyelid / lash line — dark amber rim.</summary>
-    public const string PixelLid = """
+    public const string PixelLid = @"
 cbuffer Frame : register(b0) {
-  float4x4 viewProj;
-  float4x4 model;
-  float3 camPos;
-  float time;
-  float glow;
-  float blink;
-  float2 _pad;
+  row_major float4x4 viewProj;
+  row_major float4x4 model;
+  float3 camPos; float time;
+  float glow; float blink; float2 pad;
 };
 struct PSIn {
-  float4 pos : SV_POSITION;
-  float3 world : TEXCOORD0;
-  float3 nrm : TEXCOORD1;
-  float4 col : COLOR;
-  float3 local : TEXCOORD2;
+  float4 pos:SV_POSITION;
+  float3 world:TEXCOORD0;
+  float3 nrm:TEXCOORD1;
+  float2 uv:TEXCOORD2;
+  float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
+  float3 skin = float3(0.72, 0.48, 0.36);
   float3 N = normalize(i.nrm);
-  float3 V = normalize(camPos - i.world);
-  float ndv = saturate(dot(N, V));
-  float3 L = normalize(float3(0.35, 0.55, 0.75));
-  float diff = saturate(dot(N, L)) * 0.45;
-  float fres = pow(1.0 - ndv, 2.2);
-  float3 amber = float3(1.0, 0.62, 0.22);
-  float3 gold = float3(1.0, 0.78, 0.42);
-  float3 deep = float3(0.05, 0.025, 0.012);
-  float3 c = lerp(deep, amber, 0.28 + fres * 0.55 + diff * 0.25) * glow;
-  c += gold * fres * 0.2;
-  return float4(saturate(c), 1.0);
-}
-""";
+  float3 L = normalize(float3(0.3,0.5,0.7));
+  float ndl = saturate(dot(N,L)*0.5+0.5);
+  float3 color = skin * (0.4 + ndl * 0.6);
+  color = pow(color, 1.0/2.2);
+  return float4(color, 0.95);
+}";
 
-    /// <summary>Lash line — thin dark-amber rim over lids.</summary>
-    public const string PixelLash = """
+    public const string PixelRing = @"
 cbuffer Frame : register(b0) {
-  float4x4 viewProj;
-  float4x4 model;
-  float3 camPos;
-  float time;
-  float glow;
-  float blink;
-  float2 _pad;
-};
-struct PSIn {
-  float4 pos : SV_POSITION;
-  float3 world : TEXCOORD0;
-  float3 nrm : TEXCOORD1;
-  float4 col : COLOR;
-  float3 local : TEXCOORD2;
-};
-float4 main(PSIn i) : SV_TARGET {
-  float3 amber = float3(1.0, 0.55, 0.18);
-  float3 deep = float3(0.06, 0.03, 0.012);
-  float3 N = normalize(i.nrm);
-  float3 V = normalize(camPos - i.world);
-  float fres = pow(1.0 - saturate(dot(N, V)), 1.8);
-  float3 c = lerp(deep, amber, 0.28 + fres * 0.4) * glow;
-  return float4(saturate(c), 1.0);
-}
-""";
-
-    /// <summary>Brows — thinner feminine arches, darker amber holo, lower opacity.</summary>
-    public const string PixelBrow = """
-cbuffer Frame : register(b0) {
-  float4x4 viewProj;
-  float4x4 model;
-  float3 camPos;
-  float time;
-  float glow;
-  float blink;
-  float2 _pad;
-};
-struct PSIn {
-  float4 pos : SV_POSITION;
-  float3 world : TEXCOORD0;
-  float3 nrm : TEXCOORD1;
-  float4 col : COLOR;
-  float3 local : TEXCOORD2;
-};
-float4 main(PSIn i) : SV_TARGET {
-  float3 N = normalize(i.nrm);
-  float3 V = normalize(camPos - i.world);
-  float fres = pow(1.0 - saturate(dot(N, V)), 2.0);
-  float3 amber = float3(1.0, 0.55, 0.18);
-  float3 deep = float3(0.12, 0.06, 0.025);
-  float scan = pow(0.5 + 0.5 * sin(i.local.x * 200.0 + time), 10.0) * 0.06;
-  float3 c = lerp(deep, amber, 0.4 + fres * 0.35) * glow;
-  c += amber * scan;
-  float a = saturate(0.35 + fres * 0.25) * 0.55;
-  return float4(c, a);
-}
-""";
-
-    public const string PixelRing = """
-cbuffer Frame : register(b0) {
-  float4x4 viewProj;
-  float4x4 model;
-  float3 camPos;
-  float time;
-  float glow;
-  float blink;
-  float2 _pad;
+  row_major float4x4 viewProj;
+  row_major float4x4 model;
+  float3 camPos; float time;
+  float glow; float blink; float2 pad;
 };
 cbuffer Ring : register(b1) {
-  float3 ringColor;
-  float ringOpacity;
+  float3 color; float opacity;
 };
 struct PSIn {
-  float4 pos : SV_POSITION;
-  float3 world : TEXCOORD0;
-  float3 nrm : TEXCOORD1;
-  float4 col : COLOR;
-  float3 local : TEXCOORD2;
+  float4 pos:SV_POSITION;
+  float3 world:TEXCOORD0;
+  float3 nrm:TEXCOORD1;
+  float2 uv:TEXCOORD2;
+  float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
-  float ndv = saturate(dot(N, V));
-  float fres = pow(1.0 - ndv, 1.8);
-  float backDim = lerp(1.0, 0.18, saturate((-i.world.z - 0.02) * 4.0));
-  float3 c = ringColor * (0.35 + fres * 0.95) * glow * backDim;
-  c += ringColor * pow(fres, 2.5) * 0.35 * backDim;
-  float a = ringOpacity * (0.35 + fres * 0.55) * backDim;
-  return float4(c, a);
-}
-""";
+  float fres = pow(1.0 - saturate(dot(N,V)), 2.0);
+  float pulse = 0.85 + 0.15 * sin(time * 2.2 + i.local.x * 6.0);
+  float3 c = color * (0.55 + fres * 0.9) * pulse;
+  return float4(c, opacity * (0.35 + fres * 0.55));
+}";
 }

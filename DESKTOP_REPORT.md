@@ -1,21 +1,19 @@
 # Lia Desktop — ship report
 
-## v0.4.1 — face polish + installer
+## v0.5.0 — photoreal PBR head
 
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.4.1
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.0
 
-| Asset | Size | Notes |
-|-------|------|-------|
-| `LiaDesktop-0.4.1-win-x64.zip` | **92.7 MB** (−63% vs ~250) | Portable; Playwright win32-only + Edge channel |
-| `LiaDesktop-0.4.1-setup.exe` | **65.1 MB** | Per-user Inno, no admin |
-| `desktop_winui_front.png` | Lips amber, eyes almond |
-| `desktop_winui_threequarter.png` | 3/4 |
-| `desktop_winui_profile.png` | Profile |
-| `desktop_winui_speaking.png` | Viseme |
-| `desktop_winui_eyes.png` | Close-up (outside face) |
-| `desktop_winui_rings.png` | Rings |
+| Asset | Notes |
+|-------|-------|
+| `LiaDesktop-0.5.0-win-x64.zip` | Portable |
+| `LiaDesktop-0.5.0-setup.exe` | Per-user Inno |
+| Screenshots | front / threequarter / profile / eyes / speaking / rings |
 | `tasklist_after.txt` | Clean exit + installer smoke |
 
-## v0.4.0 — female hologram head
+**Source:** Microsoft Rocketbox `Female_Adult_07` — **MIT**  
+https://github.com/microsoft/Microsoft-Rocketbox
 
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.4.0
+## v0.4.1
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.4.1 — zip 92.7 MB / setup 65.1 MB

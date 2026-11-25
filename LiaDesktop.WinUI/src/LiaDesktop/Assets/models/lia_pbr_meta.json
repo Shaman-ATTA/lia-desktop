@@ -1,0 +1,30 @@
+{
+  "source": "Microsoft Rocketbox Female_Adult_07",
+  "license": "MIT",
+  "url": "https://github.com/microsoft/Microsoft-Rocketbox",
+  "eyeL": [
+    -0.06327261464721566,
+    0.3879592071432586,
+    0.047767730566476464
+  ],
+  "eyeR": [
+    0.06195907227017663,
+    0.38936340488678167,
+    0.05191227124064914
+  ],
+  "shapes": [
+    "jawOpen",
+    "mouthFunnel",
+    "mouthPucker",
+    "mouthSmileLeft",
+    "mouthSmileRight",
+    "eyeBlinkLeft",
+    "eyeBlinkRight",
+    "browInnerUp",
+    "viseme_aa",
+    "viseme_E",
+    "viseme_O"
+  ],
+  "verts_head": 1826,
+  "verts_hair": 596
+}

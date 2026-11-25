@@ -43,8 +43,9 @@ public sealed class HoloRenderer : IDisposable
 {
     static readonly Vector3 Amber = new(1f, 0.604f, 0.235f);
     const float EyeRadius = 0.022f;
-    const float HeadScale = 2.75f;
-    const float HeadTransY = -0.36f;
+    // Face Y≈0.20..0.55 local; eyes ≈0.39 — place eyes near world Y=0.05
+    const float HeadScale = 2.85f;
+    const float HeadTransY = -1.06f;
     const int MsaaCount = 4;
 
     ID3D11Device? _device;
@@ -276,52 +277,52 @@ public sealed class HoloRenderer : IDisposable
         return CreateTextureFromBitmap(bmp);
     }
 
-    ID3D11ShaderResourceView CreateTextureFromBitmap(Bitmap bmp)
+    unsafe ID3D11ShaderResourceView CreateTextureFromBitmap(Bitmap bmp)
     {
         var w = bmp.Width;
         var h = bmp.Height;
         var rect = new Rectangle(0, 0, w, h);
-        var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var locked = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
         try
         {
             var bytes = new byte[w * h * 4];
-            unsafe
+            var src = (byte*)locked.Scan0;
+            var stride = locked.Stride;
+            for (var y = 0; y < h; y++)
             {
-                var src = (byte*)data.Scan0;
-                var stride = data.Stride;
-                for (var y = 0; y < h; y++)
+                var row = src + y * stride;
+                for (var x = 0; x < w; x++)
                 {
-                    var row = src + y * stride;
-                    for (var x = 0; x < w; x++)
-                    {
-                        var i = (y * w + x) * 4;
-                        var b = row[x * 4];
-                        var g = row[x * 4 + 1];
-                        var r = row[x * 4 + 2];
-                        var a = row[x * 4 + 3];
-                        bytes[i] = r;
-                        bytes[i + 1] = g;
-                        bytes[i + 2] = b;
-                        bytes[i + 3] = a;
-                    }
+                    var i = (y * w + x) * 4;
+                    // BGRA → RGBA
+                    bytes[i] = row[x * 4 + 2];
+                    bytes[i + 1] = row[x * 4 + 1];
+                    bytes[i + 2] = row[x * 4];
+                    bytes[i + 3] = row[x * 4 + 3];
                 }
             }
-            var tex = _device!.CreateTexture2D(
-                bytes.AsSpan(),
-                Format.R8G8B8A8_UNorm,
-                (uint)w,
-                (uint)h,
-                1,
-                1,
-                BindFlags.ShaderResource,
-                ResourceOptionFlags.None,
-                ResourceUsage.Immutable,
-                CpuAccessFlags.None);
-            return _device.CreateShaderResourceView(tex);
+
+            var desc = new Texture2DDescription
+            {
+                Width = (uint)w,
+                Height = (uint)h,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = Format.R8G8B8A8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Immutable,
+                BindFlags = BindFlags.ShaderResource,
+            };
+            fixed (byte* p = bytes)
+            {
+                var init = new SubresourceData(p, (uint)(w * 4), (uint)(bytes.Length));
+                var tex = _device!.CreateTexture2D(desc, &init);
+                return _device.CreateShaderResourceView(tex);
+            }
         }
         finally
         {
-            bmp.UnlockBits(data);
+            bmp.UnlockBits(locked);
         }
     }
 
@@ -416,7 +417,8 @@ public sealed class HoloRenderer : IDisposable
 
         if (_mesh != null && _morphScratch != null)
         {
-            _mesh.Morph(Math.Min(0.72f, jaw * 0.92f), funnel * 0.55f, wide * 0.55f, smile, brow, blinkAmt, _morphScratch);
+            var lid = BlinkLidAmount();
+            _mesh.Morph(Math.Min(0.72f, jaw * 0.92f), funnel * 0.55f, wide * 0.55f, smile, brow, lid, _morphScratch);
             UploadHead(_morphScratch);
         }
 
@@ -428,7 +430,8 @@ public sealed class HoloRenderer : IDisposable
         _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _ctx.VSSetShader(_vs);
         _ctx.RSSetState(_rs);
-        _ctx.PSSetSampler(0, _samplerLinearWrap);
+        if (_samplerLinearWrap != null)
+            _ctx.PSSetSamplers(0, new[] { _samplerLinearWrap });
 
         var aspect = _width / (float)_height;
         Vector3 cam, lookAt;

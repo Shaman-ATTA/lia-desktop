@@ -1,0 +1,114 @@
+using System.Numerics;
+using System.Text;
+using System.Text.Json;
+
+namespace LiaDesktop.Rendering;
+
+/// <summary>LIAH binary — PBR head with named morph deltas + UVs.</summary>
+public sealed class PbrMesh
+{
+    public float[] BasePositions { get; }
+    public float[] Normals { get; }
+    public float[] UVs { get; }
+    public int[] Indices { get; }
+    public int VertexCount { get; }
+    public Dictionary<string, float[]> Shapes { get; }
+    public Vector3 EyeL { get; }
+    public Vector3 EyeR { get; }
+
+    public PbrMesh(
+        float[] pos, float[] nrm, float[] uvs, int[] idx,
+        Dictionary<string, float[]> shapes, Vector3 eyeL, Vector3 eyeR)
+    {
+        BasePositions = pos;
+        Normals = nrm;
+        UVs = uvs;
+        Indices = idx;
+        VertexCount = pos.Length / 3;
+        Shapes = shapes;
+        EyeL = eyeL;
+        EyeR = eyeR;
+    }
+
+    public float[]? Shape(string name) =>
+        Shapes.TryGetValue(name, out var d) ? d : null;
+
+    public void Morph(float jaw, float funnel, float wide, float smile, float brow, float blink, float[] dest)
+    {
+        var b = BasePositions;
+        Array.Copy(b, dest, b.Length);
+        Add(dest, Shape("jawOpen"), jaw);
+        Add(dest, Shape("mouthFunnel"), funnel);
+        // wide ≈ pucker inverse-ish — use smile stretch via mouthSmile + slight pucker
+        Add(dest, Shape("mouthPucker"), Math.Clamp(wide * 0.35f, 0, 1));
+        Add(dest, Shape("viseme_aa"), Math.Clamp(jaw * 0.45f, 0, 1));
+        Add(dest, Shape("mouthSmileLeft"), smile);
+        Add(dest, Shape("mouthSmileRight"), smile);
+        Add(dest, Shape("browInnerUp"), brow);
+        Add(dest, Shape("eyeBlinkLeft"), blink);
+        Add(dest, Shape("eyeBlinkRight"), blink);
+    }
+
+    static void Add(float[] dest, float[]? delta, float w)
+    {
+        if (delta == null || w <= 1e-5f) return;
+        w = Math.Clamp(w, 0, 1.1f);
+        for (var i = 0; i < dest.Length; i++)
+            dest[i] += delta[i] * w;
+    }
+
+    public static PbrMesh Load(string path, string? metaPath = null)
+    {
+        var buf = File.ReadAllBytes(path);
+        if (buf.Length < 20 || Encoding.ASCII.GetString(buf, 0, 4) != "LIAH")
+            throw new InvalidDataException("not a LIAH mesh: " + path);
+        var o = 4;
+        var ver = BitConverter.ToInt32(buf, o); o += 4;
+        if (ver != 1) throw new InvalidDataException("unsupported LIAH ver " + ver);
+        var nV = BitConverter.ToInt32(buf, o); o += 4;
+        var nI = BitConverter.ToInt32(buf, o); o += 4;
+        var nS = BitConverter.ToInt32(buf, o); o += 4;
+        var shapes = new Dictionary<string, float[]>(StringComparer.Ordinal);
+        for (var s = 0; s < nS; s++)
+        {
+            var ln = buf[o++];
+            var name = Encoding.UTF8.GetString(buf, o, ln); o += ln;
+            var deltas = new float[nV * 3];
+            Buffer.BlockCopy(buf, o, deltas, 0, deltas.Length * 4);
+            o += deltas.Length * 4;
+            shapes[name] = deltas;
+        }
+        var pos = new float[nV * 3];
+        Buffer.BlockCopy(buf, o, pos, 0, pos.Length * 4); o += pos.Length * 4;
+        var nrm = new float[nV * 3];
+        Buffer.BlockCopy(buf, o, nrm, 0, nrm.Length * 4); o += nrm.Length * 4;
+        var uvs = new float[nV * 2];
+        Buffer.BlockCopy(buf, o, uvs, 0, uvs.Length * 4); o += uvs.Length * 4;
+        var idx = new int[nI];
+        Buffer.BlockCopy(buf, o, idx, 0, idx.Length * 4);
+
+        var eyeL = new Vector3(-0.07f, 0.35f, 0.06f);
+        var eyeR = new Vector3(0.07f, 0.35f, 0.06f);
+        metaPath ??= Path.Combine(Path.GetDirectoryName(path) ?? "", "lia_pbr_meta.json");
+        if (File.Exists(metaPath))
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(metaPath));
+            var root = doc.RootElement;
+            eyeL = ReadVec(root, "eyeL", eyeL);
+            eyeR = ReadVec(root, "eyeR", eyeR);
+        }
+        return new PbrMesh(pos, nrm, uvs, idx, shapes, eyeL, eyeR);
+    }
+
+    public static PbrMesh LoadPart(string path)
+    {
+        var m = Load(path);
+        return m;
+    }
+
+    static Vector3 ReadVec(JsonElement root, string key, Vector3 fb)
+    {
+        if (!root.TryGetProperty(key, out var el) || el.ValueKind != JsonValueKind.Array) return fb;
+        return new Vector3(el[0].GetSingle(), el[1].GetSingle(), el[2].GetSingle());
+    }
+}

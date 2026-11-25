@@ -1,22 +1,25 @@
 # Third-party assets
 
-## Hologram head / hair / lashes — stock-02 (argus-mask)
+## Photoreal hologram head — Microsoft Rocketbox Female_Adult_07
 
 | Field | Value |
-|-------|--------|
-| Asset | `stock-02-r3.glb` (female ~25) |
-| Source | [smk762/argus-mask](https://github.com/smk762/argus-mask) stock heads release |
-| Download | https://github.com/smk762/argus-mask/releases/download/stock-heads/stock-02-r3.glb |
-| SHA-256 | `aafedb7eb871dc697fa484de6c3c700652640f2f24dfa8031b9290aef2a08729` |
-| License | **CC0-1.0** (public domain dedication) |
-| Provenance | Built with Blender + MPFB 2 from MakeHuman system assets (`makehuman_system_assets`, `faceunits01`): base mesh + ARKit face units by Mika Suominen (CC0); hair `short02`, eyes high-poly, eyebrow002, eyelashes02 (CC0). Generated character — not a real person. |
+|-------|-------|
+| Asset | `Female_Adult_07` (head mesh, 2K PBR maps, ARKit + Oculus viseme blendshapes) |
+| Source | [microsoft/Microsoft-Rocketbox](https://github.com/microsoft/Microsoft-Rocketbox) |
+| License | **MIT** (Copyright (c) Microsoft Corporation) |
+| Use | Redistributable; personal & commercial OK with MIT notice |
+| Pipeline | `tools/build_lia_pbr_head.py` (Blender bake → `lia_pbr_*.bin/png`) |
 
-Processed into:
+Runtime files: `lia_pbr_head.bin`, `lia_pbr_hair.bin`, `lia_pbr_albedo.png`, `lia_pbr_normal.png`, `lia_pbr_orm.png`, `lia_pbr_opacity.png`, `lia_pbr_meta.json`.
 
-- `LiaDesktop.WinUI/src/LiaDesktop/Assets/models/lia_holo_mesh.bin` — head + jaw/funnel/wide/smile/brow morphs
-- `lia_holo_hair.bin` — short bob hair volume
-- `lia_holo_lashes.bin` — eyelashes + eyebrows
+Rendering: PBR skin (albedo/normal/ORM + wrap/SSS approx) with a **subtle** amber hologram veil (fresnel rim, thin scanlines). Separate realistic iris + wet cornea shells. Hair/lash cards from Rocketbox opacity mesh.
 
-Rebuild: `python3 tools/build_lia_holo_mesh.py` (requires `pygltflib`, `numpy`; GLB at `/tmp/stock-02.glb`).
+## Previously used (removed from runtime in v0.5.0)
 
-No Marvel / F.R.I.D.A.Y. / proprietary character assets are used.
+- MakeHuman / MPFB `stock-02` (argus-mask) — CC0-1.0 — kept only as historical reference in git history; **not** shipped.
+
+## Other
+
+- **Vortice** Direct3D 11 bindings — MIT
+- **Microsoft.WindowsAppSDK** / WinUI 3 — Microsoft license
+- **Microsoft.Playwright** — Apache-2.0 (uses installed Edge via `channel=msedge`; win32 Playwright node only)

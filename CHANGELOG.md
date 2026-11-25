@@ -1,24 +1,22 @@
 # Changelog
 
+## v0.5.0 — Photoreal PBR hologram head
+
+- Replaced MakeHuman/MPFB head with **Microsoft Rocketbox Female_Adult_07** (MIT)
+- PBR skin (albedo / normal / ORM), wrap+SSS approx, realistic iris + wet cornea
+- Hair/lash opacity cards; ARKit jaw/smile/blink + visemes for lip sync
+- Subtle hologram veil only (amber fresnel, thin scanlines) — face stays photoreal
+- Documented in `THIRD_PARTY.md`
+
 ## v0.4.1 — Face polish + installer + smaller zip
 
-- Lips: same amber as skin (slightly darker), cupid's bow / lip line — no white bloom
-- Eyes: smaller, pale-amber sclera, amber iris + dark pupil + catchlight, almond lids; close-up camera fixed
-- Brows: thinner feminine arches, holo darker-amber alpha (not cartoon brown stripes)
-- Livelier head: look-at mouse / listening, idle wander, gaze leads head
-- Zip shrink: strip locales/pdbs; Playwright uses installed **Edge** (`channel=msedge`)
-- Per-user installer `LiaDesktop-0.4.1-setup.exe` (Inno); Settings «Запускать вместе с Windows»
-- CI: tasklist clean exit + silent install/uninstall smoke
+- Amber lips, almond eyes, thin holo brows, close-up camera, livelier head
+- Zip ~93 MB (Playwright win32-only); Inno setup ~65 MB; autostart/tray
 
-## v0.4.0 — Female hologram head
+## v0.4.0 — Female hologram head (MakeHuman)
 
-- CC0 MakeHuman/MPFB female (argus-mask stock-02) + short bob hair + lashes
-- 4× MSAA, native DPI, wrap lighting, fine scanlines, glitch shimmer
-
-## v0.3.3 — Real eyeball spheres
-
-- Depth-tested eyeball spheres, hologram sclera, always-on almond lids
+- CC0 MakeHuman/MPFB female + bob hair — superseded by v0.5.0
 
 ## Earlier
 
-- v0.3.2 socket/rings · v0.3.1 hologram polish · v0.3.0 WinUI · v0.2.x Electron
+- v0.3.3 eyeball spheres · v0.3.2 rings · v0.3.0 WinUI
