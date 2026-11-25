@@ -1,5 +1,11 @@
 # Lia Desktop — ship report
 
+## v0.5.2 — framing fix
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.2
+
+Head ~70–75% viewport · rings scaled to head · holo veil · eyes CU · lash/neck kept.
+
 ## v0.5.1 — polish
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.1

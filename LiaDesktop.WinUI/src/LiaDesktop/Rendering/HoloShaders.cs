@@ -69,18 +69,19 @@ float4 main(PSIn i) : SV_TARGET {
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
   float3 color = diffuse + key * spec;
 
-  // Amber hologram veil (~20% tint, thin scanlines, fresnel rim, edge soft-out)
+  // Amber hologram veil: uniform faint scanlines + soft fresnel rim (face stays readable)
   float ndv = saturate(dot(N,V));
-  float fres = pow(1.0 - ndv, 2.4);
-  float scan = 0.038 * sin((i.world.y + time*0.14)*130.0);
+  float fres = pow(1.0 - ndv, 2.5);
+  // Low-amplitude, mid-frequency — same strength on skin and hair albedo
+  float scan = 0.014 * sin((i.world.y + time * 0.12) * 95.0);
   float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.12, 0.88, 0.65), 0.20);
-  color += amber * fres * 0.30 * glow;
-  color += amber * scan;
-  float edgeKeep = lerp(0.50, 1.0, saturate(ndv * 1.35 + 0.02));
+  color = lerp(color, color * float3(1.10, 0.92, 0.72), 0.17);
+  color += amber * fres * 0.28 * glow;          // soft silhouette rim
+  color *= (1.0 + scan);                         // multiplicative scan (no hair striping)
+  float edgeKeep = lerp(0.72, 1.0, saturate(ndv * 1.2 + 0.1));
   color *= edgeKeep;
-  // Neck stump → darkness (fade starts mid-neck so cut is invisible)
-  float neck = smoothstep(0.28, 0.42, i.local.y);
+  // Neck stump → darkness
+  float neck = smoothstep(0.26, 0.40, i.local.y);
   color *= neck;
 
   color = color / (1.0 + color * 0.65);
@@ -270,13 +271,9 @@ float4 main(PSIn i) : SV_TARGET {
   float3 V = normalize(camPos - i.world);
   float fres = pow(1.0 - saturate(dot(N,V)), 2.6);
   float pulse = 0.92 + 0.08 * sin(time * 1.4 + i.local.x * 3.0);
-  // Only draw the back/side hemisphere — no chords across the face
-  float3 headC = float3(0, 0.04, 0);
-  float towardCam = dot(normalize(i.world - headC), normalize(camPos - headC));
-  clip(0.05 - towardCam);
-  float3 c = color * (0.35 + fres * 0.40) * pulse;
-  float a = saturate(opacity * (0.40 + fres * 0.30));
-  clip(a - 0.02);
+  // Full orbit visible; depth test occludes the back half behind the head
+  float3 c = color * (0.42 + fres * 0.45) * pulse;
+  float a = saturate(opacity * (0.45 + fres * 0.35));
   return float4(c, a);
 }";
 

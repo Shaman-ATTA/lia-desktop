@@ -51,8 +51,9 @@ public sealed class HoloRenderer : IDisposable
     static readonly Vector3 Amber = new(1f, 0.55f, 0.22f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
-    const float HeadScale = 1.95f;
-    const float HeadTransY = -0.72f;
+    // Head local Y≈0.20..0.55 → world span ≈0.95; cam/fov tuned so head+neck ≈72% viewport height
+    const float HeadScale = 2.70f;
+    const float HeadTransY = -1.00f;
     const int MsaaCount = 4;
     int _msaaSamples = 1;
 
@@ -524,28 +525,30 @@ public sealed class HoloRenderer : IDisposable
         Vector3 cam, lookAt;
         float fovDeg;
         float nearPlane = 0.08f;
+        // Eye local ≈ (±0.032, 0.43, 0.05) → world after HeadScale/Trans
+        var eyeY = 0.43f * HeadScale + HeadTransY; // ≈ 0.16
         if (_eyesCloseup)
         {
-            // Eye local ~0.43 → world y ≈ 0.43*1.95-0.72 ≈ 0.12
-            lookAt = new Vector3(0f, 0.12f, 0.05f);
-            cam = new Vector3(0f, 0.12f, 1.25f);
-            fovDeg = 26f;
+            // Both eyes fill ~60% of viewport width
+            lookAt = new Vector3(0f, eyeY, 0.06f);
+            cam = new Vector3(0f, eyeY, 1.05f);
+            fovDeg = 16f;
             nearPlane = 0.08f;
         }
         else if (_ringsShowcase)
         {
-            var orbit = MathF.Sin(_time * 0.14f) * 0.08f;
-            cam = new Vector3(orbit, 0.0f, 3.80f);
-            lookAt = new Vector3(0, 0.0f, 0.0f);
-            fovDeg = 30f;
+            var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
+            cam = new Vector3(orbit, 0.02f, 2.75f);
+            lookAt = new Vector3(0, 0.02f, 0.02f);
+            fovDeg = 26f;
         }
         else
         {
-            // Full head + neck margin
+            // Head+neck ≈70-75% of viewport height (not the v0.5.1 tiny-head bug)
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.0f, 3.70f);
-            lookAt = new Vector3(0, 0.0f, 0.0f);
-            fovDeg = 30f;
+            cam = new Vector3(orbit, 0.02f, 2.70f);
+            lookAt = new Vector3(0, 0.02f, 0.02f);
+            fovDeg = 26f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
         var proj = Matrix4x4.CreatePerspectiveFieldOfView(fovDeg * MathF.PI / 180f, aspect, nearPlane, 40f);
@@ -1059,10 +1062,11 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        // Nearly-horizontal thin amber halos — avoid vertical chords across the face
-        Add(1.20f, 0.00038f, 7f, 0.01f, 0.02f, 0.08f, 0.007f, 0.30f);
-        Add(1.38f, 0.00032f, -11f, 0.04f, -0.03f, -0.06f, 0.010f, 0.24f);
-        Add(1.55f, 0.00028f, 16f, -0.02f, 0.05f, 0.04f, 0.006f, 0.18f);
+        // Ring radius ≈ 0.65–0.8 of viewport half-height at look plane (~0.45–0.55 world)
+        // Tube thick enough to read as a continuous line, not dotted sparkle
+        Add(0.46f, 0.0014f, 14f, 0.02f, 0.04f, 0.10f, 0.009f, 0.42f);
+        Add(0.52f, 0.0012f, -28f, 0.05f, -0.06f, -0.07f, 0.012f, 0.34f);
+        Add(0.58f, 0.0010f, 48f, -0.03f, 0.08f, 0.05f, 0.007f, 0.28f);
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
