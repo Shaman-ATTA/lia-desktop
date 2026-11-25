@@ -220,12 +220,12 @@ public sealed class HoloRenderer : IDisposable
         _ctx.RSSetState(_rs);
 
         var aspect = _width / (float)_height;
-        // Pull back + slight elevation so head+neck fit with margin
-        var orbit = MathF.Sin(_time * 0.09f) * 0.06f;
-        var cam = new Vector3(_ptrX * 0.1f + orbit, 0.02f + _ptrY * 0.04f, 3.35f);
-        var lookAt = new Vector3(0, -0.12f, 0);
+        // Pull back so head+neck+rings fit with top/bottom margin
+        var orbit = MathF.Sin(_time * 0.09f) * 0.08f;
+        var cam = new Vector3(_ptrX * 0.12f + orbit, 0.04f + _ptrY * 0.04f, 3.55f);
+        var lookAt = new Vector3(0, -0.08f, 0);
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
-        var proj = Matrix4x4.CreatePerspectiveFieldOfView(28f * MathF.PI / 180f, aspect, 0.05f, 40f);
+        var proj = Matrix4x4.CreatePerspectiveFieldOfView(26f * MathF.PI / 180f, aspect, 0.05f, 40f);
         var viewProj = Matrix4x4.Transpose(view * proj);
 
         var yaw = float.IsNaN(_forcedYaw)
@@ -233,11 +233,11 @@ public sealed class HoloRenderer : IDisposable
             : _forcedYaw;
         var pitch = MathF.Sin(_time * 0.23f) * 0.05f;
         var breath = 1f + MathF.Sin(_time * 1.1f) * 0.01f;
-        // Smaller head so rings orbit clearly around it
-        var headModel = Matrix4x4.CreateScale(0.52f * breath)
+        // Head scale leaves clear air for orbiting rings
+        var headModel = Matrix4x4.CreateScale(0.48f * breath)
                         * Matrix4x4.CreateRotationX(pitch)
                         * Matrix4x4.CreateRotationY(yaw)
-                        * Matrix4x4.CreateTranslation(0, -0.05f, 0);
+                        * Matrix4x4.CreateTranslation(0, -0.02f, 0);
         headModel = Matrix4x4.Transpose(headModel);
 
         WriteFrame(viewProj, headModel, cam, blinkAmt, 1.05f);
@@ -338,16 +338,16 @@ public sealed class HoloRenderer : IDisposable
 
     void BuildRings()
     {
-        // 3 thin amber tori, radius > head, high tilt so they clear the face band
+        // 3 thin amber tori, radius > head. High inclination (~70–80°) so the
+        // camera-facing arcs sit above the brow / below the chin — never across eyes/mouth.
         void Add(float radius, float tube, float pitch, float yaw, float roll, float spinZ, float spinY = 0.02f, float opacity = 0.85f)
         {
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        // ~35–55° tilts; radius clearly outside scaled head (~0.52)
-        Add(0.95f, 0.012f, 0.72f, 0.05f, 0.15f, 0.18f, 0.015f, 0.9f);
-        Add(1.12f, 0.010f, -0.85f, 0.12f, -0.2f, -0.12f, 0.02f, 0.75f);
-        Add(1.28f, 0.008f, 1.05f, -0.08f, 0.35f, 0.08f, 0.01f, 0.55f);
+        Add(1.05f, 0.010f, 1.22f, 0.04f, 0.18f, 0.14f, 0.012f, 0.88f);  // ~70°
+        Add(1.22f, 0.009f, -1.30f, 0.10f, -0.22f, -0.10f, 0.018f, 0.72f); // ~-74°
+        Add(1.38f, 0.007f, 1.38f, -0.06f, 0.28f, 0.07f, 0.009f, 0.55f);  // ~79°
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)

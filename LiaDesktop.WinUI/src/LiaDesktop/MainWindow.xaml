@@ -14,13 +14,18 @@
     </Grid.RowDefinitions>
 
     <!-- Custom title bar drag region (leave right margin for caption buttons) -->
-    <Border x:Name="AppTitleBar" Grid.Row="0" BorderBrush="{StaticResource LiaAmber}" BorderThickness="0,0,0,1" Padding="16,0,160,0">
+    <!-- Right padding >= WinUI caption button cluster (~138–188px) so НАСТРОЙКИ never overlaps -->
+    <Border x:Name="AppTitleBar" Grid.Row="0" BorderBrush="{StaticResource LiaAmber}" BorderThickness="0,0,0,1" Padding="16,0,200,0">
       <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="12">
           <TextBlock Text="ЛИА · ATTA CORP · N-33" Foreground="{StaticResource LiaAmber}" FontWeight="SemiBold" FontSize="14" CharacterSpacing="40"/>
           <TextBlock Text="Доброй ночи, сэр." Foreground="{StaticResource LiaMuted}" FontSize="12" VerticalAlignment="Center"/>
         </StackPanel>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="12" Margin="0,0,8,0">
+        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="10" Margin="0,0,12,0">
           <TextBlock x:Name="SysLine" Foreground="{StaticResource LiaCyan}" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center"/>
           <Button Content="НАСТРОЙКИ" Click="Settings_Click" Style="{StaticResource AccentButtonStyle}" Padding="12,4"/>
         </StackPanel>

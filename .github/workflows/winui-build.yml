@@ -103,15 +103,17 @@ jobs:
           function Find-Hwnd([uint32]$procId) {
             $script:found = [IntPtr]::Zero
             $script:want = $procId
-            [Win]::EnumWindows({
+            # EnumWindows returns bool — must discard or PS returns Object[] with hwnd
+            [void][Win]::EnumWindows({
               param($h,$l)
               $outPid = [uint32]0
               [void][Win]::GetWindowThreadProcessId($h, [ref]$outPid)
               if ($outPid -ne $script:want) { return $true }
+              if (-not [Win]::IsWindowVisible($h)) { return $true }
               $script:found = $h
               return $false
             }, [IntPtr]::Zero)
-            return $script:found
+            return [IntPtr]$script:found
           }
 
           function Capture-Window([IntPtr]$hwnd, [string]$path) {
@@ -127,16 +129,16 @@ jobs:
             Write-Host "captured ${w}x${h} -> $path ($((Get-Item $path).Length) bytes)"
           }
 
-          function Invoke-SmokeShot([string]$shotPath, [string[]]$args, [int]$warm=10) {
+          function Invoke-SmokeShot([string]$shotPath, [string[]]$smokeArgs, [int]$warm=10) {
             $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
             if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
-            $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
+            $p = Start-Process -FilePath $exe -ArgumentList $smokeArgs -PassThru -WorkingDirectory (Split-Path $exe)
             for ($i = 0; $i -lt 25; $i++) {
               Start-Sleep -Seconds 1
               $p.Refresh()
               if ($p.HasExited) {
                 if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
-                throw "exited early code=$($p.ExitCode) args=$($args -join ' ')"
+                throw "exited early code=$($p.ExitCode) smokeArgs=$($smokeArgs -join ' ')"
               }
               $hwnd = Find-Hwnd ([uint32]$p.Id)
               if ($hwnd -ne [IntPtr]::Zero -and $i -ge ($warm - 1)) { break }
@@ -145,7 +147,7 @@ jobs:
             $hwnd = Find-Hwnd ([uint32]$p.Id)
             if ($hwnd -eq [IntPtr]::Zero) {
               if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
-              throw "no hwnd for $($args -join ' ')"
+              throw "no hwnd for $($smokeArgs -join ' ')"
             }
             [void][Win]::ShowWindow($hwnd, 3)
             Start-Sleep -Milliseconds 400
@@ -153,14 +155,14 @@ jobs:
             Start-Sleep -Seconds 3
             Capture-Window $hwnd $shotPath
             # While-running proof (last shot)
-            "=== WHILE RUNNING ($($args -join ' ')) ===" | Out-File $after -Append
+            "=== WHILE RUNNING ($($smokeArgs -join ' ')) ===" | Out-File $after -Append
             tasklist | Select-String -Pattern 'LiaDesktop' | Out-File $after -Append
             [void][Win]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
             Start-Sleep -Seconds 6
             if (-not $p.HasExited) { try { $p.Kill($true) } catch {} }
             Start-Sleep -Seconds 2
             if (Test-Path $bootLog) {
-              "`n=== BOOT ($($args -join ' ')) ===" | Out-File $after -Append
+              "`n=== BOOT ($($smokeArgs -join ' ')) ===" | Out-File $after -Append
               Get-Content $bootLog | Out-File $after -Append
             }
           }
