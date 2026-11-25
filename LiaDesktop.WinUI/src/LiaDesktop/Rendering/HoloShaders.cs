@@ -5,8 +5,8 @@ public static class HoloShaders
 {
     public const string Vertex = @"
 cbuffer Frame : register(b0) {
-  row_major float4x4 viewProj;
-  row_major float4x4 model;
+  float4x4 viewProj;
+  float4x4 model;
   float3 camPos; float time;
   float glow; float blink; float2 pad;
 };
@@ -31,8 +31,8 @@ VSOut main(VSIn i) {
 
     public const string PixelSkin = @"
 cbuffer Frame : register(b0) {
-  row_major float4x4 viewProj;
-  row_major float4x4 model;
+  float4x4 viewProj;
+  float4x4 model;
   float3 camPos; float time;
   float glow; float blink; float2 pad;
 };
@@ -81,8 +81,8 @@ float4 main(PSIn i) : SV_TARGET {
 
     public const string PixelHair = @"
 cbuffer Frame : register(b0) {
-  row_major float4x4 viewProj;
-  row_major float4x4 model;
+  float4x4 viewProj;
+  float4x4 model;
   float3 camPos; float time;
   float glow; float blink; float2 pad;
 };
@@ -116,8 +116,8 @@ float4 main(PSIn i) : SV_TARGET {
 
     public const string PixelEye = @"
 cbuffer Frame : register(b0) {
-  row_major float4x4 viewProj;
-  row_major float4x4 model;
+  float4x4 viewProj;
+  float4x4 model;
   float3 camPos; float time;
   float glow; float blink; float2 pad;
 };
@@ -143,8 +143,8 @@ float4 main(PSIn i) : SV_TARGET {
 
     public const string PixelIris = @"
 cbuffer Frame : register(b0) {
-  row_major float4x4 viewProj;
-  row_major float4x4 model;
+  float4x4 viewProj;
+  float4x4 model;
   float3 camPos; float time;
   float glow; float blink; float2 pad;
 };
@@ -181,8 +181,8 @@ float4 main(PSIn i) : SV_TARGET {
 
     public const string PixelCornea = @"
 cbuffer Frame : register(b0) {
-  row_major float4x4 viewProj;
-  row_major float4x4 model;
+  float4x4 viewProj;
+  float4x4 model;
   float3 camPos; float time;
   float glow; float blink; float2 pad;
 };
@@ -206,8 +206,8 @@ float4 main(PSIn i) : SV_TARGET {
 
     public const string PixelLid = @"
 cbuffer Frame : register(b0) {
-  row_major float4x4 viewProj;
-  row_major float4x4 model;
+  float4x4 viewProj;
+  float4x4 model;
   float3 camPos; float time;
   float glow; float blink; float2 pad;
 };
@@ -230,8 +230,8 @@ float4 main(PSIn i) : SV_TARGET {
 
     public const string PixelRing = @"
 cbuffer Frame : register(b0) {
-  row_major float4x4 viewProj;
-  row_major float4x4 model;
+  float4x4 viewProj;
+  float4x4 model;
   float3 camPos; float time;
   float glow; float blink; float2 pad;
 };
