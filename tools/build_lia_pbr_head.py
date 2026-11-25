@@ -131,14 +131,16 @@ def shape_delta(name):
         d[i*3+2] = c.z - b.z
     return d
 
-# World positions from evaluated mesh (Rocketbox FBX stays Z-up after import)
-me.transform(eval_obj.matrix_world)
-# Z-up → Y-up, then yaw 180 so face looks +Z
+# World positions from evaluated mesh (Blender FBX importer → meters via matrix_world)
+mw = eval_obj.matrix_world
+mw3 = mw.to_3x3()
+me.transform(mw)
+# Z-up → Y-up. Do NOT negate Z: jaw/blink morphs already sit at +Z after rot_x (face → camera).
 rot_x = Matrix.Rotation(-math.pi / 2, 4, "X")
-flip = Matrix.Diagonal((-1.0, 1.0, -1.0, 1.0))
-xform = flip @ rot_x
+mirror_x = Matrix.Diagonal((-1.0, 1.0, 1.0, 1.0))  # keep winding sensible
+xform = mirror_x @ rot_x
 coords = [xform @ v.co for v in me.vertices]
-nmat = (flip @ rot_x).to_3x3()
+nmat = xform.to_3x3()
 
 ys = [c.y for c in coords]
 miny, maxy = min(ys), max(ys)
@@ -150,7 +152,8 @@ for i, c in enumerate(coords):
     coords[i] = Vector(((c.x - cx) * scale, (c.y - miny) * scale - 1.15, c.z * scale))
 
 def xform_delta(dx, dy, dz):
-    v = nmat @ Vector((dx, dy, dz))
+    # Shape keys are in mesh-local (cm); mesh verts were brought to meters via mw.
+    v = nmat @ (mw3 @ Vector((dx, dy, dz)))
     return Vector((v.x * scale, v.y * scale, v.z * scale))
 
 def gather(poly_set, y_min=-0.40):
@@ -226,27 +229,58 @@ def write_bin(path, positions, normals, uvs, indices, shapes: dict):
     path.write_bytes(blob)
     print("wrote", path, "verts", nV, "idx", nI, "shapes", list(shapes))
 
+# Clamp insane residual deltas (visemes can still spike)
+for sn, deltas in list(shape_out.items()):
+    mags = [math.sqrt(deltas[i]**2 + deltas[i+1]**2 + deltas[i+2]**2) for i in range(0, len(deltas), 3)]
+    mx = max(mags) if mags else 0.0
+    # Head is ~0.35 tall; morph travel > 0.08 is already extreme
+    if mx > 0.08:
+        k = 0.05 / mx
+        shape_out[sn] = [d * k for d in deltas]
+        print(f"clamped shape {sn} max {mx:.4f} → {0.05:.4f}")
+
 write_bin(out_dir / "lia_pbr_head.bin", head[0], head[1], head[2], head[3], shape_out)
 write_bin(out_dir / "lia_pbr_hair.bin", opac[0], opac[1], opac[2], opac[3], {})
 
-eyes_l=[]; eyes_r=[]
-for p in head[0]:
-    x,y,z = p
-    if y < 0.12 or y > 0.42: continue
-    if z < 0.02: continue
-    if -0.14 < x < -0.04: eyes_l.append(p)
-    if 0.04 < x < 0.14: eyes_r.append(p)
+# Eye sockets from blink morphs — lower half of lid verts ≈ eyeball center
+def eye_from_blink(shape_name, x_sign):
+    d = shape_out.get(shape_name)
+    if not d:
+        return None
+    pts = []
+    for i, p in enumerate(head[0]):
+        m = math.sqrt(d[i*3]**2 + d[i*3+1]**2 + d[i*3+2]**2)
+        if m < 0.001:
+            continue
+        if p[0] * x_sign < 0.015:
+            continue
+        if p[2] < 0.01:  # face (+Z)
+            continue
+        pts.append(p)
+    if len(pts) < 5:
+        return None
+    pts.sort(key=lambda p: p[1])
+    pts = pts[: max(5, len(pts) // 2)]
+    eye = [sum(p[i] for p in pts) / len(pts) for i in range(3)]
+    eye[1] -= 0.012
+    eye[2] += 0.012
+    return eye
 
-def avg(pts):
-    if not pts: return [0.0, 0.28, 0.14]
+def avg(pts, fb):
+    if not pts:
+        return fb
     return [sum(p[i] for p in pts)/len(pts) for i in range(3)]
+
+eye_l = eye_from_blink("eyeBlinkLeft", -1.0) or [ -0.032, 0.39, 0.07]
+eye_r = eye_from_blink("eyeBlinkRight", 1.0) or [ 0.032, 0.39, 0.07]
+print("eyes", eye_l, eye_r)
 
 meta = {
     "source": "Microsoft Rocketbox Female_Adult_07",
     "license": "MIT",
     "url": "https://github.com/microsoft/Microsoft-Rocketbox",
-    "eyeL": avg(eyes_l),
-    "eyeR": avg(eyes_r),
+    "eyeL": eye_l,
+    "eyeR": eye_r,
     "shapes": list(shape_out.keys()),
     "verts_head": len(head[0]),
     "verts_hair": len(opac[0]),

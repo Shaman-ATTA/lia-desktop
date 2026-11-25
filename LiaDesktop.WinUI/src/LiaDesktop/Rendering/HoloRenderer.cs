@@ -456,10 +456,11 @@ public sealed class HoloRenderer : IDisposable
         float nearPlane = 0.08f;
         if (_eyesCloseup)
         {
-            lookAt = new Vector3(0f, 0.09f, 0.12f);
-            cam = new Vector3(0f, 0.10f, 0.95f);
-            fovDeg = 18f;
-            nearPlane = 0.12f;
+            // Eyes ≈ local ( ±0.03, 0.43, 0.05 ) * HeadScale + HeadTransY
+            lookAt = new Vector3(0f, 0.165f, 0.12f);
+            cam = new Vector3(0f, 0.17f, 0.72f);
+            fovDeg = 16f;
+            nearPlane = 0.08f;
         }
         else if (_ringsShowcase)
         {
@@ -686,7 +687,8 @@ public sealed class HoloRenderer : IDisposable
 
         void DrawOne(Vector3 eyeLocal, bool left)
         {
-            var center = eyeLocal + new Vector3(0, 0f, -EyeRadius * 0.35f);
+            // Sit eyeball slightly behind the lid plane (face looks +Z)
+            var center = eyeLocal + new Vector3(0, -0.004f, -EyeRadius * 0.55f);
             var converge = left ? 0.018f : -0.018f;
             var eyeRot = Matrix4x4.CreateFromYawPitchRoll(_gazeYaw + converge, _gazePitch, 0);
 

@@ -68,11 +68,11 @@ float4 main(PSIn i) : SV_TARGET {
   float sss = saturate(1.0 - abs(i.local.x)*8.0) * 0.12;
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
   float3 color = diffuse + key * spec;
-  float fres = pow(1.0 - saturate(dot(N,V)), 2.4);
-  float scan = 0.035 * sin((i.world.y + time*0.15)*140.0);
+  float fres = pow(1.0 - saturate(dot(N,V)), 2.8);
+  float scan = 0.012 * sin((i.world.y + time*0.12)*110.0);
   float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.05, 0.95, 0.82), 0.18);
-  color += amber * fres * 0.20 * glow;
+  color = lerp(color, color * float3(1.04, 0.96, 0.88), 0.12);
+  color += amber * fres * 0.10 * glow;
   color += amber * scan;
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
@@ -98,20 +98,23 @@ struct PSIn {
 };
 float4 main(PSIn i) : SV_TARGET {
   float4 op = opacityMap.Sample(samp, i.uv);
-  float a = max(op.a, max(op.r, max(op.g, op.b)));
-  clip(a - 0.12);
-  float3 alb = albedoMap.Sample(samp, i.uv).rgb;
-  float3 hairCol = lerp(float3(0.12, 0.07, 0.04), alb, 0.55);
+  // Opacity atlas: RGB = hair color, A (or luma) = coverage. Do NOT sample head albedo (wrong UVs → white fringe).
+  float a = op.a;
+  if (a < 0.02) a = max(op.r, max(op.g, op.b));
+  clip(a - 0.32);
+  float3 hairCol = op.rgb;
+  if (dot(hairCol, hairCol) < 0.001) hairCol = float3(0.10, 0.06, 0.04);
+  hairCol = lerp(float3(0.07, 0.04, 0.03), hairCol, 0.85);
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
   float3 L = normalize(float3(0.3, 0.7, 0.6));
   float ndl = saturate(dot(N,L)*0.5+0.5);
-  float fres = pow(1.0 - saturate(dot(N,V)), 2.0);
-  float strand = 0.08 * sin(i.uv.x * 220.0 + i.uv.y * 40.0);
-  float3 color = hairCol * (0.35 + ndl * 0.75) + float3(1,0.7,0.4) * fres * 0.15 + strand;
-  color = lerp(color, color * float3(1.1, 0.9, 0.7), 0.2);
+  float fres = pow(1.0 - saturate(dot(N,V)), 2.2);
+  float strand = 0.04 * sin(i.uv.x * 180.0 + i.uv.y * 30.0);
+  float3 color = hairCol * (0.40 + ndl * 0.70) + float3(1,0.75,0.45) * fres * 0.08 + strand;
+  color = lerp(color, color * float3(1.06, 0.92, 0.78), 0.12);
   color = pow(saturate(color / (1.0+color*0.5)), 1.0/2.2);
-  return float4(color, saturate(a * 0.92));
+  return float4(color, saturate(a));
 }";
 
     public const string PixelEye = @"
@@ -161,8 +164,9 @@ float4 main(PSIn i) : SV_TARGET {
   clip(0.98 - r);
   float angle = atan2(p.y, p.x);
   float radial = 0.55 + 0.45 * sin(angle * 14.0 + r * 9.0);
-  float3 iris = lerp(float3(0.18, 0.10, 0.05), float3(0.45, 0.28, 0.12), radial);
-  iris = lerp(iris, float3(0.55, 0.40, 0.22), saturate(1.0 - r * 1.2) * 0.35);
+  // Hazel/green matching Rocketbox f007 eye atlas
+  float3 iris = lerp(float3(0.12, 0.18, 0.08), float3(0.42, 0.48, 0.22), radial);
+  iris = lerp(iris, float3(0.55, 0.52, 0.28), saturate(1.0 - r * 1.2) * 0.35);
   float pupil = smoothstep(0.28, 0.18, r);
   iris = lerp(iris, float3(0.02, 0.01, 0.01), pupil);
   iris *= smoothstep(1.0, 0.72, r);
