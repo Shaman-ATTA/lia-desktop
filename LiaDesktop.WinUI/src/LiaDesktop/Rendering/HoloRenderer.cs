@@ -383,8 +383,8 @@ public sealed class HoloRenderer : IDisposable
 
         void DrawOne(Vector3 eyeLocal, bool left)
         {
-            // Recess into socket: front of sphere sits near the face plane (not floating out)
-            var center = eyeLocal + new Vector3(0, 0f, -EyeRadius * 0.55f);
+            // Recess into socket: front near face plane so brow/nose occlude in 3/4
+            var center = eyeLocal + new Vector3(0, 0f, -EyeRadius * 0.48f);
             var converge = left ? 0.05f : -0.05f;
             var eyeRot = Matrix4x4.CreateFromYawPitchRoll(_gazeYaw + converge, _gazePitch, 0);
 
@@ -404,22 +404,22 @@ public sealed class HoloRenderer : IDisposable
             // 2) Concave iris on sphere +Z surface, follows gaze
             if (_irisDisc != null)
             {
-                // Disc radius ~0.52R → sits on sphere at z ≈ R·√(1−0.52²) ≈ 0.85R; nudge out vs z-fight
+                // Slightly larger iris for readable pupil/spec in front + close-up
                 var irisWorld =
-                    Matrix4x4.CreateScale(EyeRadius * 0.52f) *
-                    Matrix4x4.CreateTranslation(0, 0, EyeRadius * 0.88f) *
+                    Matrix4x4.CreateScale(EyeRadius * 0.58f) *
+                    Matrix4x4.CreateTranslation(0, 0, EyeRadius * 0.86f) *
                     eyeRot *
                     Matrix4x4.CreateTranslation(center) *
                     headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.15f);
+                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.2f);
                 _ctx.PSSetShader(_psIris);
                 _ctx.IASetVertexBuffer(0, _irisDisc.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_irisDisc.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
-            // 3) Lids always on — open leaves almond; blink closes over the iris
-            var upperAngle = MathHelper.Lerp(-0.48f, 0.58f, close);
+            // 3) Lids always on — open leaves almond with visible sclera; blink closes
+            var upperAngle = MathHelper.Lerp(-0.55f, 0.58f, close);
             var upperWorld =
                 Matrix4x4.CreateScale(EyeRadius * 1.14f, EyeRadius * 1.10f, EyeRadius * 1.14f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
@@ -431,7 +431,7 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.44f, -0.06f, close);
+            var lowerAngle = MathHelper.Lerp(0.50f, -0.06f, close);
             var lowerWorld =
                 Matrix4x4.CreateScale(EyeRadius * 1.12f, EyeRadius * 1.08f, EyeRadius * 1.12f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *

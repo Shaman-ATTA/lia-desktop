@@ -57,9 +57,9 @@ struct PSIn {
 float4 main(PSIn i) : SV_TARGET {
   float2 eyeL = float2(-0.161, 0.253);
   float2 eyeR = float2(0.152, 0.251);
-  // Tight almond fissure — lids + recessed sphere fill it (depth-tested, no void)
-  float dL = length((i.local.xy - eyeL) / float2(0.040, 0.019));
-  float dR = length((i.local.xy - eyeR) / float2(0.040, 0.019));
+  // Almond fissure sized to lids + sphere (depth-tested fill, no void)
+  float dL = length((i.local.xy - eyeL) / float2(0.044, 0.022));
+  float dR = length((i.local.xy - eyeR) / float2(0.044, 0.022));
   float dEye = min(dL, dR);
   if (dEye < 0.98 && i.local.z > 0.32) discard;
 
@@ -146,15 +146,15 @@ float4 main(PSIn i) : SV_TARGET {
 
   float3 amber = float3(1.0, 0.62, 0.22);
   float3 gold = float3(1.0, 0.78, 0.42);
-  // Dim amber-tinted sclera (not opaque cream)
-  float3 sclera = float3(0.55, 0.42, 0.28);
+  // Amber-tinted sclera — dimmer than skin, never cream-white, never black void
+  float3 sclera = float3(0.72, 0.52, 0.30);
   float front = saturate(i.local.z * 1.4 + 0.15);
   // Soft falloff toward sphere limbs (corners of the visible eye)
-  float limb = saturate(1.0 - length(i.local.xy) * 1.15);
-  float3 c = sclera * (0.35 + diff * 0.4) * (0.55 + limb * 0.45);
-  c += amber * fres * 0.22 * glow;
-  c += gold * front * 0.06;
-  c *= 0.92 + 0.08 * sin(i.local.y * 40.0); // faint holo grain
+  float limb = saturate(1.0 - length(i.local.xy) * 1.05);
+  float3 c = sclera * (0.55 + diff * 0.45) * (0.62 + limb * 0.45);
+  c += amber * fres * 0.28 * glow;
+  c += gold * front * 0.10;
+  c *= 0.94 + 0.06 * sin(i.local.y * 40.0); // faint holo grain
   return float4(saturate(c), 1.0);
 }
 """;
@@ -188,26 +188,27 @@ float4 main(PSIn i) : SV_TARGET {
   float2 xy = i.local.xy;
   float r = length(xy);
   float irisR = 0.98;
-  float pupilR = 0.28;
-  float irisMask = 1.0 - smoothstep(irisR * 0.9, irisR, r);
-  float pupilMask = 1.0 - smoothstep(pupilR * 0.65, pupilR, r);
-  float limbus = smoothstep(irisR * 0.78, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.05, r));
+  float pupilR = 0.26;
+  float irisMask = 1.0 - smoothstep(irisR * 0.88, irisR, r);
+  float pupilMask = 1.0 - smoothstep(pupilR * 0.55, pupilR, r);
+  float limbus = smoothstep(irisR * 0.72, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.05, r));
 
   float ang = atan2(xy.y, xy.x);
-  float spoke = 0.82 + 0.18 * sin(ang * 11.0 + r * 14.0);
+  float spoke = 0.78 + 0.22 * sin(ang * 11.0 + r * 14.0);
   float3 amber = float3(1.0, 0.62, 0.22);
-  float3 irisOuter = float3(0.28, 0.12, 0.04);
-  float3 irisInner = float3(0.72, 0.38, 0.10);
-  float3 pupil = float3(0.02, 0.015, 0.01);
+  float3 irisOuter = float3(0.42, 0.18, 0.05);
+  float3 irisInner = float3(0.95, 0.55, 0.16);
+  float3 pupil = float3(0.04, 0.025, 0.015);
   float3 iris = lerp(irisInner, irisOuter, saturate(r / irisR)) * spoke;
 
   float3 col = iris * irisMask;
   col = lerp(col, pupil, pupilMask);
-  col += amber * limbus * 0.35;
-  col += float3(1.0, 0.96, 0.88) * spec * (0.55 + irisMask * 0.7);
-  float2 catchUv = xy - float2(0.16, 0.14);
-  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.11, length(catchUv))) * irisMask * 0.85;
-  col *= 0.9 + 0.1 * ndv;
+  col += amber * limbus * 0.55;
+  col += float3(1.0, 0.96, 0.88) * spec * (0.75 + irisMask * 0.85);
+  // Single catchlight
+  float2 catchUv = xy - float2(0.18, 0.16);
+  col += float3(1.0, 0.97, 0.90) * (1.0 - smoothstep(0.0, 0.10, length(catchUv))) * irisMask * 1.1;
+  col *= 0.92 + 0.12 * ndv;
   return float4(saturate(col), 1.0);
 }
 """;
