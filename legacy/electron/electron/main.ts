@@ -21,15 +21,37 @@ import {
   listGeminiModels,
   resolveGeminiModel,
 } from './agent/geminiModels'
+import { killTrackedProcessTrees, trackedPids } from './processCleanup'
 
 let mainWindow: BrowserWindow | null = null
 let controlBanner: BrowserWindow | null = null
 let agent: LlmAgent | null = null
 let aborted = false
+let isQuitting = false
 const actionLog: string[] = []
 const tts = new TtsEngine()
 const browser = new BrowserSession()
 const screenCtl = new ScreenControl()
+
+async function shutdownSidecars(): Promise<void> {
+  try {
+    tts.dispose()
+  } catch (e) {
+    console.warn('tts dispose', e)
+  }
+  try {
+    agent?.abort()
+  } catch {
+    /* */
+  }
+  try {
+    await browser.close()
+  } catch (e) {
+    console.warn('browser close', e)
+  }
+  killTrackedProcessTrees()
+  console.log('[quit] tracked pids after kill:', trackedPids())
+}
 
 let pendingConfirm: {
   resolve: (v: boolean) => void
@@ -68,8 +90,16 @@ function createMainWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   }
 
+  mainWindow.on('close', () => {
+    // Start tearing down sidecars as soon as the user closes the window
+    void shutdownSidecars()
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
+    if (!isQuitting) {
+      isQuitting = true
+      app.quit()
+    }
   })
 }
 
@@ -416,11 +446,37 @@ app.whenReady().then(() => {
   })
 })
 
+app.on('before-quit', (e) => {
+  if (isQuitting) return
+  isQuitting = true
+  e.preventDefault()
+  void (async () => {
+    try {
+      globalShortcut.unregisterAll()
+    } catch {
+      /* */
+    }
+    try {
+      controlBanner?.destroy()
+      controlBanner = null
+    } catch {
+      /* */
+    }
+    await shutdownSidecars()
+    app.exit(0)
+  })()
+})
+
 app.on('will-quit', () => {
-  globalShortcut.unregisterAll()
-  void browser.close()
+  try {
+    globalShortcut.unregisterAll()
+  } catch {
+    /* */
+  }
+  killTrackedProcessTrees()
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // Quit on all platforms when the main window is gone (no tray keep-alive)
+  if (!isQuitting) app.quit()
 })

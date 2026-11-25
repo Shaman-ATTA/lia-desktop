@@ -1,14 +1,17 @@
 # Changelog
 
-## v0.2.1 — Gemini model resilience
+## v0.3.0 — WinUI 3 + DirectX 11
 
-- **No hardcoded Gemini model.** On save/startup, ListModels picks the newest stable `*-flash` that supports `generateContent` (vision/tools). Retired `gemini-2.0-flash` is migrated automatically.
-- **Settings:** model dropdown filled from ListModels; choice is applied immediately (no restart). STATUS panel shows `MODEL <id>`.
-- **404 “no longer available”:** parse suggested model from the error, switch, retry once, persist.
-- **503 / 429 high demand:** exponential backoff (3 tries), then fall back to the next flash from ListModels (e.g. `gemini-2.5-flash` → `flash-lite`) with a short Russian journal line.
-- **Errors:** distinguish invalid key vs unavailable model vs network; journal shows one clean line with collapsible detail (no raw stacks).
-- `@google/generative-ai` bumped to 0.24.x; Generative Language API `v1beta` ListModels.
+- **Port** from Electron to **.NET 8 + WinUI 3** (Windows App SDK), unpackaged self-contained.
+- **DX11 hologram** (Vortice): mesh morphs, amber hologram shader, eyes/blink/breath, real 3D torus rings with depth.
+- **Gemini v0.2.1 logic**: ListModels auto-pick, 404 switch, 503/429 backoff + fallback, clean RU errors.
+- **Job Object** kill-on-close for Playwright/TTS children; CI tasklist proof.
+- Electron tree preserved under `legacy/electron`.
+
+## v0.2.1 — Gemini model resilience (Electron)
+
+- ListModels auto-pick; migrate off `gemini-2.0-flash`; 404/503 handling; STATUS MODEL.
 
 ## v0.2.0
 
-- FRIDAY-style amber HUD, opaque hologram head, rings behind face, Windows smoke.
+- FRIDAY-style amber HUD (Electron), opaque hologram head, Windows smoke.

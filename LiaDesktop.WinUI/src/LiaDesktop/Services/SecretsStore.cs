@@ -1,0 +1,79 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+
+namespace LiaDesktop.Services;
+
+public sealed class LiaConfig
+{
+    public string Provider { get; set; } = "gemini"; // gemini | ollama
+    public string ApiKey { get; set; } = "";
+    public string BaseUrl { get; set; } = "http://127.0.0.1:11434/v1";
+    public string Model { get; set; } = "";
+    public string VisionModel { get; set; } = "";
+    public string TtsVoice { get; set; } = "SvetlanaNeural";
+    public string WorkspacePath { get; set; } = "";
+}
+
+public sealed class SecretsStore
+{
+    static readonly HashSet<string> Retired = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-2.0-flash-lite",
+        "models/gemini-2.0-flash",
+    };
+
+    readonly string _path;
+
+    public SecretsStore()
+    {
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LiaDesktop");
+        Directory.CreateDirectory(dir);
+        _path = Path.Combine(dir, "lia-config.dpapi");
+    }
+
+    public LiaConfig Load()
+    {
+        var cfg = new LiaConfig
+        {
+            WorkspacePath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "LiaWorkspace"),
+        };
+        if (!File.Exists(_path)) return Scrub(cfg);
+        try
+        {
+            var enc = File.ReadAllBytes(_path);
+            var json = Encoding.UTF8.GetString(ProtectedData.Unprotect(enc, null, DataProtectionScope.CurrentUser));
+            var loaded = JsonSerializer.Deserialize<LiaConfig>(json) ?? cfg;
+            if (string.IsNullOrWhiteSpace(loaded.WorkspacePath))
+                loaded.WorkspacePath = cfg.WorkspacePath;
+            return Scrub(loaded);
+        }
+        catch
+        {
+            return Scrub(cfg);
+        }
+    }
+
+    public LiaConfig Save(LiaConfig cfg)
+    {
+        cfg = Scrub(cfg);
+        var json = JsonSerializer.Serialize(cfg);
+        var enc = ProtectedData.Protect(Encoding.UTF8.GetBytes(json), null, DataProtectionScope.CurrentUser);
+        File.WriteAllBytes(_path, enc);
+        return cfg;
+    }
+
+    static LiaConfig Scrub(LiaConfig cfg)
+    {
+        var m = (cfg.Model ?? "").Replace("models/", "");
+        if (string.IsNullOrWhiteSpace(m) || Retired.Contains(m) || Retired.Contains(cfg.Model))
+            cfg.Model = "";
+        if (string.IsNullOrWhiteSpace(cfg.VisionModel) || Retired.Contains(cfg.VisionModel))
+            cfg.VisionModel = cfg.Model;
+        return cfg;
+    }
+}

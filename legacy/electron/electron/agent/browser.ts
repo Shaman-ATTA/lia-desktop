@@ -2,11 +2,13 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
-import { chromium, type BrowserContext, type Page } from 'playwright'
+import { chromium, type BrowserContext, type Page, type Browser } from 'playwright'
+import { trackPid } from '../processCleanup'
 
 export class BrowserSession {
   private context: BrowserContext | null = null
   private page: Page | null = null
+  private browserPid: number | null = null
   private readonly profileDir: string
 
   constructor(userDataRoot?: string) {
@@ -24,6 +26,16 @@ export class BrowserSession {
       viewport: { width: 1280, height: 800 },
       args: ['--disable-blink-features=AutomationControlled'],
     })
+    try {
+      const b = this.context.browser() as Browser | null
+      const pid = b?.process?.()?.pid
+      if (pid) {
+        this.browserPid = pid
+        trackPid(pid)
+      }
+    } catch {
+      /* */
+    }
     this.page = this.context.pages()[0] || (await this.context.newPage())
     return this.page
   }
@@ -55,8 +67,25 @@ export class BrowserSession {
   }
 
   async close() {
-    await this.context?.close()
+    try {
+      await this.context?.close()
+    } catch {
+      /* */
+    }
     this.context = null
     this.page = null
+    if (this.browserPid && process.platform === 'win32') {
+      try {
+        const { execFileSync } = await import('child_process')
+        execFileSync('taskkill', ['/PID', String(this.browserPid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+          timeout: 8000,
+        })
+      } catch {
+        /* */
+      }
+    }
+    this.browserPid = null
   }
 }

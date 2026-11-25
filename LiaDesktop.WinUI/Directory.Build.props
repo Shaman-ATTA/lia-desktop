@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <WindowsSdkPackageVersion>10.0.26100.1742</WindowsSdkPackageVersion>
+  </PropertyGroup>
+</Project>

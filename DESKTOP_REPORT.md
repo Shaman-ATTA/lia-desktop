@@ -1,31 +1,29 @@
-# Lia Assistant Windows v0.2.0 — HUD + head fix
+# Lia Desktop · WinUI 3 report
 
 **Repo:** https://github.com/Shaman-ATTA/lia-desktop  
-ATTA CORP · ЛИА / Lia Assistant · N-33 (personal). Android untouched.
+ATTA CORP · ЛИА / Lia Assistant · N-33 (personal).
 
-## Head (fixed)
+## v0.3.0 — WinUI 3 + DirectX 11
 
-1. **Framing** — frontal default; head+neck with margin ≈65–70% of stage; drag-rotate with spring-back; idle ≤±8° yaw / ±4° pitch.
-2. **Material** — restored v0.1/Android filamat hologram on `lia_holo_mesh.bin` (fine scanlines, fresnel, dark interior, vertex-color eyes/brows/lips, neck α fade).
-3. **Mouth** — CPU jaw/funnel/wide morphs at the lips + almond cavity; no forehead dome / no GLB flat cavity card.
-4. **Rings** — 3D tori/arcs/waveform behind the head plane (large radius, mild tilt, depth-tested); do not slice the face.
-5. **UI** — status text no longer scrambled (was truncating «ГОВОРЮ»); subtitle cleared above mic.
+- Stack: .NET 8 + WinUI 3 (Windows App SDK), unpackaged self-contained
+- Renderer: DirectX 11 via Vortice (`SwapChainPanel` + composition swapchain)
+- Mesh: `Assets/models/lia_holo_mesh.bin` morphs (A ≤ O), blink, breath, amber hologram shader
+- Rings: real 3D torus meshes, tilted, depth-tested behind the head
+- Agent: Gemini (ListModels / 404 / 503) + Ollama; tools (files, PowerShell, Playwright, screenshot, SendInput)
+- Voice: Edge TTS `ru-RU-SvetlanaNeural` −4%; STT Windows.Media.SpeechRecognition ru-RU
+- Secrets: DPAPI; stop: «Лиа, стоп» / Ctrl+Alt+S
+- Exit: Job Object `KILL_ON_JOB_CLOSE`
+- Electron prototype: `legacy/electron/`
 
-## HUD
-
-Amber Stark-inspired HUD (original): hex grid, boot scramble, Orbitron/Rajdhani/Exo 2 local fonts, system readout, mic icon + pulse. Branding: ЛИА / ATTA CORP only.
-
-## Captures
+## Artifacts (CI)
 
 | File | Notes |
 |------|--------|
-| `desktop_idle.png` | Frontal hologram |
-| `desktop_speaking.png` | Mouth open at lips · «ГОВОРЮ» |
-| `desktop_mouth_crop.png` | Close-up lips |
-| `desktop_head_rotated.png` | ~30° yaw |
-| `desktop_agent_file.png` | Real tools |
-| `desktop_lia_boot_speak.mp4` | Boot + speak motion |
+| `LiaDesktop-0.3.0-win-x64.zip` | Self-contained publish folder zip |
+| `desktop_winui_front.png` | Running app front view |
+| `desktop_winui_rings.png` | Rings / stage capture |
+| `tasklist_after.txt` | Clean-exit proof |
 
 ## Release
 
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.2.0
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.3.0

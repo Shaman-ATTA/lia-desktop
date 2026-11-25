@@ -61,6 +61,7 @@ function splitSentences(text: string): string[] {
 export class TtsEngine extends EventEmitter {
   voice: TtsVoiceId = 'SvetlanaNeural'
   private abort: AbortController | null = null
+  private activeChild: import('child_process').ChildProcess | null = null
 
   setVoice(v: TtsVoiceId) {
     this.voice = v
@@ -69,7 +70,30 @@ export class TtsEngine extends EventEmitter {
   stop() {
     this.abort?.abort()
     this.abort = null
+    if (this.activeChild?.pid) {
+      try {
+        if (process.platform === 'win32') {
+          const { execFileSync } = require('child_process') as typeof import('child_process')
+          execFileSync('taskkill', ['/PID', String(this.activeChild.pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+            timeout: 5000,
+          })
+        } else {
+          this.activeChild.kill('SIGKILL')
+        }
+      } catch {
+        /* gone */
+      }
+      this.activeChild = null
+    }
     this.emit('stop')
+  }
+
+  /** Hard stop for app quit */
+  dispose() {
+    this.stop()
+    this.removeAllListeners()
   }
 
   async speak(raw: string): Promise<TtsResult> {
@@ -160,9 +184,19 @@ async def main():
   print('BOUNDS', json.dumps(bounds, ensure_ascii=False))
 asyncio.run(main())
 `
-      const p = spawn('python3', ['-c', py, text, voice, tmp, TTS_RATE], {
+      const pyBin = process.platform === 'win32' ? 'python' : 'python3'
+      const p = spawn(pyBin, ['-c', py, text, voice, tmp, TTS_RATE], {
         env: { ...process.env, PATH: `${process.env.HOME}/.local/bin:${process.env.PATH}` },
+        windowsHide: true,
       })
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { trackChild } = require('../processCleanup') as typeof import('../processCleanup')
+        trackChild(p)
+      } catch {
+        /* optional */
+      }
+      this.activeChild = p
       let err = ''
       let out = ''
       p.stderr.on('data', (d) => {
@@ -174,6 +208,7 @@ asyncio.run(main())
       })
       p.on('error', reject)
       p.on('close', (code) => {
+        this.activeChild = null
         if (code !== 0 || !fs.existsSync(tmp) || fs.statSync(tmp).size === 0) {
           reject(new Error(err || 'edge-tts failed'))
           return
