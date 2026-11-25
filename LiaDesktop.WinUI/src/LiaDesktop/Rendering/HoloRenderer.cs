@@ -212,7 +212,7 @@ public sealed class HoloRenderer : IDisposable
             AddressV = TextureAddressMode.Wrap,
             AddressW = TextureAddressMode.Wrap,
             MaxAnisotropy = 1,
-            ComparisonFunction = ComparisonFunction.Never,
+            ComparisonFunc = ComparisonFunction.Never,
             MinLOD = 0,
             MaxLOD = float.MaxValue,
         });
@@ -310,15 +310,15 @@ public sealed class HoloRenderer : IDisposable
                 ArraySize = 1,
                 Format = Format.R8G8B8A8_UNorm,
                 SampleDescription = new SampleDescription(1, 0),
-                Usage = ResourceUsage.Immutable,
+                Usage = ResourceUsage.Default,
                 BindFlags = BindFlags.ShaderResource,
             };
+            var tex = _device!.CreateTexture2D(desc);
             fixed (byte* p = bytes)
             {
-                var init = new SubresourceData(p, (uint)(w * 4), (uint)(bytes.Length));
-                var tex = _device!.CreateTexture2D(desc, &init);
-                return _device.CreateShaderResourceView(tex);
+                _ctx!.UpdateSubresource(tex, 0, null, (IntPtr)p, (uint)(w * 4), (uint)(bytes.Length));
             }
+            return _device.CreateShaderResourceView(tex);
         }
         finally
         {
