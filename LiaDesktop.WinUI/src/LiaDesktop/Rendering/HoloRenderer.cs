@@ -548,9 +548,9 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 1) Skin — PBR + neck alpha dissolve (no-cull: bake winding can flip)
+        // 1) Skin — PBR + neck darken dissolve (no-cull: bake winding can flip)
         _ctx.OMSetDepthStencilState(_dssWrite);
-        _ctx.OMSetBlendState(_blendAlpha, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+        _ctx.OMSetBlendState(_blendOpaque, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
         _ctx.RSSetState(_rsNoCull);
         WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         BindSkinTextures();
@@ -608,26 +608,45 @@ public sealed class HoloRenderer : IDisposable
         _ctx.OMSetDepthStencilState(_dssWrite);
         _ctx.OMSetBlendState(_blendOpaque);
 
-        // Resolve MSAA → scene color (or already drew into scene)
-        if (_msaaSamples > 1 && _msaaColor != null && _sceneColor != null)
-            _ctx.ResolveSubresource(_sceneColor, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
+        // Unbind RTs before resolve/copy (MSAA DSV must not stay bound with 1x swap)
+        _ctx.OMSetRenderTargets(Array.Empty<ID3D11RenderTargetView>(), null);
 
-        ApplyFxaa();
+        if (_msaaSamples > 1 && _msaaColor != null)
+        {
+            // Proven path (v0.5.0): resolve MSAA straight into swapchain
+            using var bb = _swap.GetBuffer<ID3D11Texture2D>(0);
+            _ctx.ResolveSubresource(bb, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
+        }
+        else if (_sceneColor != null)
+        {
+            // MSAA unavailable — FXAA (or CopyResource fallback) is the AA
+            if (!ApplyFxaa())
+            {
+                using var bb = _swap.GetBuffer<ID3D11Texture2D>(0);
+                _ctx.CopyResource(bb, _sceneColor);
+            }
+        }
         _swap.Present(1, PresentFlags.None);
     }
 
-    void ApplyFxaa()
+    bool ApplyFxaa()
     {
-        if (_ctx == null || _rtvSwap == null || _srvScene == null || _psFxaa == null || _vsFxaa == null || _fxaaCb == null)
-            return;
-        _ctx.OMSetRenderTargets(_rtvSwap, null);
+        if (_ctx == null || _rtvSwap == null || _srvScene == null || _psFxaa == null || _vsFxaa == null ||
+            _fxaaCb == null || _sceneColor == null)
+            return false;
+
+        // Fullscreen FXAA into swapchain (1x). Explicit null DSV avoids MSAA depth mismatch.
+        _ctx.OMSetRenderTargets(new[] { _rtvSwap }, null);
         _ctx.OMSetDepthStencilState(_dssOff);
         _ctx.OMSetBlendState(_blendOpaque);
+        _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
         _ctx.RSSetState(_rs);
         _ctx.IASetInputLayout(null);
         _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _ctx.VSSetShader(_vsFxaa);
         _ctx.PSSetShader(_psFxaa);
+        _ctx.VSSetConstantBuffer(0, _fxaaCb);
+        _ctx.PSSetConstantBuffer(0, _fxaaCb);
         _ctx.PSSetShaderResources(0, new[] { _srvScene });
         if (_samplerLinearClamp != null)
             _ctx.PSSetSamplers(0, new[] { _samplerLinearClamp });
@@ -641,17 +660,18 @@ public sealed class HoloRenderer : IDisposable
             };
         }
         _ctx.Unmap(_fxaaCb, 0);
-        _ctx.PSSetConstantBuffer(0, _fxaaCb);
         _ctx.Draw(3, 0);
 
-        // Unbind SRV so next frame can use scene as RT
+        // Unbind SRV so next frame can rebind scene as RT (msaa==1 path)
         _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
+        _ctx.OMSetRenderTargets(Array.Empty<ID3D11RenderTargetView>(), null);
         _ctx.VSSetShader(_vs);
         _ctx.IASetInputLayout(_layout);
         if (_samplerLinearWrap != null)
             _ctx.PSSetSamplers(0, new[] { _samplerLinearWrap });
         _ctx.VSSetConstantBuffer(0, _frameCb);
         _ctx.PSSetConstantBuffer(0, _frameCb);
+        return true;
     }
 
     void BindSkinTextures()

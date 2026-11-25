@@ -86,10 +86,8 @@ float4 main(PSIn i) : SV_TARGET {
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
-  // Alpha dissolve at neck for holo cut (blended over black clear)
-  float alpha = lerp(0.0, 1.0, neck);
-  alpha *= lerp(0.78, 1.0, saturate(ndv * 1.1 + 0.15));
-  return float4(color, alpha);
+  // Opaque — neck already multiplied to black (matches clear color)
+  return float4(color, 1.0);
 }";
 
     public const string PixelHair = @"
