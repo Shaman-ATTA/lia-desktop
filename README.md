@@ -8,14 +8,14 @@ Windows App SDK / **WinUI 3** unpackaged self-contained app with **DirectX 11** 
 
 ## Install
 
-1. Download **LiaDesktop-0.3.2-win-x64.zip** from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
+1. Download **LiaDesktop-0.3.3-win-x64.zip** from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
 2. Unpack and run `LiaDesktop.exe`.
 3. **НАСТРОЙКИ** → Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Model is auto-picked via ListModels.
 
 ## Features
 
 - DX11 hologram head (`lia_holo_mesh.bin` morphs; A capped at O), blink, breath, fine scanlines, rim light
-- 3D eyes: sclera + iris/pupil/spec, lids hugging sockets (no black void)
+- Real eyeball spheres in sockets (depth-tested): holo sclera, concave iris/pupil/spec, always-on almond lids + blink
 - Compact 3D torus rings (15°/−35°/70°, depth occlusion, parallax)
 - Gemini: ListModels auto-pick, 404 suggested-model switch, 503/429 backoff + fallback
 - Tools: files, PowerShell, Playwright browser (isolated profile), screenshot, mouse/keyboard

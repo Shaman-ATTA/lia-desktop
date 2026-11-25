@@ -57,16 +57,11 @@ struct PSIn {
 float4 main(PSIn i) : SV_TARGET {
   float2 eyeL = float2(-0.161, 0.253);
   float2 eyeR = float2(0.152, 0.251);
-  // Carve out full 3D socket volume (including recessed walls) — filled by sclera disc mesh
-  float3 eyeCL = float3(-0.161, 0.253, 0.393);
-  float3 eyeCR = float3(0.152, 0.251, 0.390);
-  float volL = length((i.local - eyeCL) / float3(0.082, 0.046, 0.070));
-  float volR = length((i.local - eyeCR) / float3(0.082, 0.046, 0.070));
-  if (min(volL, volR) < 1.0) discard;
-
-  float dL = length((i.local.xy - eyeL) / float2(0.090, 0.048));
-  float dR = length((i.local.xy - eyeR) / float2(0.090, 0.048));
+  // Tight almond fissure — lids + recessed sphere fill it (depth-tested, no void)
+  float dL = length((i.local.xy - eyeL) / float2(0.040, 0.019));
+  float dR = length((i.local.xy - eyeR) / float2(0.040, 0.019));
   float dEye = min(dL, dR);
+  if (dEye < 0.98 && i.local.z > 0.32) discard;
 
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
@@ -123,7 +118,7 @@ float4 main(PSIn i) : SV_TARGET {
 }
 """;
 
-    /// <summary>3D eyeball: sclera + iris + pupil + specular. local = sphere space, +Z = gaze forward.</summary>
+    /// <summary>Eyeball sphere sclera — hologram amber tint, dimmer than skin, soft corner falloff.</summary>
     public const string PixelEye = """
 cbuffer Frame : register(b0) {
   float4x4 viewProj;
@@ -145,54 +140,79 @@ float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
   float ndv = saturate(dot(N, V));
-  float3 L = normalize(float3(0.4, 0.6, 0.7));
-  float diff = saturate(dot(N, L));
+  float3 L = normalize(float3(0.35, 0.55, 0.75));
+  float diff = saturate(dot(N, L)) * 0.45 + 0.2;
+  float fres = pow(1.0 - ndv, 2.4);
+
+  float3 amber = float3(1.0, 0.62, 0.22);
+  float3 gold = float3(1.0, 0.78, 0.42);
+  // Dim amber-tinted sclera (not opaque cream)
+  float3 sclera = float3(0.55, 0.42, 0.28);
+  float front = saturate(i.local.z * 1.4 + 0.15);
+  // Soft falloff toward sphere limbs (corners of the visible eye)
+  float limb = saturate(1.0 - length(i.local.xy) * 1.15);
+  float3 c = sclera * (0.35 + diff * 0.4) * (0.55 + limb * 0.45);
+  c += amber * fres * 0.22 * glow;
+  c += gold * front * 0.06;
+  c *= 0.92 + 0.08 * sin(i.local.y * 40.0); // faint holo grain
+  return float4(saturate(c), 1.0);
+}
+""";
+
+    /// <summary>Iris disc on the sphere (+Z). Slightly concave via normals; pupil + specular.</summary>
+    public const string PixelIris = """
+cbuffer Frame : register(b0) {
+  float4x4 viewProj;
+  float4x4 model;
+  float3 camPos;
+  float time;
+  float glow;
+  float blink;
+  float2 _pad;
+};
+struct PSIn {
+  float4 pos : SV_POSITION;
+  float3 world : TEXCOORD0;
+  float3 nrm : TEXCOORD1;
+  float4 col : COLOR;
+  float3 local : TEXCOORD2;
+};
+float4 main(PSIn i) : SV_TARGET {
+  float3 N = normalize(i.nrm);
+  float3 V = normalize(camPos - i.world);
+  float ndv = saturate(dot(N, V));
+  float3 L = normalize(float3(0.4, 0.55, 0.7));
   float3 H = normalize(L + V);
-  float spec = pow(saturate(dot(N, H)), 96.0);
+  float spec = pow(saturate(dot(N, H)), 72.0);
 
   float2 xy = i.local.xy;
   float r = length(xy);
-  float isPlate = saturate(1.0 - abs(i.col.a - 0.5) * 20.0);
-  float isDisc = 1.0 - isPlate; // iris disc uses a=1
+  float irisR = 0.98;
+  float pupilR = 0.28;
+  float irisMask = 1.0 - smoothstep(irisR * 0.9, irisR, r);
+  float pupilMask = 1.0 - smoothstep(pupilR * 0.65, pupilR, r);
+  float limbus = smoothstep(irisR * 0.78, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.05, r));
 
-  float3 amber = float3(1.0, 0.62, 0.22);
-  float3 gold = float3(1.0, 0.82, 0.48);
-  float3 sclera = float3(0.97, 0.90, 0.74);
-
-  // Sclera almond — solid bright fill
-  if (isPlate > 0.5) {
-    float3 c = sclera * (0.88 + diff * 0.2);
-    c += amber * pow(1.0 - ndv, 2.0) * 0.35;
-    c += gold * 0.1;
-    return float4(saturate(c), 1.0);
-  }
-
-  float irisR = 0.92;
-  float pupilR = 0.36;
-  float irisMask = 1.0 - smoothstep(irisR * 0.88, irisR, r);
-  float pupilMask = 1.0 - smoothstep(pupilR * 0.7, pupilR, r);
-  float limbus = smoothstep(irisR * 0.8, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.08, r));
   float ang = atan2(xy.y, xy.x);
-  float spoke = 0.78 + 0.22 * sin(ang * 12.0 + r * 16.0);
-  float3 irisOuter = float3(0.30, 0.13, 0.04);
-  float3 irisInner = float3(0.85, 0.48, 0.14);
-  float3 pupil = float3(0.01, 0.008, 0.005);
+  float spoke = 0.82 + 0.18 * sin(ang * 11.0 + r * 14.0);
+  float3 amber = float3(1.0, 0.62, 0.22);
+  float3 irisOuter = float3(0.28, 0.12, 0.04);
+  float3 irisInner = float3(0.72, 0.38, 0.10);
+  float3 pupil = float3(0.02, 0.015, 0.01);
   float3 iris = lerp(irisInner, irisOuter, saturate(r / irisR)) * spoke;
 
-  float3 col = sclera * 0.25;
-  col = lerp(col, iris, irisMask);
+  float3 col = iris * irisMask;
   col = lerp(col, pupil, pupilMask);
-  col += gold * limbus * 0.5;
-  col += float3(1.0, 0.96, 0.88) * spec * irisMask;
-  float2 catchUv = xy - float2(0.18, 0.14) * irisR;
-  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.12 * irisR, length(catchUv))) * irisMask * 0.9;
-  col += amber * pow(1.0 - ndv, 2.5) * 0.12 * glow * isDisc;
-
+  col += amber * limbus * 0.35;
+  col += float3(1.0, 0.96, 0.88) * spec * (0.55 + irisMask * 0.7);
+  float2 catchUv = xy - float2(0.16, 0.14);
+  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.11, length(catchUv))) * irisMask * 0.85;
+  col *= 0.9 + 0.1 * ndv;
   return float4(saturate(col), 1.0);
 }
 """;
 
-    /// <summary>Eyelid shell — amber hologram skin.</summary>
+    /// <summary>Eyelid shell — matches head hologram skin.</summary>
     public const string PixelLid = """
 cbuffer Frame : register(b0) {
   float4x4 viewProj;
@@ -218,9 +238,12 @@ float4 main(PSIn i) : SV_TARGET {
   float diff = saturate(dot(N, L)) * 0.5;
   float fres = pow(1.0 - ndv, 2.4);
   float3 amber = float3(1.0, 0.62, 0.22);
-  float3 deep = float3(0.04, 0.02, 0.012);
-  float3 c = lerp(deep, amber, 0.15 + fres * 0.7 + diff * 0.25) * glow;
-  c += amber * fres * 0.35;
+  float3 gold = float3(1.0, 0.78, 0.42);
+  float3 deep = float3(0.06, 0.03, 0.015);
+  float3 c = lerp(deep, amber, 0.22 + fres * 0.65 + diff * 0.28) * glow;
+  c += gold * fres * 0.25;
+  float scan = pow(0.5 + 0.5 * sin(i.local.y * 180.0 + time), 10.0) * 0.08;
+  c += amber * scan;
   return float4(saturate(c), 1.0);
 }
 """;

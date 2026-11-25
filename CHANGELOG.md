@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.3 — Real eyeball spheres
+
+- Eyeball **spheres** recessed in sockets with **depth ON** — brow, lids, and nose occlude correctly in 3/4 (no floating cream discs)
+- Sclera uses hologram amber tint (dimmer than skin, soft limb falloff) — not opaque white/cream
+- Iris: slightly concave disc on the sphere surface following gaze, small pupil + one specular catchlight
+- Upper/lower lids **always drawn** — almond opening matching the face; blink closes them
+- Rings kept (15° / −35° / 70°); no black void
+
 ## v0.3.2 — Socket fill / ring polish
 
 - Eye sockets filled: hologram-tinted sclera, eyelids hugging the eyeball, larger iris — no pitch-black almond void

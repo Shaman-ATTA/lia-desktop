@@ -43,7 +43,8 @@ public sealed class HoloRenderer : IDisposable
     // Landmarks from lia_holo_mesh.bin meta
     static readonly Vector3 EyeL = new(-0.1610455f, 0.2527412f, 0.3928776f);
     static readonly Vector3 EyeR = new(0.1524404f, 0.2506996f, 0.3901789f);
-    const float EyeRadius = 0.072f; // fills socket; lids hug this
+    // Sphere fitted to socket; recessed so brow/nose occlude in 3/4
+    const float EyeRadius = 0.048f;
 
     ID3D11Device? _device;
     ID3D11DeviceContext? _ctx;
@@ -57,12 +58,12 @@ public sealed class HoloRenderer : IDisposable
     ID3D11VertexShader? _vs;
     ID3D11PixelShader? _psHead;
     ID3D11PixelShader? _psEye;
+    ID3D11PixelShader? _psIris;
     ID3D11PixelShader? _psLid;
     ID3D11PixelShader? _psRing;
     ID3D11InputLayout? _layout;
     ID3D11DepthStencilState? _dssWrite;
     ID3D11DepthStencilState? _dssRead;
-    ID3D11DepthStencilState? _dssOff; // eye fill into carved sockets
     ID3D11BlendState? _blendOpaque;
     ID3D11BlendState? _blendAlpha;
     ID3D11RasterizerState? _rs;
@@ -72,7 +73,6 @@ public sealed class HoloRenderer : IDisposable
     readonly List<RingMesh> _rings = [];
     PartMesh? _eyeSphere;
     PartMesh? _irisDisc;
-    PartMesh? _scleraPlate; // almond plate filling the punched fissure
     PartMesh? _lidUpper;
     PartMesh? _lidLower;
 
@@ -134,6 +134,7 @@ public sealed class HoloRenderer : IDisposable
         _vs = CompileVS(HoloShaders.Vertex, out var vsBlob);
         _psHead = CompilePS(HoloShaders.PixelHead);
         _psEye = CompilePS(HoloShaders.PixelEye);
+        _psIris = CompilePS(HoloShaders.PixelIris);
         _psLid = CompilePS(HoloShaders.PixelLid);
         _psRing = CompilePS(HoloShaders.PixelRing);
         _layout = _device.CreateInputLayout(new[]
@@ -161,12 +162,6 @@ public sealed class HoloRenderer : IDisposable
             DepthEnable = true,
             DepthWriteMask = DepthWriteMask.Zero,
             DepthFunc = ComparisonFunction.LessEqual,
-        });
-        _dssOff = _device.CreateDepthStencilState(new DepthStencilDescription
-        {
-            DepthEnable = false,
-            DepthWriteMask = DepthWriteMask.Zero,
-            DepthFunc = ComparisonFunction.Always,
         });
         _blendOpaque = _device.CreateBlendState(BlendDescription.Opaque);
         _blendAlpha = _device.CreateBlendState(BlendDescription.AlphaBlend);
@@ -297,7 +292,7 @@ public sealed class HoloRenderer : IDisposable
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
 
-        // 2) Eyes into carved sockets (depth off)
+        // 2) Eyeball spheres + lids into carved sockets (depth ON)
         DrawEyes(viewProj, headWorld, cam, blinkAmt);
 
         // 3) Amber rings — depth-tested against head, no depth write
@@ -378,77 +373,72 @@ public sealed class HoloRenderer : IDisposable
 
     void DrawEyes(Matrix4x4 viewProj, Matrix4x4 headWorld, Vector3 cam, float blinkAmt)
     {
-        if (_lidUpper == null || _lidLower == null) return;
-        // Depth OFF — carved sockets have no depth; fill must not fail the depth test
-        _ctx!.OMSetDepthStencilState(_dssOff);
+        if (_eyeSphere == null || _lidUpper == null || _lidLower == null) return;
+        // Depth ON — brow/nose/lids correctly occlude the sphere in 3/4
+        _ctx!.OMSetDepthStencilState(_dssWrite);
         _ctx.OMSetBlendState(_blendOpaque);
         var stride = (uint)Marshal.SizeOf<Vertex>();
         var lidClose = BlinkLidAmount();
+        var close = _freezeBlink ? 0f : lidClose;
 
         void DrawOne(Vector3 eyeLocal, bool left)
         {
-            var center = eyeLocal + new Vector3(0, 0.001f, 0.008f);
-            var converge = left ? 0.04f : -0.04f;
+            // Recess into socket: front of sphere sits near the face plane (not floating out)
+            var center = eyeLocal + new Vector3(0, 0f, -EyeRadius * 0.55f);
+            var converge = left ? 0.05f : -0.05f;
             var eyeRot = Matrix4x4.CreateFromYawPitchRoll(_gazeYaw + converge, _gazePitch, 0);
 
-            // Shared eye plane — oversized sclera covers carve silhouette from any angle
-            var eyePlane = center + new Vector3(0, 0, 0.04f);
+            var eyeWorld =
+                Matrix4x4.CreateScale(EyeRadius) *
+                eyeRot *
+                Matrix4x4.CreateTranslation(center) *
+                headWorld;
 
-            if (_scleraPlate != null)
-            {
-                var scleraWorld =
-                    Matrix4x4.CreateScale(0.155f, 0.088f, 1f) *
-                    eyeRot *
-                    Matrix4x4.CreateTranslation(eyePlane) *
-                    headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(scleraWorld), cam, blinkAmt, 1.3f);
-                _ctx.PSSetShader(_psEye);
-                _ctx.IASetVertexBuffer(0, _scleraPlate.Vb, stride, 0);
-                _ctx.IASetIndexBuffer(_scleraPlate.Ib, Format.R32_UInt, 0);
-                _ctx.DrawIndexed(_scleraPlate.IndexCount, 0, 0);
-            }
+            // 1) Eyeball sphere (holo sclera)
+            WriteFrame(viewProj, Matrix4x4.Transpose(eyeWorld), cam, blinkAmt, 1.0f);
+            _ctx.PSSetShader(_psEye);
+            _ctx.IASetVertexBuffer(0, _eyeSphere.Vb, stride, 0);
+            _ctx.IASetIndexBuffer(_eyeSphere.Ib, Format.R32_UInt, 0);
+            _ctx.DrawIndexed(_eyeSphere.IndexCount, 0, 0);
 
+            // 2) Concave iris on sphere +Z surface, follows gaze
             if (_irisDisc != null)
             {
-                // Flat disc in same plane as sclera (no baked z=0.88 offset) — rebuild uses z=0
+                // Disc radius ~0.52R → sits on sphere at z ≈ R·√(1−0.52²) ≈ 0.85R; nudge out vs z-fight
                 var irisWorld =
-                    Matrix4x4.CreateScale(0.095f) * // larger iris relative to sclera plate
+                    Matrix4x4.CreateScale(EyeRadius * 0.52f) *
+                    Matrix4x4.CreateTranslation(0, 0, EyeRadius * 0.88f) *
                     eyeRot *
-                    Matrix4x4.CreateTranslation(eyePlane + new Vector3(0, 0, 0.002f)) *
+                    Matrix4x4.CreateTranslation(center) *
                     headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.4f);
-                _ctx.PSSetShader(_psEye);
+                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.15f);
+                _ctx.PSSetShader(_psIris);
                 _ctx.IASetVertexBuffer(0, _irisDisc.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_irisDisc.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
-            // Lids only while blinking — open lids were covering the upper sclera
-            // with dark shells (looked like black voids). Rim of the carved socket
-            // + sclera plate already reads as an eyelid line when open.
-            var close = _freezeBlink ? 0f : lidClose;
-            if (close < 0.04f) return;
-
-            var upperAngle = MathHelper.Lerp(-0.55f, 0.72f, close);
+            // 3) Lids always on — open leaves almond; blink closes over the iris
+            var upperAngle = MathHelper.Lerp(-0.48f, 0.58f, close);
             var upperWorld =
-                Matrix4x4.CreateScale(0.145f, 0.082f, 0.145f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.14f, EyeRadius * 1.10f, EyeRadius * 1.14f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
-                Matrix4x4.CreateTranslation(eyePlane + new Vector3(0, 0, 0.004f)) *
+                Matrix4x4.CreateTranslation(center) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(upperWorld), cam, blinkAmt, 1.0f);
             _ctx.PSSetShader(_psLid);
-            _ctx.IASetVertexBuffer(0, _lidUpper!.Vb, stride, 0);
+            _ctx.IASetVertexBuffer(0, _lidUpper.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.45f, 0.0f, close);
+            var lowerAngle = MathHelper.Lerp(0.44f, -0.06f, close);
             var lowerWorld =
-                Matrix4x4.CreateScale(0.142f, 0.078f, 0.142f) *
+                Matrix4x4.CreateScale(EyeRadius * 1.12f, EyeRadius * 1.08f, EyeRadius * 1.12f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
-                Matrix4x4.CreateTranslation(eyePlane + new Vector3(0, 0, 0.004f)) *
+                Matrix4x4.CreateTranslation(center) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(lowerWorld), cam, blinkAmt, 1.0f);
-            _ctx.IASetVertexBuffer(0, _lidLower!.Vb, stride, 0);
+            _ctx.IASetVertexBuffer(0, _lidLower.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_lidLower.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidLower.IndexCount, 0, 0);
         }
@@ -514,61 +504,33 @@ public sealed class HoloRenderer : IDisposable
 
     void BuildEyes()
     {
-        _eyeSphere = CreateSphere(1f, 28, 20);
-        _irisDisc = CreateIrisDisc(1f, 48);
-        _scleraPlate = CreateScleraPlate(48);
+        _eyeSphere = CreateSphere(1f, 32, 24);
+        _irisDisc = CreateIrisDisc(48);
         _lidUpper = CreateLidShell(upper: true);
         _lidLower = CreateLidShell(upper: false);
     }
 
-    /// <summary>Unit almond in XY (a=1) — scaled per-eye to fill the punched fissure with sclera.</summary>
-    PartMesh CreateScleraPlate(int segments)
+    /// <summary>Slightly concave iris disc (z≈0, normals tilt inward) — placed on sphere +Z.</summary>
+    PartMesh CreateIrisDisc(int segments)
     {
+        const float dish = 0.12f; // concavity depth
         var verts = new List<Vertex>
         {
-            new() { Pos = Vector3.Zero, Nrm = Vector3.UnitZ, Col = new Vector4(0.9f, 0.8f, 0.6f, 0.5f) },
+            new() { Pos = new Vector3(0, 0, -dish), Nrm = Vector3.UnitZ, Col = Vector4.One },
         };
         for (var i = 0; i <= segments; i++)
         {
             var a = i / (float)segments * MathF.PI * 2;
-            // Soft almond: circle squashed slightly on Y already via transform scale
-            verts.Add(new Vertex
-            {
-                Pos = new Vector3(MathF.Cos(a), MathF.Sin(a), 0),
-                Nrm = Vector3.UnitZ,
-                Col = new Vector4(0.9f, 0.8f, 0.6f, 0.5f), // a=0.5 → PixelEye isPlate
-            });
+            var x = MathF.Cos(a);
+            var y = MathF.Sin(a);
+            var pos = new Vector3(x, y, 0);
+            // Normals tip toward center → concave bowl facing +Z after placement
+            var nrm = Vector3.Normalize(new Vector3(-x * 0.35f, -y * 0.35f, 1f));
+            verts.Add(new Vertex { Pos = pos, Nrm = nrm, Col = Vector4.One });
         }
         var indices = new List<int>();
         for (var i = 1; i <= segments; i++)
         {
-            indices.Add(0); indices.Add(i); indices.Add(i + 1);
-        }
-        var vb = _device!.CreateBuffer(verts.ToArray(), BindFlags.VertexBuffer);
-        var ib = _device.CreateBuffer(indices.ToArray(), BindFlags.IndexBuffer);
-        return new PartMesh(vb, ib, (uint)indices.Count);
-    }
-
-    /// <summary>Flat iris disc in XY (z=0) — coplanar with sclera plate.</summary>
-    PartMesh CreateIrisDisc(float radius, int segments)
-    {
-        const float z = 0f;
-        var r = radius * 0.98f;
-        var verts = new List<Vertex> { new() { Pos = new Vector3(0, 0, z), Nrm = Vector3.UnitZ, Col = Vector4.One } };
-        for (var i = 0; i <= segments; i++)
-        {
-            var a = i / (float)segments * MathF.PI * 2;
-            verts.Add(new Vertex
-            {
-                Pos = new Vector3(MathF.Cos(a) * r, MathF.Sin(a) * r, z),
-                Nrm = Vector3.UnitZ,
-                Col = Vector4.One,
-            });
-        }
-        var indices = new List<int>();
-        for (var i = 1; i <= segments; i++)
-        {
-            // CCW from +Z
             indices.Add(0); indices.Add(i); indices.Add(i + 1);
         }
         var vb = _device!.CreateBuffer(verts.ToArray(), BindFlags.VertexBuffer);
@@ -618,21 +580,23 @@ public sealed class HoloRenderer : IDisposable
         const int segU = 28, segV = 12;
         var verts = new List<Vertex>();
         var indices = new List<int>();
-        // Tight spherical shell hugging the eyeball (slightly outside unit sphere)
+        // Spherical shell hugging the eyeball — leaves almond when rotated open
         for (var i = 0; i <= segV; i++)
         {
             var vv = i / (float)segV;
             float y0, y1;
-            if (upper) { y0 = 0.02f; y1 = 1.02f; }
-            else { y0 = -1.02f; y1 = -0.02f; }
+            if (upper) { y0 = 0.08f; y1 = 1.05f; }
+            else { y0 = -1.05f; y1 = -0.08f; }
             var y = MathHelper.Lerp(y0, y1, vv);
             for (var j = 0; j <= segU; j++)
             {
                 var uu = j / (float)segU;
-                var x = MathHelper.Lerp(-1.02f, 1.02f, uu);
+                // Almond: squeeze X near the open edge
+                var xWide = MathHelper.Lerp(0.92f, 1.05f, vv);
+                var x = MathHelper.Lerp(-xWide, xWide, uu);
                 var r2 = x * x + y * y;
-                var z = MathF.Sqrt(MathF.Max(0.02f, 1.08f - r2)); // snug shell
-                var pos = Vector3.Normalize(new Vector3(x, y, z)) * 1.02f;
+                var z = MathF.Sqrt(MathF.Max(0.02f, 1.12f - r2));
+                var pos = Vector3.Normalize(new Vector3(x, y, z)) * 1.05f;
                 var nrm = Vector3.Normalize(pos);
                 verts.Add(new Vertex { Pos = pos, Nrm = nrm, Col = new Vector4(Amber, 1) });
             }
@@ -719,7 +683,6 @@ public sealed class HoloRenderer : IDisposable
         _rings.Clear();
         _eyeSphere?.Dispose();
         _irisDisc?.Dispose();
-        _scleraPlate?.Dispose();
         _lidUpper?.Dispose();
         _lidLower?.Dispose();
         _headVb?.Dispose();
@@ -732,12 +695,12 @@ public sealed class HoloRenderer : IDisposable
         _vs?.Dispose();
         _psHead?.Dispose();
         _psEye?.Dispose();
+        _psIris?.Dispose();
         _psLid?.Dispose();
         _psRing?.Dispose();
         _layout?.Dispose();
         _dssWrite?.Dispose();
         _dssRead?.Dispose();
-        _dssOff?.Dispose();
         _blendOpaque?.Dispose();
         _blendAlpha?.Dispose();
         _rs?.Dispose();
