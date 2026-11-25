@@ -47,6 +47,7 @@ public sealed class HoloRenderer : IDisposable
     const float HeadScale = 2.85f;
     const float HeadTransY = -1.06f;
     const int MsaaCount = 4;
+    int _msaaSamples = 1;
 
     ID3D11Device? _device;
     ID3D11DeviceContext? _ctx;
@@ -220,6 +221,7 @@ public sealed class HoloRenderer : IDisposable
 
         BuildRings();
         BuildEyes();
+        Program.BootLog($"InitDevice ok rings={_rings.Count} eye={_eyeSphere != null}");
         _ready = true;
     }
 
@@ -394,6 +396,8 @@ public sealed class HoloRenderer : IDisposable
             BindFlags = BindFlags.DepthStencil,
         });
         _dsvMsaa = _device.CreateDepthStencilView(_msaaDepth);
+        _msaaSamples = (int)sample.Count;
+        Program.BootLog($"RT {_width}x{_height} msaa={_msaaSamples}");
     }
 
     public IDXGIFactory2 GetDxgiFactory()
@@ -432,10 +436,13 @@ public sealed class HoloRenderer : IDisposable
             UploadHead(_morphScratch);
         }
 
-        _ctx.OMSetRenderTargets(_rtvMsaa, _dsvMsaa);
+        // Prefer drawing straight into the swapchain when MSAA is unavailable (CI/WARP).
+        var drawRtv = _msaaSamples > 1 ? _rtvMsaa! : _rtvResolve!;
+        var drawDsv = _dsvMsaa!;
+        _ctx.OMSetRenderTargets(drawRtv, drawDsv);
         _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
-        _ctx.ClearRenderTargetView(_rtvMsaa, new Color4(0.015f, 0.012f, 0.03f, 1));
-        _ctx.ClearDepthStencilView(_dsvMsaa, DepthStencilClearFlags.Depth, 1, 0);
+        _ctx.ClearRenderTargetView(drawRtv, new Color4(0.015f, 0.012f, 0.03f, 1));
+        _ctx.ClearDepthStencilView(drawDsv, DepthStencilClearFlags.Depth, 1, 0);
         _ctx.IASetInputLayout(_layout);
         _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _ctx.VSSetShader(_vs);
@@ -519,9 +526,9 @@ public sealed class HoloRenderer : IDisposable
         // 4) Rings
         _ctx.OMSetDepthStencilState(_dssRead);
         _ctx.OMSetBlendState(_blendAlpha);
+        _ctx.RSSetState(_rsNoCull);
         _ctx.PSSetShader(_psRing);
         _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
-        var ringOpacity = _ringsShowcase ? 1.0f : 1.0f;
         for (var i = 0; i < _rings.Count; i++)
         {
             var r = _rings[i];
@@ -531,21 +538,23 @@ public sealed class HoloRenderer : IDisposable
                 r.BasePitch,
                 r.BaseRoll + _time * r.SpinZ * spinBoost);
             var model = Matrix4x4.Transpose(rot * Matrix4x4.CreateTranslation(0, 0.04f, 0.07f));
-            WriteFrame(viewProj, model, cam, 0, ringOpacity);
+            WriteFrame(viewProj, model, cam, 0, 1f);
             WriteRing(r.Color, _ringsShowcase ? Math.Min(1f, r.Opacity * 1.15f) : r.Opacity);
             _ctx.IASetVertexBuffer(0, r.Vb, stride, 0);
             _ctx.IASetIndexBuffer(r.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(r.IndexCount, 0, 0);
         }
+        _ctx.RSSetState(_rs);
 
         _ctx.OMSetDepthStencilState(_dssWrite);
         _ctx.OMSetBlendState(_blendOpaque);
 
-        if (_msaaColor != null)
+        if (_msaaSamples > 1 && _msaaColor != null)
         {
             using var bb = _swap.GetBuffer<ID3D11Texture2D>(0);
             _ctx.ResolveSubresource(bb, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
         }
+        // When msaa==1 we already drew into the swapchain RTV
         _swap.Present(1, PresentFlags.None);
     }
 

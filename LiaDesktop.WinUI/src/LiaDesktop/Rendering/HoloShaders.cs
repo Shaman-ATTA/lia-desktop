@@ -47,43 +47,33 @@ struct PSIn {
   float2 uv:TEXCOORD2;
   float3 local:TEXCOORD3;
 };
-float3 unpackN(float3 t){ return normalize(t*2-1); }
 float4 main(PSIn i) : SV_TARGET {
   float3 albedo = albedoMap.Sample(samp, i.uv).rgb;
-  // Fallback if unbound / black atlas
   if (dot(albedo, albedo) < 1e-6) albedo = float3(0.78, 0.55, 0.42);
-  // sRGB-ish decode
   albedo = pow(max(albedo, 1e-4), 2.2);
-  float3 nm = unpackN(normalMap.Sample(samp, i.uv).xyz);
-  // Tangent-ish: blend map into geometric normal (cheap, no TBN)
-  float3 N = normalize(normalize(i.nrm) + nm * float3(1,1,0.55) * 0.55);
+  float3 nm = normalMap.Sample(samp, i.uv).xyz * 2 - 1;
+  float3 N = normalize(normalize(i.nrm) + nm * float3(1,1,0.55) * 0.45);
   float3 V = normalize(camPos - i.world);
   float3 L = normalize(float3(0.35, 0.55, 0.75));
   float3 H = normalize(L+V);
-  float wrap = saturate((dot(N,L)+0.45)/1.45); // SSS-ish wrap
+  float wrap = saturate((dot(N,L)+0.45)/1.45);
   float ndl = saturate(dot(N,L));
   float rough = ormMap.Sample(samp, i.uv).g;
   float specPow = lerp(96.0, 12.0, rough);
   float spec = pow(saturate(dot(N,H)), specPow) * (1.0 - rough) * 0.55;
-  // Warm key + cool fill
   float3 key = float3(1.00, 0.92, 0.82);
   float3 fill = float3(0.45, 0.55, 0.75);
-  float3 ambient = float3(0.18, 0.16, 0.15);
+  float3 ambient = float3(0.22, 0.18, 0.16);
   float3 diffuse = albedo * (ambient + key * wrap * 0.95 + fill * (1.0-ndl) * 0.22);
-  // Cheek/ear SSS boost
-  float sss = saturate(1.0 - abs(i.local.x)*4.0) * saturate(0.55 - i.local.y) * 0.15;
+  float sss = saturate(1.0 - abs(i.local.x)*8.0) * 0.12;
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
   float3 color = diffuse + key * spec;
-
-  // --- Subtle hologram veil (do NOT blow out) ---
   float fres = pow(1.0 - saturate(dot(N,V)), 2.4);
-  float scan = 0.04 * sin((i.world.y + time*0.15)*140.0);
-  float glitch = 0.015 * step(0.985, frac(sin(dot(i.uv, float2(12.9,78.2))+time)*43758.5));
+  float scan = 0.035 * sin((i.world.y + time*0.15)*140.0);
   float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.05, 0.95, 0.82), 0.18); // slight warm
-  color += amber * fres * 0.22 * glow;
-  color += amber * (scan + glitch);
-  // Opaque body — edge hologram via color only (alpha broke SwapChain clear look)
+  color = lerp(color, color * float3(1.05, 0.95, 0.82), 0.18);
+  color += amber * fres * 0.20 * glow;
+  color += amber * scan;
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
   return float4(color, 1.0);
@@ -111,7 +101,6 @@ float4 main(PSIn i) : SV_TARGET {
   float a = max(op.a, max(op.r, max(op.g, op.b)));
   clip(a - 0.12);
   float3 alb = albedoMap.Sample(samp, i.uv).rgb;
-  // If opacity atlas is greyscale cards, tint with warm brown + albedo sample
   float3 hairCol = lerp(float3(0.12, 0.07, 0.04), alb, 0.55);
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
@@ -140,7 +129,6 @@ struct PSIn {
   float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
-  // Soft pale sclera (not grey metal)
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
   float3 L = normalize(float3(0.3, 0.5, 0.8));
@@ -171,27 +159,21 @@ float4 main(PSIn i) : SV_TARGET {
   float2 p = i.uv * 2 - 1;
   float r = length(p);
   clip(0.98 - r);
-  // Hazel-brown photoreal iris
   float angle = atan2(p.y, p.x);
   float radial = 0.55 + 0.45 * sin(angle * 14.0 + r * 9.0);
   float3 iris = lerp(float3(0.18, 0.10, 0.05), float3(0.45, 0.28, 0.12), radial);
   iris = lerp(iris, float3(0.55, 0.40, 0.22), saturate(1.0 - r * 1.2) * 0.35);
-  // Pupil
   float pupil = smoothstep(0.28, 0.18, r);
   iris = lerp(iris, float3(0.02, 0.01, 0.01), pupil);
-  // Limbus
   iris *= smoothstep(1.0, 0.72, r);
-  // Wet cornea catchlight (single small specular)
   float3 V = normalize(camPos - i.world);
   float3 N = normalize(i.nrm);
   float3 L = normalize(float3(0.45, 0.65, 0.55));
   float3 H = normalize(L+V);
   float catchl = pow(saturate(dot(N,H)), 220.0);
-  // Offset catchlight blob in UV
   float2 c = p - float2(-0.22, 0.28);
   float blob = saturate(1.0 - length(c)/0.12);
   float3 color = iris + float3(1,1,1) * (catchl * 0.55 + blob * blob * 0.85);
-  // Subtle amber holo
   color = lerp(color, color * float3(1.08, 0.95, 0.75), 0.15);
   color = pow(saturate(color), 1.0/2.2);
   return float4(color, 1);
@@ -269,6 +251,6 @@ float4 main(PSIn i) : SV_TARGET {
   float fres = pow(1.0 - saturate(dot(N,V)), 2.0);
   float pulse = 0.85 + 0.15 * sin(time * 2.2 + i.local.x * 6.0);
   float3 c = color * (0.55 + fres * 0.9) * pulse;
-  return float4(c, opacity * (0.35 + fres * 0.55));
+  return float4(c, saturate(opacity * (0.55 + fres * 0.45)));
 }";
 }
