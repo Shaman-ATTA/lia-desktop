@@ -412,7 +412,7 @@ public sealed class HoloRenderer : IDisposable
             {
                 // Flat disc in same plane as sclera (no baked z=0.88 offset) — rebuild uses z=0
                 var irisWorld =
-                    Matrix4x4.CreateScale(0.078f) *
+                    Matrix4x4.CreateScale(0.095f) * // larger iris relative to sclera plate
                     eyeRot *
                     Matrix4x4.CreateTranslation(eyePlane + new Vector3(0, 0, 0.002f)) *
                     headWorld;
