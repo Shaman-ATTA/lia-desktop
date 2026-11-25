@@ -51,8 +51,8 @@ public sealed class HoloRenderer : IDisposable
     static readonly Vector3 Amber = new(1f, 0.55f, 0.22f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
-    const float HeadScale = 2.85f;
-    const float HeadTransY = -1.06f;
+    const float HeadScale = 2.35f;
+    const float HeadTransY = -0.88f;
     const int MsaaCount = 4;
     int _msaaSamples = 1;
 
@@ -70,6 +70,8 @@ public sealed class HoloRenderer : IDisposable
     ID3D11Buffer? _frameCb;
     ID3D11Buffer? _ringCb;
     ID3D11Buffer? _fxaaCb;
+    ID3D11Buffer? _fsVb; // fullscreen triangle for FXAA
+    ID3D11InputLayout? _fsLayout;
     ID3D11Buffer? _headVb;
     ID3D11Buffer? _headIb;
     ID3D11Buffer? _hairVb;
@@ -171,7 +173,7 @@ public sealed class HoloRenderer : IDisposable
         _ctx = _device.ImmediateContext;
 
         _vs = CompileVS(HoloShaders.Vertex, out var vsBlob);
-        _vsFxaa = CompileVS(HoloShaders.VertexFxaa, out var _fxaaBlob);
+        _vsFxaa = CompileVS(HoloShaders.VertexFxaa, out var fxaaBlob);
         _psSkin = CompilePS(HoloShaders.PixelSkin);
         _psHair = CompilePS(HoloShaders.PixelHair);
         _psEye = CompilePS(HoloShaders.PixelEye);
@@ -186,6 +188,18 @@ public sealed class HoloRenderer : IDisposable
             new InputElementDescription("NORMAL", 0, Format.R32G32B32_Float, 12, 0),
             new InputElementDescription("TEXCOORD", 0, Format.R32G32_Float, 24, 0),
         }, vsBlob.Span);
+        _fsLayout = _device.CreateInputLayout(new[]
+        {
+            new InputElementDescription("POSITION", 0, Format.R32G32_Float, 0, 0),
+            new InputElementDescription("TEXCOORD", 0, Format.R32G32_Float, 8, 0),
+        }, fxaaBlob.Span);
+        // Fullscreen triangle in clip space (pos.xy + uv)
+        _fsVb = _device.CreateBuffer(new FsVert[]
+        {
+            new(-1f, -1f, 0f, 1f),
+            new(-1f,  3f, 0f, -1f),
+            new( 3f, -1f, 2f, 1f),
+        }, BindFlags.VertexBuffer);
 
         _frameCb = _device.CreateBuffer(new BufferDescription(
             (uint)Marshal.SizeOf<FrameCB>(), BindFlags.ConstantBuffer,
@@ -512,26 +526,26 @@ public sealed class HoloRenderer : IDisposable
         float nearPlane = 0.08f;
         if (_eyesCloseup)
         {
-            // Frame both eyes: world eye Y≈0.15, span≈0.185
-            lookAt = new Vector3(0f, 0.155f, 0.08f);
-            cam = new Vector3(0f, 0.155f, 1.15f);
-            fovDeg = 22f;
+            // Both eyes fully in frame (world eyes ≈ y=0.12 after HeadScale 2.35)
+            lookAt = new Vector3(0f, 0.125f, 0.06f);
+            cam = new Vector3(0f, 0.125f, 1.05f);
+            fovDeg = 24f;
             nearPlane = 0.08f;
         }
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.08f;
-            cam = new Vector3(orbit, 0.06f, 2.70f);
-            lookAt = new Vector3(0, 0.02f, 0.02f);
-            fovDeg = 30f;
+            cam = new Vector3(orbit, 0.02f, 3.35f);
+            lookAt = new Vector3(0, 0.0f, 0.0f);
+            fovDeg = 28f;
         }
         else
         {
-            // Zoom out ~20% so crown + upper neck fit with margin
-            var orbit = MathF.Sin(_time * 0.09f) * 0.05f;
-            cam = new Vector3(orbit, 0.04f, 2.75f);
-            lookAt = new Vector3(0, 0.02f, 0.02f);
-            fovDeg = 26f;
+            // Full head + upper neck with margin (crown not cropped, stump below fade)
+            var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
+            cam = new Vector3(orbit, 0.0f, 3.25f);
+            lookAt = new Vector3(0, 0.0f, 0.0f);
+            fovDeg = 28f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
         var proj = Matrix4x4.CreatePerspectiveFieldOfView(fovDeg * MathF.PI / 180f, aspect, nearPlane, 40f);
@@ -611,66 +625,67 @@ public sealed class HoloRenderer : IDisposable
         // Unbind RTs before resolve/copy (MSAA DSV must not stay bound with 1x swap)
         _ctx.OMSetRenderTargets(Array.Empty<ID3D11RenderTargetView>(), null);
 
-        if (_msaaSamples > 1 && _msaaColor != null)
+        // Resolve into scene color
+        if (_msaaSamples > 1 && _msaaColor != null && _sceneColor != null)
+            _ctx.ResolveSubresource(_sceneColor, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
+        // msaa==1 already drew into _rtvScene
+
+        // Always blit scene → swap first (known-good), then FXAA overwrite
+        using (var bb = _swap.GetBuffer<ID3D11Texture2D>(0))
         {
-            // Proven path (v0.5.0): resolve MSAA straight into swapchain
-            using var bb = _swap.GetBuffer<ID3D11Texture2D>(0);
-            _ctx.ResolveSubresource(bb, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
-        }
-        else if (_sceneColor != null)
-        {
-            // MSAA unavailable — FXAA (or CopyResource fallback) is the AA
-            if (!ApplyFxaa())
-            {
-                using var bb = _swap.GetBuffer<ID3D11Texture2D>(0);
+            if (_sceneColor != null)
                 _ctx.CopyResource(bb, _sceneColor);
-            }
         }
+        ApplyFxaa(); // best-effort AA; CopyResource already filled swap
         _swap.Present(1, PresentFlags.None);
     }
 
     bool ApplyFxaa()
     {
         if (_ctx == null || _rtvSwap == null || _srvScene == null || _psFxaa == null || _vsFxaa == null ||
-            _fxaaCb == null || _sceneColor == null)
+            _fxaaCb == null || _sceneColor == null || _fsVb == null || _fsLayout == null)
             return false;
 
-        // Fullscreen FXAA into swapchain (1x). Explicit null DSV avoids MSAA depth mismatch.
-        _ctx.OMSetRenderTargets(new[] { _rtvSwap }, null);
-        _ctx.OMSetDepthStencilState(_dssOff);
-        _ctx.OMSetBlendState(_blendOpaque);
-        _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
-        _ctx.RSSetState(_rs);
-        _ctx.IASetInputLayout(null);
-        _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
-        _ctx.VSSetShader(_vsFxaa);
-        _ctx.PSSetShader(_psFxaa);
-        _ctx.VSSetConstantBuffer(0, _fxaaCb);
-        _ctx.PSSetConstantBuffer(0, _fxaaCb);
-        _ctx.PSSetShaderResources(0, new[] { _srvScene });
-        if (_samplerLinearClamp != null)
-            _ctx.PSSetSamplers(0, new[] { _samplerLinearClamp });
-
-        var mapped = _ctx.Map(_fxaaCb, MapMode.WriteDiscard, MapFlags.None);
-        unsafe
+        try
         {
-            *(FxaaCB*)mapped.DataPointer = new FxaaCB
-            {
-                InvSize = new Vector2(1f / Math.Max(1, _width), 1f / Math.Max(1, _height)),
-            };
-        }
-        _ctx.Unmap(_fxaaCb, 0);
-        _ctx.Draw(3, 0);
+            _ctx.OMSetRenderTargets(new[] { _rtvSwap }, null);
+            _ctx.OMSetDepthStencilState(_dssOff);
+            _ctx.OMSetBlendState(_blendOpaque);
+            _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
+            _ctx.RSSetState(_rs);
+            _ctx.IASetInputLayout(_fsLayout);
+            _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+            _ctx.IASetVertexBuffer(0, _fsVb, 16, 0);
+            _ctx.VSSetShader(_vsFxaa);
+            _ctx.PSSetShader(_psFxaa);
+            _ctx.VSSetConstantBuffer(0, _fxaaCb);
+            _ctx.PSSetConstantBuffer(0, _fxaaCb);
+            _ctx.PSSetShaderResources(0, new[] { _srvScene });
+            if (_samplerLinearClamp != null)
+                _ctx.PSSetSamplers(0, new[] { _samplerLinearClamp });
 
-        // Unbind SRV so next frame can rebind scene as RT (msaa==1 path)
-        _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
-        _ctx.OMSetRenderTargets(Array.Empty<ID3D11RenderTargetView>(), null);
-        _ctx.VSSetShader(_vs);
-        _ctx.IASetInputLayout(_layout);
-        if (_samplerLinearWrap != null)
-            _ctx.PSSetSamplers(0, new[] { _samplerLinearWrap });
-        _ctx.VSSetConstantBuffer(0, _frameCb);
-        _ctx.PSSetConstantBuffer(0, _frameCb);
+            var mapped = _ctx.Map(_fxaaCb, MapMode.WriteDiscard, MapFlags.None);
+            unsafe
+            {
+                *(FxaaCB*)mapped.DataPointer = new FxaaCB
+                {
+                    InvSize = new Vector2(1f / Math.Max(1, _width), 1f / Math.Max(1, _height)),
+                };
+            }
+            _ctx.Unmap(_fxaaCb, 0);
+            _ctx.Draw(3, 0);
+        }
+        finally
+        {
+            _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
+            _ctx.OMSetRenderTargets(Array.Empty<ID3D11RenderTargetView>(), null);
+            _ctx.VSSetShader(_vs);
+            _ctx.IASetInputLayout(_layout);
+            if (_samplerLinearWrap != null)
+                _ctx.PSSetSamplers(0, new[] { _samplerLinearWrap });
+            _ctx.VSSetConstantBuffer(0, _frameCb);
+            _ctx.PSSetConstantBuffer(0, _frameCb);
+        }
         return true;
     }
 
@@ -1035,10 +1050,10 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        // Large thin amber orbits — outside face silhouette; depth test dims back half
-        Add(0.78f, 0.00055f, 18f, 0.02f, 0.04f, 0.10f, 0.009f, 0.38f);
-        Add(0.90f, 0.00048f, -32f, 0.06f, -0.08f, -0.07f, 0.012f, 0.32f);
-        Add(1.02f, 0.00042f, 62f, -0.04f, 0.10f, 0.05f, 0.007f, 0.26f);
+        // Nearly-horizontal thin amber halos — avoid vertical chords across the face
+        Add(1.20f, 0.00038f, 7f, 0.01f, 0.02f, 0.08f, 0.007f, 0.30f);
+        Add(1.38f, 0.00032f, -11f, 0.04f, -0.03f, -0.06f, 0.010f, 0.24f);
+        Add(1.55f, 0.00028f, 16f, -0.02f, 0.05f, 0.04f, 0.006f, 0.18f);
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
@@ -1139,6 +1154,8 @@ public sealed class HoloRenderer : IDisposable
         _psRing?.Dispose();
         _psFxaa?.Dispose();
         _layout?.Dispose();
+        _fsLayout?.Dispose();
+        _fsVb?.Dispose();
         _dssWrite?.Dispose();
         _dssRead?.Dispose();
         _dssOff?.Dispose();

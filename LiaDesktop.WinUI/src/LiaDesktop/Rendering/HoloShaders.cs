@@ -69,19 +69,18 @@ float4 main(PSIn i) : SV_TARGET {
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
   float3 color = diffuse + key * spec;
 
-  // Subtle amber hologram veil (~18% tint, thin scanlines, fresnel rim)
+  // Amber hologram veil (~20% tint, thin scanlines, fresnel rim, edge soft-out)
   float ndv = saturate(dot(N,V));
-  float fres = pow(1.0 - ndv, 2.6);
-  float scan = 0.022 * sin((i.world.y + time*0.14)*125.0);
+  float fres = pow(1.0 - ndv, 2.4);
+  float scan = 0.038 * sin((i.world.y + time*0.14)*130.0);
   float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.10, 0.90, 0.70), 0.18);
-  color += amber * fres * 0.22 * glow;
+  color = lerp(color, color * float3(1.12, 0.88, 0.65), 0.20);
+  color += amber * fres * 0.30 * glow;
   color += amber * scan;
-  // Soft silhouette dissolve into void (edge transparency feel)
-  float edgeKeep = lerp(0.62, 1.0, saturate(ndv * 1.25 + 0.05));
+  float edgeKeep = lerp(0.50, 1.0, saturate(ndv * 1.35 + 0.02));
   color *= edgeKeep;
-  // Neck stump → darkness (local Y: chin~0.37, neck stump~0.20)
-  float neck = smoothstep(0.195, 0.335, i.local.y);
+  // Neck stump → darkness (start fade under chin)
+  float neck = smoothstep(0.24, 0.40, i.local.y);
   color *= neck;
 
   color = color / (1.0 + color * 0.65);
@@ -111,26 +110,21 @@ float4 main(PSIn i) : SV_TARGET {
   float4 op = opacityMap.Sample(samp, i.uv);
   float a = op.a;
   if (a < 0.02) a = max(op.r, max(op.g, op.b));
-  // Hard alpha-test kills sparkly fringe / MSAA glitter on lash cards
-  clip(a - 0.42);
+  // Hard alpha-test — kills glitter fringe on lash/hair cards
+  clip(a - 0.50);
 
-  // Force dark hair/lash color — never additive gold/white
-  float3 hairCol = op.rgb;
-  float luma = dot(hairCol, float3(0.299, 0.587, 0.114));
-  // Lash cards often have pale RGB with coverage in A → crush to dark brown/black
-  if (luma > 0.25 || a < 0.72)
-    hairCol = float3(0.04, 0.025, 0.018);
-  else
-    hairCol = lerp(float3(0.05, 0.03, 0.02), hairCol * 0.55, 0.7);
-  hairCol = min(hairCol, float3(0.14, 0.09, 0.06));
+  // Always dark — lashes must never read as white/gold sparkle
+  float3 hairCol = float3(0.035, 0.022, 0.015);
+  float luma = dot(op.rgb, float3(0.299, 0.587, 0.114));
+  if (luma < 0.22 && a > 0.75)
+    hairCol = lerp(hairCol, op.rgb * 0.35, 0.45);
+  hairCol = min(hairCol, float3(0.10, 0.06, 0.04));
 
   float3 N = normalize(i.nrm);
   float3 L = normalize(float3(0.3, 0.7, 0.6));
-  float ndl = saturate(dot(N,L)*0.5+0.5);
-  // No amber fresnel / strand sparkle on hair or lashes
-  float3 color = hairCol * (0.45 + ndl * 0.55);
+  float ndl = saturate(dot(N,L)*0.45+0.55);
+  float3 color = hairCol * ndl;
   color = pow(saturate(color), 1.0/2.2);
-  // Opaque-ish after clip (premultiplied-safe)
   return float4(color, 1.0);
 }";
 
@@ -272,20 +266,26 @@ struct PSIn {
 float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
-  float fres = pow(1.0 - saturate(dot(N,V)), 2.4);
-  float pulse = 0.90 + 0.10 * sin(time * 1.6 + i.local.x * 4.0);
-  // Soft amber, not bright yellow
-  float3 c = color * (0.40 + fres * 0.55) * pulse;
-  return float4(c, saturate(opacity * (0.40 + fres * 0.35)));
+  float fres = pow(1.0 - saturate(dot(N,V)), 2.6);
+  float pulse = 0.92 + 0.08 * sin(time * 1.4 + i.local.x * 3.0);
+  // Soft amber — dim the camera-facing arc so it doesn't chord across the face
+  float3 headC = float3(0, 0.04, 0);
+  float towardCam = dot(normalize(i.world - headC), normalize(camPos - headC));
+  float frontDim = lerp(1.0, 0.12, pow(saturate(towardCam), 1.8));
+  float3 c = color * (0.35 + fres * 0.40) * pulse;
+  float a = saturate(opacity * (0.35 + fres * 0.30) * frontDim);
+  clip(a - 0.02);
+  return float4(c, a);
 }";
 
-    /// <summary>Fullscreen triangle VS — SV_VertexID 0..2.</summary>
+    /// <summary>Fullscreen triangle VS — POSITION.xy = clip, zw unused; TEXCOORD = uv.</summary>
     public const string VertexFxaa = @"
+struct VSIn { float2 pos:POSITION; float2 uv:TEXCOORD0; };
 struct VSOut { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; };
-VSOut main(uint id:SV_VertexID) {
+VSOut main(VSIn i) {
   VSOut o;
-  o.uv = float2((id << 1) & 2, id & 2);
-  o.pos = float4(o.uv * float2(2, -2) + float2(-1, 1), 0, 1);
+  o.pos = float4(i.pos, 0, 1);
+  o.uv = i.uv;
   return o;
 }";
 
