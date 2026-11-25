@@ -62,6 +62,7 @@ public sealed class HoloRenderer : IDisposable
     ID3D11InputLayout? _layout;
     ID3D11DepthStencilState? _dssWrite;
     ID3D11DepthStencilState? _dssRead;
+    ID3D11DepthStencilState? _dssOff; // eye fill into carved sockets
     ID3D11BlendState? _blendOpaque;
     ID3D11BlendState? _blendAlpha;
     ID3D11RasterizerState? _rs;
@@ -160,6 +161,12 @@ public sealed class HoloRenderer : IDisposable
             DepthEnable = true,
             DepthWriteMask = DepthWriteMask.Zero,
             DepthFunc = ComparisonFunction.LessEqual,
+        });
+        _dssOff = _device.CreateDepthStencilState(new DepthStencilDescription
+        {
+            DepthEnable = false,
+            DepthWriteMask = DepthWriteMask.Zero,
+            DepthFunc = ComparisonFunction.Always,
         });
         _blendOpaque = _device.CreateBlendState(BlendDescription.Opaque);
         _blendAlpha = _device.CreateBlendState(BlendDescription.AlphaBlend);
@@ -290,10 +297,10 @@ public sealed class HoloRenderer : IDisposable
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
 
-        // 2) Eyeballs + eyelids (in head space, then headWorld)
+        // 2) Eyes into carved sockets (depth off)
         DrawEyes(viewProj, headWorld, cam, blinkAmt);
 
-        // 3) Amber rings — depth-tested, no depth write
+        // 3) Amber rings — depth-tested against head, no depth write
         _ctx.OMSetDepthStencilState(_dssRead);
         _ctx.OMSetBlendState(_blendAlpha);
         _ctx.PSSetShader(_psRing);
@@ -371,8 +378,9 @@ public sealed class HoloRenderer : IDisposable
 
     void DrawEyes(Matrix4x4 viewProj, Matrix4x4 headWorld, Vector3 cam, float blinkAmt)
     {
-        if (_eyeSphere == null || _lidUpper == null || _lidLower == null) return;
-        _ctx!.OMSetDepthStencilState(_dssWrite);
+        if (_lidUpper == null || _lidLower == null) return;
+        // Depth OFF — carved sockets have no depth; fill must not fail the depth test
+        _ctx!.OMSetDepthStencilState(_dssOff);
         _ctx.OMSetBlendState(_blendOpaque);
         var stride = (uint)Marshal.SizeOf<Vertex>();
         var lidClose = BlinkLidAmount();
@@ -382,49 +390,44 @@ public sealed class HoloRenderer : IDisposable
             var center = eyeLocal + new Vector3(0, 0.001f, 0.008f);
             var converge = left ? 0.04f : -0.04f;
             var eyeRot = Matrix4x4.CreateFromYawPitchRoll(_gazeYaw + converge, _gazePitch, 0);
-            var eyeWorld =
-                Matrix4x4.CreateScale(EyeRadius) *
-                eyeRot *
-                Matrix4x4.CreateTranslation(center) *
-                headWorld;
 
-            // 1) Large almond sclera disc fills the carved socket (holo-tinted white)
+            // 1) Large almond sclera — must fully cover carved hole
             if (_scleraPlate != null)
             {
                 var scleraWorld =
-                    Matrix4x4.CreateScale(0.105f, 0.058f, 1f) *
+                    Matrix4x4.CreateScale(0.115f, 0.064f, 1f) *
                     eyeRot *
-                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.025f)) *
+                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.03f)) *
                     headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(scleraWorld), cam, blinkAmt, 1.2f);
+                WriteFrame(viewProj, Matrix4x4.Transpose(scleraWorld), cam, blinkAmt, 1.25f);
                 _ctx.PSSetShader(_psEye);
                 _ctx.IASetVertexBuffer(0, _scleraPlate.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_scleraPlate.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(_scleraPlate.IndexCount, 0, 0);
             }
 
-            // 2) Iris/pupil on top — larger relative to the eye opening
+            // 2) Large iris on sclera
             if (_irisDisc != null)
             {
                 var irisWorld =
-                    Matrix4x4.CreateScale(0.062f) *
+                    Matrix4x4.CreateScale(0.070f) *
                     eyeRot *
-                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.040f)) *
+                    Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.045f)) *
                     headWorld;
-                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.35f);
+                WriteFrame(viewProj, Matrix4x4.Transpose(irisWorld), cam, blinkAmt, 1.4f);
                 _ctx.PSSetShader(_psEye);
                 _ctx.IASetVertexBuffer(0, _irisDisc.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(_irisDisc.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(_irisDisc.IndexCount, 0, 0);
             }
 
-            // 3) Lids hug the sclera disc edges
+            // 3) Lids hug sclera rim
             var close = _freezeBlink ? 0f : lidClose;
-            var upperAngle = MathHelper.Lerp(-0.16f, 0.72f, close);
+            var upperAngle = MathHelper.Lerp(-0.14f, 0.72f, close);
             var upperWorld =
-                Matrix4x4.CreateScale(0.100f, 0.058f, 0.100f) *
+                Matrix4x4.CreateScale(0.110f, 0.062f, 0.110f) *
                 Matrix4x4.CreateRotationX(upperAngle) *
-                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.030f)) *
+                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.035f)) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(upperWorld), cam, blinkAmt, 1.0f);
             _ctx.PSSetShader(_psLid);
@@ -432,18 +435,16 @@ public sealed class HoloRenderer : IDisposable
             _ctx.IASetIndexBuffer(_lidUpper.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidUpper.IndexCount, 0, 0);
 
-            var lowerAngle = MathHelper.Lerp(0.16f, 0.0f, close);
+            var lowerAngle = MathHelper.Lerp(0.14f, 0.0f, close);
             var lowerWorld =
-                Matrix4x4.CreateScale(0.098f, 0.055f, 0.098f) *
+                Matrix4x4.CreateScale(0.108f, 0.058f, 0.108f) *
                 Matrix4x4.CreateRotationX(lowerAngle) *
-                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.030f)) *
+                Matrix4x4.CreateTranslation(center + new Vector3(0, 0, 0.035f)) *
                 headWorld;
             WriteFrame(viewProj, Matrix4x4.Transpose(lowerWorld), cam, blinkAmt, 1.0f);
             _ctx.IASetVertexBuffer(0, _lidLower!.Vb, stride, 0);
             _ctx.IASetIndexBuffer(_lidLower.Ib, Format.R32_UInt, 0);
             _ctx.DrawIndexed(_lidLower.IndexCount, 0, 0);
-
-            _ = eyeWorld;
         }
 
         DrawOne(EyeL, left: true);
@@ -730,6 +731,7 @@ public sealed class HoloRenderer : IDisposable
         _layout?.Dispose();
         _dssWrite?.Dispose();
         _dssRead?.Dispose();
+        _dssOff?.Dispose();
         _blendOpaque?.Dispose();
         _blendAlpha?.Dispose();
         _rs?.Dispose();

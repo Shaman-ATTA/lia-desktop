@@ -152,41 +152,41 @@ float4 main(PSIn i) : SV_TARGET {
 
   float2 xy = i.local.xy;
   float r = length(xy);
-  // Iris disc at z≈0.88; sphere uses full z — leave visible sclera ring around iris
   float isDisc = saturate(1.0 - abs(i.local.z - 0.88) * 20.0);
-  float front = max(saturate(i.local.z * 1.6 + 0.2), isDisc);
-
-  // Bright hologram-tinted sclera — must read as “eye white”, not dark void
-  float3 amber = float3(1.0, 0.62, 0.22);
-  float3 gold = float3(1.0, 0.78, 0.42);
-  float3 sclera = float3(0.92, 0.82, 0.62);
-  float3 irisOuter = float3(0.32, 0.14, 0.04);
-  float3 irisInner = float3(0.82, 0.45, 0.14);
-  float3 pupil = float3(0.01, 0.008, 0.005);
-
-  // Larger iris; sclera plate (col.a≈0.5) forces full sclera fill
   float isPlate = saturate(1.0 - abs(i.col.a - 0.5) * 20.0);
-  float irisR = lerp(0.82, 0.88, isDisc) * (1.0 - isPlate);
-  float pupilR = lerp(0.32, 0.36, isDisc) * (1.0 - isPlate);
-  float irisMask = (1.0 - smoothstep(irisR * 0.86, irisR, r)) * front;
-  float pupilMask = (1.0 - smoothstep(pupilR * 0.7, pupilR, r)) * front;
-  float limbus = smoothstep(irisR * 0.78, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.1, r)) * front;
 
+  float3 amber = float3(1.0, 0.62, 0.22);
+  float3 gold = float3(1.0, 0.82, 0.48);
+  float3 sclera = float3(0.97, 0.90, 0.74);
+
+  // Sclera almond — solid bright fill
+  if (isPlate > 0.5) {
+    float3 c = sclera * (0.88 + diff * 0.2);
+    c += amber * pow(1.0 - ndv, 2.0) * 0.35;
+    c += gold * 0.1;
+    return float4(saturate(c), 1.0);
+  }
+
+  float irisR = 0.92;
+  float pupilR = 0.36;
+  float irisMask = 1.0 - smoothstep(irisR * 0.88, irisR, r);
+  float pupilMask = 1.0 - smoothstep(pupilR * 0.7, pupilR, r);
+  float limbus = smoothstep(irisR * 0.8, irisR, r) * (1.0 - smoothstep(irisR, irisR * 1.08, r));
   float ang = atan2(xy.y, xy.x);
   float spoke = 0.78 + 0.22 * sin(ang * 12.0 + r * 16.0);
-  float3 iris = lerp(irisInner, irisOuter, saturate(r / max(irisR, 1e-3))) * spoke;
+  float3 irisOuter = float3(0.30, 0.13, 0.04);
+  float3 irisInner = float3(0.85, 0.48, 0.14);
+  float3 pupil = float3(0.01, 0.008, 0.005);
+  float3 iris = lerp(irisInner, irisOuter, saturate(r / irisR)) * spoke;
 
-  float fres = pow(1.0 - ndv, 2.2);
-  float3 col = sclera * (0.72 + diff * 0.35);
-  col += amber * fres * 0.28;
-  col += gold * isPlate * 0.12;
-  col = lerp(col, iris, irisMask * (1.0 - isPlate));
-  col = lerp(col, pupil, pupilMask * (1.0 - isPlate));
-  col += gold * limbus * 0.45 * (1.0 - isPlate);
-  col += float3(1.0, 0.96, 0.88) * spec * irisMask * 0.85 * (1.0 - isPlate);
-  float2 catchUv = xy - float2(0.16, 0.12) * max(irisR, 0.2);
-  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.11 * max(irisR, 0.2), length(catchUv))) * irisMask * 0.8 * (1.0 - isPlate);
-  col += amber * pow(1.0 - ndv, 2.5) * 0.14 * glow;
+  float3 col = sclera * 0.25;
+  col = lerp(col, iris, irisMask);
+  col = lerp(col, pupil, pupilMask);
+  col += gold * limbus * 0.5;
+  col += float3(1.0, 0.96, 0.88) * spec * irisMask;
+  float2 catchUv = xy - float2(0.18, 0.14) * irisR;
+  col += float3(1.0, 0.95, 0.85) * (1.0 - smoothstep(0.0, 0.12 * irisR, length(catchUv))) * irisMask * 0.9;
+  col += amber * pow(1.0 - ndv, 2.5) * 0.12 * glow * isDisc;
 
   return float4(saturate(col), 1.0);
 }
