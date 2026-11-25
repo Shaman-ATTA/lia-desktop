@@ -12,7 +12,8 @@
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
-    <WindowsAppSdkBootstrapInitialize>true</WindowsAppSdkBootstrapInitialize>
+    <!-- Self-contained: skip auto Bootstrap (avoids "install Windows App Runtime" dialog) -->
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
     <EnableMsixTooling>false</EnableMsixTooling>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>false</PublishSingleFile>

@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using LiaDesktop.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using Microsoft.Windows.ApplicationModel.DynamicDependency;
 using WinRT;
 
 namespace LiaDesktop;
@@ -33,20 +32,11 @@ public static class Program
 
         try
         {
+            // Self-contained WinAppSDK: do NOT call Bootstrap.Initialize — that prompts for
+            // the framework MSIX. Local Microsoft.WindowsAppRuntime*.dll next to the exe is enough.
             using var job = JobObject.CreateKillOnClose($"LiaDesktopJob-{Environment.ProcessId}");
             job.AssignCurrentProcess();
             BootLog("job ok");
-
-            // Explicit bootstrap for unpackaged + custom Main (DISABLE_XAML_GENERATED_MAIN)
-            try
-            {
-                Bootstrap.Initialize(0x00010006);
-                BootLog("WindowsAppRuntime Bootstrap ok");
-            }
-            catch (Exception bex)
-            {
-                BootLog("Bootstrap warn: " + bex.Message);
-            }
 
             XamlCheckProcessRequirements();
             BootLog("xaml check ok");
