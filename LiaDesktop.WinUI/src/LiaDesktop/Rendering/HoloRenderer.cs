@@ -1192,6 +1192,13 @@ public sealed class HoloRenderer : IDisposable
     }
 }
 
+[StructLayout(LayoutKind.Sequential)]
+struct FsVert
+{
+    public float X, Y, U, V;
+    public FsVert(float x, float y, float u, float v) { X = x; Y = y; U = u; V = v; }
+}
+
 static class MathHelper
 {
     public static float Lerp(float a, float b, float t) => a + (b - a) * Math.Clamp(t, 0f, 1f);
