@@ -1,0 +1,100 @@
+{
+  "name": "lia-assistant",
+  "productName": "Lia Assistant",
+  "version": "0.1.0",
+  "description": "Lia Assistant — ATTA CORP desktop (N-33 FREE, personal use)",
+  "author": "ATTA CORP",
+  "license": "UNLICENSED",
+  "main": "dist-electron/main.js",
+  "homepage": "./",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.node.json --noEmit false && vite build && tsc -p tsconfig.node.json",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.node.json",
+    "start": "electron .",
+    "pack:dir": "npm run build && electron-builder --dir",
+    "pack:win": "npm run build && electron-builder --win zip portable --x64 -c.win.signAndEditExecutable=false",
+    "pack:linux": "npm run build && electron-builder --linux dir --x64",
+    "pack:zip": "npm run build && electron-builder --win zip --x64 -c.win.signAndEditExecutable=false",
+    "capture": "node scripts/capture-demo.mjs",
+    "postinstall": "electron-builder install-app-deps || true"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "edge-tts-universal": "^1.3.3",
+    "electron-store": "^8.2.0",
+    "openai": "^4.77.0",
+    "playwright": "^1.49.1",
+    "screenshot-desktop": "^1.15.0",
+    "three": "^0.170.0",
+    "uuid": "^11.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/three": "^0.170.0",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vite-plugin-electron": "^0.28.8",
+    "vite-plugin-electron-renderer": "^0.14.6"
+  },
+  "build": {
+    "appId": "com.atta.n33.desktop",
+    "productName": "Lia Assistant",
+    "copyright": "ATTA CORP",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "assets/**/*",
+      "icon.png",
+      "icon.ico"
+    ],
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icon.ico",
+      "artifactName": "LiaAssistant-${version}-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Lia Assistant",
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
+    },
+    "linux": {
+      "target": ["dir"],
+      "category": "Utility"
+    },
+    "publish": null
+  }
+}
