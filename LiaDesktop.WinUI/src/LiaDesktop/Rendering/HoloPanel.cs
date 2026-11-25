@@ -24,6 +24,7 @@ public sealed class HoloPanel : SwapChainPanel
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SizeChanged += OnSizeChanged;
+        CompositionScaleChanged += (_, _) => CreateSwapChain();
         PointerMoved += OnPointerMoved;
     }
 
@@ -76,8 +77,11 @@ public sealed class HoloPanel : SwapChainPanel
     void CreateSwapChain()
     {
         if (!_inited || _renderer.Device == null) return;
-        var w = Math.Max(1, (int)ActualWidth);
-        var h = Math.Max(1, (int)ActualHeight);
+        // Native DPI: render at CompositionScale (not DIP) — no blurry upscale
+        var sx = Math.Max(1.0, CompositionScaleX);
+        var sy = Math.Max(1.0, CompositionScaleY);
+        var w = Math.Max(1, (int)Math.Round(ActualWidth * sx));
+        var h = Math.Max(1, (int)Math.Round(ActualHeight * sy));
         if (w < 2 || h < 2) return;
 
         try
