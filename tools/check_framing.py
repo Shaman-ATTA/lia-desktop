@@ -241,6 +241,49 @@ def _hud_arc_mask(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
     return amber | cyan
 
 
+def face_region_mad(current: Path, reference: Path) -> float:
+    """Mean abs RGB diff on the face band (eyes→chin), excluding neck fade.
+
+    Face band ≈ 28–58% of stage height (above fade which starts below jaw).
+    Returns MAD in 0–255 units.
+    """
+    if not reference.is_file():
+        return 999.0
+    cur = np.asarray(Image.open(current).convert("RGB")).astype(np.float32)
+    ref = np.asarray(Image.open(reference).convert("RGB")).astype(np.float32)
+    if cur.shape != ref.shape:
+        # Allow small size drift — center-crop to min
+        h = min(cur.shape[0], ref.shape[0])
+        w = min(cur.shape[1], ref.shape[1])
+        cur = cur[:h, :w]
+        ref = ref[:h, :w]
+    yy0, yy1, x0, x1 = _find_viewport(cur)
+    # Same crop on both (same window chrome)
+    c = cur[yy0:yy1, x0:x1]
+    r = ref[yy0:yy1, x0:x1]
+    h, w, _ = c.shape
+    # Eyes→chin, center face; exclude lower neck fade band
+    y0b, y1b = int(h * 0.22), int(h * 0.58)
+    x0b, x1b = int(w * 0.34), int(w * 0.66)
+    cb = c[y0b:y1b, x0b:x1b]
+    rb = r[y0b:y1b, x0b:x1b]
+    # Skin-ish mask on reference so arcs/bg don't dominate
+    rr, rg, rb_ = rb[:, :, 0], rb[:, :, 1], rb[:, :, 2]
+    skin = (rr > 55) & (rg > 30) & (rb_ > 22) & (rr >= rg * 0.9) & ((rr - rb_) > 4)
+    if skin.mean() < 0.05:
+        return float(np.mean(np.abs(cb - rb)))
+    return float(np.mean(np.abs(cb[skin] - rb[skin])))
+
+
+def _ref_dir() -> Path:
+    """tools/ref/v0.6.6 next to this script, or CWD/ref fallback."""
+    here = Path(__file__).resolve().parent
+    p = here / "ref" / "v0.6.6"
+    if p.is_dir():
+        return p
+    return Path("tools/ref/v0.6.6")
+
+
 def arc_ring_pixel_count(path: Path) -> tuple[int, int, int, int]:
     """Count HUD arc pixels framing the head, and on the face band.
 
@@ -290,10 +333,9 @@ def main() -> int:
         return 2
     frac, top, bot = viewport_content_frac(front)
     print(f"front head_height_frac={frac:.3f} top_margin={top:.3f} bot_margin={bot:.3f}")
-    # Hologram neck dissolve removes opaque stump from the skin mask — face+hair
-    # alone lands ~55-70%. Cam framing is unchanged from v0.6.6.
-    if frac < 0.48:
-        print(f"FAIL: head too small ({frac:.1%}) — expected ~55-75% with dissolved neck", file=sys.stderr)
+    # Jaw opaque again (fade below chin); expect ~58-80% with soft neck remaining.
+    if frac < 0.52:
+        print(f"FAIL: head too small ({frac:.1%}) — expected ~60-75%", file=sys.stderr)
         return 1
     if frac > 0.90:
         print(f"FAIL: head too large / cropped ({frac:.1%})", file=sys.stderr)
@@ -311,7 +353,7 @@ def main() -> int:
             continue
         f, t, b = viewport_content_frac(p)
         print(f"{name}: head_height_frac={f:.3f} top={t:.3f} bot={b:.3f}")
-        if f < 0.45:
+        if f < 0.50:
             print(f"FAIL: {name} head too small ({f:.1%})", file=sys.stderr)
             return 1
         if f > 0.88:
@@ -373,6 +415,25 @@ def main() -> int:
         if na >= 0.10:
             print(
                 f"FAIL: {name} neck bottom still opaque (avg alpha {na:.3f} >= 0.10)",
+                file=sys.stderr,
+            )
+            return 1
+
+    # Face must match v0.6.6 (jaw/chin not eaten by neck fade)
+    ref_root = _ref_dir()
+    for name in ("desktop_winui_front.png", "desktop_winui_hud.png"):
+        p = Path(name)
+        ref = ref_root / name
+        if not p.is_file() or not ref.is_file():
+            if not ref.is_file():
+                print(f"WARN: missing face ref {ref}", file=sys.stderr)
+            continue
+        mad = face_region_mad(p, ref)
+        print(f"{name}: face_mad_vs_v066={mad:.2f}")
+        # v0.6.7 jaw-blotch front scored ~10.7 vs v0.6.6; keep under 9
+        if mad > 9.0:
+            print(
+                f"FAIL: {name} face drifted from v0.6.6 (MAD {mad:.1f} > 9) — jaw/chin regress?",
                 file=sys.stderr,
             )
             return 1

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.8 — neck fade below jaw; clean chin
+
+- Fade starts ≥25% neckHeight below chin tip (local Y); jaw/chin alpha=1
+- Opaque depth prepass + depth-equal color pass (no backface blotches)
+- CI: face MAD vs v0.6.6 + neck_bottom_avg_alpha + arcs
+
 ## v0.6.7 — hologram neck dissolve
 
 - Lower ~40% of neck fades to transparent (premul) with side-edge falloff

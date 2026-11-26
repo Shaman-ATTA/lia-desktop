@@ -93,10 +93,12 @@ public sealed class HoloRenderer : IDisposable
     ID3D11InputLayout? _layout;
     ID3D11DepthStencilState? _dssWrite;
     ID3D11DepthStencilState? _dssRead;
+    ID3D11DepthStencilState? _dssEqual;
     ID3D11DepthStencilState? _dssOff;
     ID3D11BlendState? _blendOpaque;
     ID3D11BlendState? _blendAlpha;
     ID3D11BlendState? _blendPremul;
+    ID3D11BlendState? _blendNoColor; // depth prepass: write depth, no color
     ID3D11RasterizerState? _rs;
     ID3D11RasterizerState? _rsNoCull;
     ID3D11SamplerState? _samplerLinearWrap;
@@ -228,6 +230,12 @@ public sealed class HoloRenderer : IDisposable
             DepthWriteMask = DepthWriteMask.Zero,
             DepthFunc = ComparisonFunction.LessEqual,
         });
+        _dssEqual = _device.CreateDepthStencilState(new DepthStencilDescription
+        {
+            DepthEnable = true,
+            DepthWriteMask = DepthWriteMask.Zero,
+            DepthFunc = ComparisonFunction.Equal,
+        });
         _dssOff = _device.CreateDepthStencilState(new DepthStencilDescription
         {
             DepthEnable = false,
@@ -253,6 +261,17 @@ public sealed class HoloRenderer : IDisposable
             RenderTargetWriteMask = ColorWriteEnable.All,
         };
         _blendPremul = _device.CreateBlendState(premulDesc);
+        var noColorDesc = new BlendDescription
+        {
+            AlphaToCoverageEnable = false,
+            IndependentBlendEnable = false,
+        };
+        noColorDesc.RenderTarget[0] = new RenderTargetBlendDescription
+        {
+            BlendEnable = false,
+            RenderTargetWriteMask = 0, // depth prepass — no color
+        };
+        _blendNoColor = _device.CreateBlendState(noColorDesc);
         _rs = _device.CreateRasterizerState(new RasterizerDescription
         {
             CullMode = CullMode.Back,
@@ -601,10 +620,8 @@ public sealed class HoloRenderer : IDisposable
         _ctx.VSSetConstantBuffer(0, _frameCb);
         _ctx.PSSetConstantBuffer(0, _frameCb);
 
-        // 1) Skin — single premul pass; soft lower-neck alpha only
-        _ctx.OMSetDepthStencilState(_dssWrite);
-        _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
-        _ctx.RSSetState(_rsNoCull);
+        // 1) Skin — opaque depth prepass, then premul color with depth-equal.
+        //    Stops back-face neck triangles showing through as grey jaw blotches.
         WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         BindSkinTextures();
         _ctx.PSSetShader(_psSkin);
@@ -612,6 +629,15 @@ public sealed class HoloRenderer : IDisposable
         {
             _ctx.IASetVertexBuffer(0, _headVb, stride, 0);
             _ctx.IASetIndexBuffer(_headIb, Format.R32_UInt, 0);
+            // 1a) Depth only (front faces) — establishes opaque silhouette depth
+            _ctx.OMSetDepthStencilState(_dssWrite);
+            _ctx.OMSetBlendState(_blendNoColor!);
+            _ctx.RSSetState(_rs); // cull back
+            _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
+            // 1b) Color premul, depth-equal — no inner/back overdraw
+            _ctx.OMSetDepthStencilState(_dssEqual!);
+            _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+            _ctx.RSSetState(_rsNoCull);
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
         _ctx.RSSetState(_rs);
@@ -1243,10 +1269,12 @@ public sealed class HoloRenderer : IDisposable
         _fsVb?.Dispose();
         _dssWrite?.Dispose();
         _dssRead?.Dispose();
+        _dssEqual?.Dispose();
         _dssOff?.Dispose();
         _blendOpaque?.Dispose();
         _blendAlpha?.Dispose();
         _blendPremul?.Dispose();
+        _blendNoColor?.Dispose();
         _rs?.Dispose();
         _rsNoCull?.Dispose();
         _ctx?.Dispose();
