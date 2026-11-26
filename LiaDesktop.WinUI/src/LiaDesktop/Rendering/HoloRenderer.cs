@@ -1084,11 +1084,12 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, 0f, spinY, transY, transZ));
         }
-        // Continuous halos BEHIND the head (Z back). Sides/top peek around the silhouette;
-        // depth hides anything the head occludes — never draws through eyes/nose/mouth.
-        // Radius fits viewport (half-h≈0.52). Yaw-only spin. No pixel discard.
-        Add(0.40f, 0.0010f, 16f, 0.00f, 0.02f, 0.24f, -0.24f, 0.07f, 0.28f);  // crown halo
-        Add(0.38f, 0.0009f, -14f, 0.02f, -0.02f, -0.20f, -0.20f, 0.05f, 0.22f); // neck halo behind
+        // Torus lies in XZ; max world Z ≈ transZ + radius·cos(pitch).
+        // Face/nose ≈ z+0.12 — keep maxZ ≤ −0.05 so NO segment crosses eyes/nose/mouth.
+        // Sides (±r) peek around the silhouette as a continuous halo; depth hides the rest.
+        // Radius ≤0.36 stays inside viewport (half-h≈0.52). Mild pitch only. No discard.
+        Add(0.36f, 0.0010f, 8f, 0.00f, 0.015f, 0.32f, -0.44f, 0.06f, 0.30f);   // crown behind
+        Add(0.34f, 0.0009f, -6f, 0.02f, -0.015f, -0.18f, -0.42f, 0.045f, 0.24f); // neck behind
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
