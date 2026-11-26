@@ -19,3 +19,4 @@ legacy/electron/node_modules/
 legacy/electron/dist/
 legacy/electron/dist-electron/
 legacy/electron/release/
+**/__pycache__/
