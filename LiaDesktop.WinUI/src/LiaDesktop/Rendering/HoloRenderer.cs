@@ -674,7 +674,8 @@ public sealed class HoloRenderer : IDisposable
             if (_sceneColor != null)
                 _ctx.CopyResource(bb, _sceneColor);
         }
-        _swap.Present(1, PresentFlags.None);
+        // SyncInterval 2 ≈ 30Hz — halves GPU/WARP load vs every-vsync Present
+        _swap.Present(2, PresentFlags.None);
     }
 
     bool ApplyFxaa()
