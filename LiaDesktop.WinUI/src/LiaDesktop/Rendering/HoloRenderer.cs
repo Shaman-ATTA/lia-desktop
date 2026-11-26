@@ -51,7 +51,7 @@ public sealed class HoloRenderer : IDisposable
     static readonly Vector3 Amber = new(1f, 0.62f, 0.32f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
-    // Head local Y≈0.20..0.55 → world span ≈0.95; cam Z≈2.55 / fov 24° → ≈75–80% after neck dissolve
+    // Head local Y≈0.20..0.55; cam Z≈2.20 / fov 24° → ≈75–80% with soft-neck dissolve
     const float HeadScale = 2.70f;
     const float HeadTransY = -1.00f;
     const int MsaaCount = 2; // 4x was ~2× CPU on WARP; 2x still cleans edges
@@ -556,17 +556,16 @@ public sealed class HoloRenderer : IDisposable
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
-            // Same framing as default — head ≈75–80% after soft-neck dissolve
-            cam = new Vector3(orbit, 0.00f, 2.55f);
-            lookAt = new Vector3(0, 0.02f, 0.02f);
+            cam = new Vector3(orbit, 0.04f, 2.20f);
+            lookAt = new Vector3(0, 0.06f, 0.02f);
             fovDeg = 24f;
         }
         else
         {
-            // Head ≈75–80% after neck dissolve (was 2.82→~68% with longer fade)
+            // Head ≈75–80% with two-pass neck dissolve (opaque span starts ~Y 0.34)
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.00f, 2.55f);
-            lookAt = new Vector3(0, 0.02f, 0.02f);
+            cam = new Vector3(orbit, 0.04f, 2.20f);
+            lookAt = new Vector3(0, 0.06f, 0.02f);
             fovDeg = 24f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
@@ -584,17 +583,23 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 1) Skin — PBR + premultiplied neck alpha fade (no-cull: bake winding can flip)
-        _ctx.OMSetDepthStencilState(_dssWrite);
-        _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+        // 1) Skin — two-pass neck dissolve (solid depth-write, then premul fade depth-read)
         _ctx.RSSetState(_rsNoCull);
-        WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         BindSkinTextures();
         _ctx.PSSetShader(_psSkin);
         if (_headVb != null && _headIb != null && _mesh != null)
         {
             _ctx.IASetVertexBuffer(0, _headVb, stride, 0);
             _ctx.IASetIndexBuffer(_headIb, Format.R32_UInt, 0);
+            // Pass A: opaque upper head (writes depth — clean occlusion)
+            _ctx.OMSetDepthStencilState(_dssWrite);
+            _ctx.OMSetBlendState(_blendOpaque);
+            WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f, neckPass: 0f);
+            _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
+            // Pass B: soft neck fade only (no depth write — no hard stump silhouette)
+            _ctx.OMSetDepthStencilState(_dssRead);
+            _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+            WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f, neckPass: 1f);
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
         _ctx.RSSetState(_rs);
@@ -917,7 +922,7 @@ public sealed class HoloRenderer : IDisposable
         DrawOne(_eyeR, left: false);
     }
 
-    void WriteFrame(Matrix4x4 vp, Matrix4x4 model, Vector3 cam, float blink, float glow)
+    void WriteFrame(Matrix4x4 vp, Matrix4x4 model, Vector3 cam, float blink, float glow, float neckPass = 0f)
     {
         var mapped = _ctx!.Map(_frameCb!, MapMode.WriteDiscard, MapFlags.None);
         var cb = new FrameCB
@@ -928,6 +933,7 @@ public sealed class HoloRenderer : IDisposable
             Time = _time,
             Glow = glow,
             Blink = blink,
+            Pad = new Vector2(neckPass, 0f),
         };
         unsafe { *(FrameCB*)mapped.DataPointer = cb; }
         _ctx.Unmap(_frameCb);
@@ -1100,14 +1106,13 @@ public sealed class HoloRenderer : IDisposable
             }
         }
 
-        // Rings use headOrient WITHOUT HeadScale — TransY is world-ish (+ HeadTransY=-1).
-        // Head world Y ≈ −0.47..+0.49. maxZ ≈ tz + r·cos(pitch) ≤ −0.05 (behind face).
-        // Crown: small tilted halo ABOVE bun, well behind (avoid forehead Z fight).
-        AddSeg(0.26f, 0.0040f, 38f, 0.00f, 0.03f, 1.60f, -0.55f, 0.045f, 0.82f, 8, 0.10f); // crown core
-        AddSeg(0.26f, 0.0080f, 38f, 0.00f, 0.03f, 1.60f, -0.55f, 0.045f, 0.30f, 8, 0.10f); // crown glow
-        // Lower: just under chin, small radius so full ellipse stays above the bottom dock.
-        AddSeg(0.24f, 0.0032f, -14f, 0.02f, -0.02f, 0.92f, -0.48f, -0.035f, 0.64f, 8, 0.10f); // chin core
-        AddSeg(0.24f, 0.0065f, -14f, 0.02f, -0.02f, 0.92f, -0.48f, -0.035f, 0.22f, 8, 0.10f); // chin glow
+        // Rings use headOrient WITHOUT HeadScale — TransY world-ish (+ HeadTransY=-1).
+        // Crown: face-tilted halo above bun (world Y≈0.58), behind face plane.
+        AddSeg(0.28f, 0.0045f, 72f, 0.00f, 0.02f, 1.58f, -0.22f, 0.05f, 0.88f, 8, 0.10f); // crown core
+        AddSeg(0.28f, 0.0090f, 72f, 0.00f, 0.02f, 1.58f, -0.22f, 0.05f, 0.34f, 8, 0.10f); // crown glow
+        // Chin: below chin (world Y≈−0.32), behind neck — stays above bottom dock.
+        AddSeg(0.26f, 0.0034f, -10f, 0.02f, -0.02f, 0.68f, -0.58f, -0.03f, 0.62f, 8, 0.10f); // chin core
+        AddSeg(0.26f, 0.0070f, -10f, 0.02f, -0.02f, 0.68f, -0.58f, -0.03f, 0.22f, 8, 0.10f); // chin glow
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, float startU = 0f)
