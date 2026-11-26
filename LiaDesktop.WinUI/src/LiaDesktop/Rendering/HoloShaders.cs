@@ -69,20 +69,19 @@ float4 main(PSIn i) : SV_TARGET {
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
   float3 color = diffuse + key * spec;
 
-  // Amber hologram veil: uniform faint scanlines + soft fresnel rim (readable, but visible)
+  // Amber hologram veil: uniform scanlines + soft fresnel rim (subtle but clearly visible)
   float ndv = saturate(dot(N,V));
-  float fres = pow(1.0 - ndv, 2.2);
-  float scanWave = 0.5 + 0.5 * sin((i.world.y + time * 0.10) * 110.0);
+  float fres = pow(1.0 - ndv, 1.8);
+  float scanWave = 0.5 + 0.5 * sin((i.world.y + time * 0.08) * 130.0);
   float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.12, 0.94, 0.75), 0.22);
-  color += amber * fres * 0.55 * max(glow, 0.85); // soft silhouette rim
-  color += amber * 0.028 * scanWave;              // additive scanlines across whole head
-  color *= (1.0 + 0.045 * (scanWave * 2.0 - 1.0));
+  color = lerp(color, color * float3(1.14, 0.93, 0.72), 0.28);
+  color += amber * fres * 0.85 * max(glow, 0.9);  // silhouette rim
+  color += amber * 0.055 * scanWave;               // additive scanlines
+  color *= (1.0 + 0.07 * (scanWave * 2.0 - 1.0));
 
-  // Neck → full transparency (discard), not black color multiply
-  float neckA = smoothstep(0.20, 0.34, i.local.y);
-  float dither = frac(sin(dot(i.pos.xy, float2(12.9898, 78.233))) * 43758.5453);
-  clip(neckA - dither * 0.50);
+  // Neck → discard geometry (true transparency). No dither stipple, no black multiply.
+  float neckA = smoothstep(0.30, 0.40, i.local.y);
+  clip(neckA - 0.08);
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
@@ -129,11 +128,11 @@ float4 main(PSIn i) : SV_TARGET {
   float3 color = hairCol * ndl;
   // Match skin holo veil on hair cards too
   float ndv = saturate(dot(N,V));
-  float fres = pow(1.0 - ndv, 2.2);
-  float scanWave = 0.5 + 0.5 * sin((i.world.y + time * 0.10) * 110.0);
+  float fres = pow(1.0 - ndv, 1.8);
+  float scanWave = 0.5 + 0.5 * sin((i.world.y + time * 0.08) * 130.0);
   float3 amber = float3(1.0, 0.62, 0.28);
-  color += amber * fres * 0.40;
-  color += amber * 0.022 * scanWave;
+  color += amber * fres * 0.70;
+  color += amber * 0.045 * scanWave;
   color = pow(saturate(color), 1.0/2.2);
   return float4(color, 1.0);
 }";
@@ -279,9 +278,9 @@ float4 main(PSIn i) : SV_TARGET {
   float fres = pow(1.0 - saturate(dot(N,V)), 2.2);
   float pulse = 0.90 + 0.10 * sin(time * 1.2 + i.local.x * 2.5);
   // Soft amber glow tube — semi-transparent, not solid yellow
-  float3 amber = color * float3(1.0, 0.85, 0.55);
-  float3 c = amber * (0.22 + fres * 0.65) * pulse;
-  float a = saturate(opacity * (0.22 + fres * 0.55));
+  float3 amber = color * float3(1.0, 0.78, 0.42);
+  float3 c = amber * (0.18 + fres * 0.70) * pulse;
+  float a = saturate(opacity * (0.18 + fres * 0.50));
   return float4(c, a);
 }";
 

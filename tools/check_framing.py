@@ -168,11 +168,12 @@ def amber_face_frac(path: Path, y0: float = 0.28, y1: float = 0.55) -> float:
     yy0, yy1, x0, x1 = _find_viewport(a)
     vp = a[yy0:yy1, x0:x1]
     h, w, _ = vp.shape
-    band = vp[int(h * y0) : int(h * y1), int(w * 0.28) : int(w * 0.72)]
+    # Stay inside the 3D panel — exclude orange chrome at the right edge
+    band = vp[int(h * y0) : int(h * y1), int(w * 0.30) : int(w * 0.70)]
     if band.size == 0:
         return 0.0
     r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
-    amber = (r > 150) & (g > 90) & (b < 110) & ((r + g) > (2.4 * b + 80)) & (r > g)
+    amber = (r > 150) & (g > 95) & (b < 95) & ((r - b) > 70) & ((g - b) > 40) & (r >= g)
     return float(amber.mean())
 
 
