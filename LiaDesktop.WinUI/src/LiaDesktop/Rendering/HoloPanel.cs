@@ -49,8 +49,8 @@ public sealed class HoloPanel : SwapChainPanel
             if (File.Exists(mesh)) _renderer.LoadMesh(mesh);
             _inited = true;
             CreateSwapChain();
-            // ~60fps capped; Present(1) waits for vsync so we don't busy-spin the GPU
-            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            // ~30fps UI tick; Present(1) still vsyncs — cuts idle CPU vs dual 60Hz timers
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
             var ticking = false;
             _timer.Tick += (_, _) =>
             {

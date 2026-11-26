@@ -189,9 +189,9 @@ public sealed partial class MainWindow : Window
         var cyan = Color.FromArgb(255, 90, 214, 255);
 
         // Concentric arcs OUTSIDE the face disc — no center needles / sweep / chords.
-        // Face ≈ 0.36 of min(w,h); keep innermost ≥ 0.44 so skin stays clear.
+        // Face+neck disc ≈ 0.42 of min(w,h); keep innermost clear of skin/neck.
         var m = Math.Min(w, h);
-        double[] radii = [m * 0.44, m * 0.50, m * 0.56, m * 0.62];
+        double[] radii = [m * 0.50, m * 0.56, m * 0.62, m * 0.68];
         for (var i = 0; i < radii.Length; i++)
         {
             var r = radii[i];
@@ -304,7 +304,7 @@ public sealed partial class MainWindow : Window
 
     void TickHud()
     {
-        _hudT += 0.016f;
+        _hudT += 0.05f;
         var pulse = _listening || _speaking ? 0.55f + 0.45f * MathF.Sin(_hudT * 6f) : 0.12f;
         _waveAmp += ((_listening || _speaking ? 1f : 0.15f) - _waveAmp) * 0.12f;
 

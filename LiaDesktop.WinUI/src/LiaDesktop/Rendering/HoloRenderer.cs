@@ -54,7 +54,7 @@ public sealed class HoloRenderer : IDisposable
     // Head local Y≈0.20..0.55 → world span ≈0.95; cam/fov tuned so head+neck ≈72% viewport height
     const float HeadScale = 2.70f;
     const float HeadTransY = -1.00f;
-    const int MsaaCount = 4;
+    const int MsaaCount = 2; // 4x was ~2× CPU on WARP; 2x still cleans edges
     int _msaaSamples = 1;
 
     ID3D11Device? _device;
@@ -1098,10 +1098,10 @@ public sealed class HoloRenderer : IDisposable
             }
         }
 
-        // Crown halo (~+12°), neck halo (~−10°), outer faint rim — smooth tubes, even gaps
-        AddSeg(0.37f, 0.0020f, 12f, 0.00f, 0.02f, 0.30f, -0.50f, 0.04f, 0.42f, 8, 0.10f);
-        AddSeg(0.39f, 0.0018f, -10f, 0.04f, -0.02f, -0.18f, -0.48f, -0.035f, 0.36f, 8, 0.10f);
-        AddSeg(0.46f, 0.0014f, 6f, 0.08f, 0.02f, 0.06f, -0.58f, 0.025f, 0.26f, 10, 0.12f);
+        // Crown + mid + outer — all behind face, no neck-level ring crossing chin/neck
+        AddSeg(0.37f, 0.0020f, 12f, 0.00f, 0.02f, 0.32f, -0.52f, 0.04f, 0.40f, 8, 0.10f);
+        AddSeg(0.42f, 0.0016f, 8f, 0.05f, -0.02f, 0.12f, -0.56f, -0.03f, 0.32f, 8, 0.10f);
+        AddSeg(0.48f, 0.0013f, 5f, 0.08f, 0.02f, 0.02f, -0.62f, 0.025f, 0.24f, 10, 0.12f);
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, float startU = 0f)
