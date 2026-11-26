@@ -529,26 +529,26 @@ public sealed class HoloRenderer : IDisposable
         var eyeY = 0.43f * HeadScale + HeadTransY; // ≈ 0.16
         if (_eyesCloseup)
         {
-            // Both eyes fill ~60% of viewport width
+            // Both eyes (outer-corner span) ≈60% of viewport width
             lookAt = new Vector3(0f, eyeY, 0.06f);
-            cam = new Vector3(0f, eyeY, 1.05f);
+            cam = new Vector3(0f, eyeY, 1.18f);
             fovDeg = 16f;
             nearPlane = 0.08f;
         }
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
-            cam = new Vector3(orbit, 0.02f, 2.75f);
+            cam = new Vector3(orbit, 0.02f, 2.50f);
             lookAt = new Vector3(0, 0.02f, 0.02f);
-            fovDeg = 26f;
+            fovDeg = 24f;
         }
         else
         {
             // Head+neck ≈70-75% of viewport height (not the v0.5.1 tiny-head bug)
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.02f, 2.70f);
+            cam = new Vector3(orbit, 0.02f, 2.50f);
             lookAt = new Vector3(0, 0.02f, 0.02f);
-            fovDeg = 26f;
+            fovDeg = 24f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
         var proj = Matrix4x4.CreatePerspectiveFieldOfView(fovDeg * MathF.PI / 180f, aspect, nearPlane, 40f);
@@ -1062,11 +1062,12 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        // Ring radius ≈ 0.65–0.8 of viewport half-height at look plane (~0.45–0.55 world)
-        // Tube thick enough to read as a continuous line, not dotted sparkle
-        Add(0.46f, 0.0014f, 14f, 0.02f, 0.04f, 0.10f, 0.009f, 0.42f);
-        Add(0.52f, 0.0012f, -28f, 0.05f, -0.06f, -0.07f, 0.012f, 0.34f);
-        Add(0.58f, 0.0010f, 48f, -0.03f, 0.08f, 0.05f, 0.007f, 0.28f);
+        // At cam z≈2.50 fov 24: half-height ≈ tan(12°)*2.50 ≈ 0.53
+        // Ring radius ≈ 0.65–0.8 of that → ~0.34–0.42 world; fully on-screen
+        // Tube ≈2–3 px at 576p so the orbit reads continuous, not dotted sparkle
+        Add(0.35f, 0.0028f, 14f, 0.02f, 0.04f, 0.10f, 0.009f, 0.48f);
+        Add(0.39f, 0.0024f, -28f, 0.05f, -0.06f, -0.07f, 0.012f, 0.38f);
+        Add(0.42f, 0.0022f, 48f, -0.03f, 0.08f, 0.05f, 0.007f, 0.32f);
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)

@@ -2,11 +2,11 @@
 
 ## v0.5.2 — Framing fix (head size), rings, holo, eyes CU
 
-- Head+neck ~70–75% of viewport (v0.5.1 was ~15% — over-zoomed)
-- Rings scaled to head (~0.45–0.58 world), fully visible orbits
+- Head+neck ~70–75% of viewport (v0.5.1 was ~15% — over-zoomed-out)
+- Rings scaled to head (~0.35–0.42 world ≈ 0.65–0.8 half-height), fully visible orbits
 - Uniform faint scanlines + soft amber fresnel rim
 - Eyes close-up: both eyes ~60% viewport width
-- Kept lash-card cull + neck fade; CI framing self-check
+- Kept lash-card cull + neck fade; CI framing self-check (skin mask, not rings)
 
 ## v0.5.1 — Framing, lashes, holo veil, rings, FXAA
 
