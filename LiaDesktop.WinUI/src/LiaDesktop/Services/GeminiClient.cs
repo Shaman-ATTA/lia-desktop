@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -7,7 +9,9 @@ namespace LiaDesktop.Services;
 /// <summary>Gemini generateContent + tool loop helpers (v1beta REST).</summary>
 public sealed class GeminiClient
 {
-    readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(90) };
+    public static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(90);
+
+    readonly HttpClient _http = new() { Timeout = HttpTimeout };
     readonly SecretsStore _secrets;
     readonly AppLog _log;
 
@@ -28,7 +32,7 @@ public sealed class GeminiClient
         try
         {
             var (model, _, migrated) = await GeminiModels.ResolveAsync(cfg.ApiKey, cfg.Model, _http, ct);
-            if (migrated || cfg.Model != model)
+            if (migrated || !string.Equals(cfg.Model, model, StringComparison.OrdinalIgnoreCase))
             {
                 cfg.Model = model;
                 cfg.VisionModel = model;
@@ -37,6 +41,7 @@ public sealed class GeminiClient
             }
             SetModel(model);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             var c = GeminiModels.Classify(ex);
@@ -60,7 +65,22 @@ public sealed class GeminiClient
         if (string.IsNullOrWhiteSpace(cfg.ApiKey))
             throw new HttpRequestException("Нет ключа Gemini. Введите ключ в Настройках.", null, System.Net.HttpStatusCode.Unauthorized);
 
-        await EnsureModelAsync(ct);
+        // Always validate against ListModels — never keep a phantom name like gemini-3.8-flash.
+        try
+        {
+            var (resolved, _, migrated) = await GeminiModels.ResolveAsync(cfg.ApiKey, cfg.Model, _http, ct);
+            if (migrated || !string.Equals(cfg.Model, resolved, StringComparison.OrdinalIgnoreCase))
+            {
+                _log.Info(string.IsNullOrWhiteSpace(cfg.Model)
+                    ? $"Модель: {resolved}"
+                    : $"Модель «{cfg.Model}» недоступна → {resolved}");
+                SwitchPersist(resolved);
+                cfg = _secrets.Load();
+            }
+            else SetModel(resolved);
+        }
+        catch (OperationCanceledException) { throw; }
+
         cfg = _secrets.Load();
         var model = string.IsNullOrWhiteSpace(cfg.Model) ? ActiveModel : cfg.Model;
         if (string.IsNullOrWhiteSpace(model))
@@ -68,19 +88,32 @@ public sealed class GeminiClient
 
         var tried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var overloadRetries = 0;
+        const int maxOverloadTries = 5;
 
         while (true)
         {
+            ct.ThrowIfCancellationRequested();
             tried.Add(model);
             SetModel(model);
             try
             {
                 return await GenerateOnceAsync(cfg.ApiKey, model, system, contents, tools, ct);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                var status = (ex as HttpRequestException)?.StatusCode is { } sc ? (int?)sc : null;
+                var status = ex is GeminiHttpException ghe ? ghe.Status
+                    : (ex as HttpRequestException)?.StatusCode is { } sc ? (int)sc : (int?)null;
                 var msg = ex.Message;
+                // HttpClient timeout surfaces as TaskCanceledException without abort
+                if (ex is TaskCanceledException or TimeoutException && !ct.IsCancellationRequested)
+                {
+                    status ??= 408;
+                    msg = "Таймаут запроса к Gemini (>90с)";
+                }
 
                 if (GeminiModels.IsModelUnavailable(msg, status))
                 {
@@ -107,16 +140,18 @@ public sealed class GeminiClient
 
                 if (GeminiModels.IsOverload(msg, status))
                 {
-                    if (overloadRetries < 3)
+                    if (overloadRetries < maxOverloadTries)
                     {
-                        var wait = 800 * (1 << overloadRetries);
-                        _log.Info($"Модель перегружена, жду {wait / 1000.0:0.#}с…");
-                        await Task.Delay(wait, ct);
+                        var waitSec = RetryWaitSeconds(ex, overloadRetries);
+                        _log.Info($"Модель перегружена (HTTP {status?.ToString() ?? "?"}), жду {waitSec:0.#}с…");
+                        // Delay uses abort token only — no short linked timeout
+                        await Task.Delay(TimeSpan.FromSeconds(waitSec), ct);
                         overloadRetries++;
                         continue;
                     }
                     var models = await GeminiModels.ListAsync(cfg.ApiKey, _http, ct);
-                    var next = GeminiModels.NextFlashFallbacks(models, model).FirstOrDefault(id => tried.Add(id));
+                    var next = GeminiModels.NextFlashFallbacks(models, model)
+                        .FirstOrDefault(id => tried.Add(id));
                     if (next != null)
                     {
                         _log.Info($"Модель перегружена, переключаюсь на {next}");
@@ -131,6 +166,14 @@ public sealed class GeminiClient
                 throw new GeminiUserException(classified);
             }
         }
+    }
+
+    /// <summary>1s,2s,4s,8s,16s — honor Retry-After when present.</summary>
+    static double RetryWaitSeconds(Exception ex, int attemptZeroBased)
+    {
+        if (ex is GeminiHttpException { RetryAfterSeconds: > 0 } g)
+            return Math.Clamp(g.RetryAfterSeconds.Value, 1, 60);
+        return Math.Min(16, 1 << attemptZeroBased); // 1,2,4,8,16
     }
 
     /// <summary>Simple text-only helper used by settings smoke / short chats.</summary>
@@ -172,6 +215,51 @@ public sealed class GeminiClient
         return turn.Text ?? "Готово.";
     }
 
+    /// <summary>Transcribe Russian speech from WAV/PCM bytes via generateContent inline audio.</summary>
+    public async Task<string> TranscribeRuAsync(byte[] wavBytes, CancellationToken ct = default)
+    {
+        var cfg = _secrets.Load();
+        if (string.IsNullOrWhiteSpace(cfg.ApiKey))
+            throw new HttpRequestException("Нет ключа Gemini.", null, System.Net.HttpStatusCode.Unauthorized);
+
+        await EnsureModelAsync(ct);
+        cfg = _secrets.Load();
+        var model = string.IsNullOrWhiteSpace(cfg.Model) ? ActiveModel : cfg.Model;
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            var (resolved, _, _) = await GeminiModels.ResolveAsync(cfg.ApiKey, null, _http, ct);
+            model = resolved;
+            SwitchPersist(model);
+        }
+
+        var b64 = Convert.ToBase64String(wavBytes);
+        var contents = new JsonArray
+        {
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["text"] =
+                            "Распознай русскую речь из аудио. Верни только текст сказанного, без кавычек и пояснений.",
+                    },
+                    new JsonObject
+                    {
+                        ["inline_data"] = new JsonObject
+                        {
+                            ["mime_type"] = "audio/wav",
+                            ["data"] = b64,
+                        },
+                    }),
+            },
+        };
+        var turn = await GenerateTurnAsync(
+            "Ты — точный транскрибер русской речи. Отвечай только расшифрованным текстом.",
+            contents, null, ct);
+        return (turn.Text ?? "").Trim();
+    }
+
     void SwitchPersist(string model)
     {
         var cfg = _secrets.Load();
@@ -210,10 +298,17 @@ public sealed class GeminiClient
         {
             Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
         };
-        using var res = await _http.SendAsync(req, ct);
+
+        // Per-request abort+timeout: never shorter than HttpTimeout; abort still works.
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(HttpTimeout);
+        using var res = await _http.SendAsync(req, timeoutCts.Token);
         var json = await res.Content.ReadAsStringAsync(ct);
         if (!res.IsSuccessStatusCode)
-            throw new HttpRequestException(TryExtractError(json) ?? res.ReasonPhrase ?? "Gemini error", null, res.StatusCode);
+        {
+            var errMsg = TryExtractError(json) ?? res.ReasonPhrase ?? "Gemini error";
+            throw new GeminiHttpException(errMsg, (int)res.StatusCode, ParseRetryAfter(res.Headers), json);
+        }
 
         using var doc = JsonDocument.Parse(json);
         var parts = doc.RootElement
@@ -248,6 +343,18 @@ public sealed class GeminiClient
         }
 
         return new GeminiTurnResult(text, calls, modelParts);
+    }
+
+    static int? ParseRetryAfter(HttpResponseHeaders headers)
+    {
+        if (!headers.TryGetValues("Retry-After", out var vals)) return null;
+        var v = vals.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(v)) return null;
+        if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sec))
+            return sec;
+        if (DateTimeOffset.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var when))
+            return (int)Math.Max(1, (when - DateTimeOffset.UtcNow).TotalSeconds);
+        return null;
     }
 
     static string? TryExtractError(string json)

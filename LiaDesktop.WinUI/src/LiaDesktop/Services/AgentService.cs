@@ -75,9 +75,16 @@ public sealed class AgentService
             if (path != null && File.Exists(path))
                 SpeakFile?.Invoke(path);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             _log.Info("Отменено.");
+        }
+        catch (OperationCanceledException ex)
+        {
+            // HttpClient timeout (not user abort)
+            var c = GeminiModels.Classify(ex, 408);
+            _log.Error(c.UserMessage, c.Detail);
+            Narrate?.Invoke(c.UserMessage);
         }
         catch (GeminiUserException g)
         {

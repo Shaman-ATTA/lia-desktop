@@ -103,11 +103,11 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command 7z -ErrorAction SilentlyContinue) {
-            7z a -tzip -mx=9 LiaDesktop-0.6.8-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
+            7z a -tzip -mx=9 LiaDesktop-0.6.9-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
           } else {
-            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.6.8-win-x64.zip -CompressionLevel Optimal -Force
+            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.6.9-win-x64.zip -CompressionLevel Optimal -Force
           }
-          Get-Item LiaDesktop-0.6.8-win-x64.zip | Format-List Name,Length
+          Get-Item LiaDesktop-0.6.9-win-x64.zip | Format-List Name,Length
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -120,10 +120,10 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found" }
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           & $iscc /Q installer\LiaDesktop.iss
-          $setup = Get-Item artifacts\LiaDesktop-0.6.8-setup.exe
-          Copy-Item $setup.FullName .\LiaDesktop-0.6.8-setup.exe -Force
+          $setup = Get-Item artifacts\LiaDesktop-0.6.9-setup.exe
+          Copy-Item $setup.FullName .\LiaDesktop-0.6.9-setup.exe -Force
           $setup | Format-List Name,Length
-          $zip = Get-Item LiaDesktop-0.6.8-win-x64.zip
+          $zip = Get-Item LiaDesktop-0.6.9-win-x64.zip
           Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
 
       - name: Smoke launch + screenshots + clean exit proof
@@ -151,6 +151,9 @@ jobs:
             [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
             [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
             [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+            [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+            [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
           }
           [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
           "@
@@ -179,22 +182,31 @@ jobs:
             $h = [Math]::Max(100, $rect.B - $rect.T)
             $bmp = New-Object System.Drawing.Bitmap $w, $h
             $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.CopyFromScreen($rect.L, $rect.T, 0, 0, (New-Object System.Drawing.Size $w,$h))
+            # Prefer PrintWindow (works for oversized / partially off-screen windows)
+            $ok = [Win]::PrintWindow($hwnd, $g.GetHdc(), 2)
+            $g.ReleaseHdc()
+            if (-not $ok) {
+              $g.CopyFromScreen($rect.L, $rect.T, 0, 0, (New-Object System.Drawing.Size $w,$h))
+            }
             $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
             $g.Dispose(); $bmp.Dispose()
             Write-Host "captured ${w}x${h} -> $path ($((Get-Item $path).Length) bytes)"
           }
 
-          function Invoke-SmokeShot([string]$shotPath, [string[]]$smokeArgs, [int]$warm=10) {
+          function Invoke-SmokeShot([string]$shotPath, [string[]]$smokeArgs, [int]$warm=10, [int]$forceW=0, [int]$forceH=0) {
             $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
             if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
-            $p = Start-Process -FilePath $exe -ArgumentList $smokeArgs -PassThru -WorkingDirectory (Split-Path $exe)
+            $args = @($smokeArgs)
+            if ($forceW -gt 0 -and $forceH -gt 0) {
+              $args += "--smoke-size=${forceW}x${forceH}"
+            }
+            $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
             for ($i = 0; $i -lt 25; $i++) {
               Start-Sleep -Seconds 1
               $p.Refresh()
               if ($p.HasExited) {
                 if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
-                throw "exited early code=$($p.ExitCode) smokeArgs=$($smokeArgs -join ' ')"
+                throw "exited early code=$($p.ExitCode) smokeArgs=$($args -join ' ')"
               }
               $hwnd = Find-Hwnd ([uint32]$p.Id)
               if ($hwnd -ne [IntPtr]::Zero -and $i -ge ($warm - 1)) { break }
@@ -203,37 +215,43 @@ jobs:
             $hwnd = Find-Hwnd ([uint32]$p.Id)
             if ($hwnd -eq [IntPtr]::Zero) {
               if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
-              throw "no hwnd for $($smokeArgs -join ' ')"
+              throw "no hwnd for $($args -join ' ')"
             }
-            [void][Win]::ShowWindow($hwnd, 3)
-            Start-Sleep -Milliseconds 400
+            if ($forceW -gt 0 -and $forceH -gt 0) {
+              # Exact client-ish outer size; do NOT maximize (would break HiDPI framing tests)
+              [void][Win]::ShowWindow($hwnd, 1) # SW_SHOWNORMAL
+              [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $forceW, $forceH, 0x0040) # SWP_SHOWWINDOW
+            } else {
+              [void][Win]::ShowWindow($hwnd, 3)
+            }
+            Start-Sleep -Milliseconds 500
             [void][Win]::SetForegroundWindow($hwnd)
             Start-Sleep -Seconds 3
             Capture-Window $hwnd $shotPath
-            # While-running proof (last shot)
-            "=== WHILE RUNNING ($($smokeArgs -join ' ')) ===" | Out-File $after -Append
+            "=== WHILE RUNNING ($($args -join ' ')) ===" | Out-File $after -Append
             tasklist | Select-String -Pattern 'LiaDesktop' | Out-File $after -Append
             [void][Win]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
             Start-Sleep -Seconds 6
             if (-not $p.HasExited) { try { $p.Kill($true) } catch {} }
             Start-Sleep -Seconds 2
             if (Test-Path $bootLog) {
-              "`n=== BOOT ($($smokeArgs -join ' ')) ===" | Out-File $after -Append
+              "`n=== BOOT ($($args -join ' ')) ===" | Out-File $after -Append
               Get-Content $bootLog | Out-File $after -Append
             }
           }
 
           "" | Out-File $after
-          # Front, 3/4, profile, speaking, eyes close-up, rings
+          # Default maximize shots (pose matrix)
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front.png') @('--smoke-yaw=5') 12
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_threequarter.png') @('--smoke-yaw=32') 10
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_profile.png') @('--smoke-yaw=82') 10
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_speaking.png') @('--smoke-yaw=12','--smoke-jaw=0.55') 10
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_eyes.png') @('--smoke-eyes','--smoke-yaw=0') 12
-          # Distinct rings view (must NOT be a copy of threequarter)
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_rings.png') @('--smoke-rings','--smoke-yaw=-48') 12
-          # Full-window cinematic HUD (listening waveform + glass cards)
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_hud.png') @('--smoke-hud','--smoke-yaw=8') 12
+          # HiDPI / large-TV framing: 1080p (=4K@200% DIP) and 4K physical
+          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_1080.png') @('--smoke-yaw=5') 10 1920 1080
+          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_4k.png') @('--smoke-yaw=5') 12 3840 2160
 
           "`n=== AFTER CLOSE ===" | Out-File $after -Append
           $left = tasklist | Select-String -Pattern 'LiaDesktop|Lia Assistant'
@@ -242,17 +260,15 @@ jobs:
           "OK: no LiaDesktop processes remain" | Out-File $after -Append
           Get-Content $after
 
-          # Basic visual QA: shots must not be tiny / near-white
-          foreach ($f in @('desktop_winui_front.png','desktop_winui_threequarter.png','desktop_winui_profile.png','desktop_winui_speaking.png','desktop_winui_eyes.png','desktop_winui_rings.png','desktop_winui_hud.png')) {
+          foreach ($f in @('desktop_winui_front.png','desktop_winui_threequarter.png','desktop_winui_profile.png','desktop_winui_speaking.png','desktop_winui_eyes.png','desktop_winui_rings.png','desktop_winui_hud.png','desktop_winui_front_1080.png','desktop_winui_front_4k.png')) {
             $len = (Get-Item $f).Length
             if ($len -lt 40000) { throw "$f too small ($len) — likely blank/error dialog" }
           }
           $h3 = (Get-FileHash desktop_winui_threequarter.png).Hash
           $hr = (Get-FileHash desktop_winui_rings.png).Hash
           if ($h3 -eq $hr) { throw "threequarter and rings screenshots are identical — need distinct views" }
-          # Framing self-check: head ~70-75% of viewport height
           pip install --quiet pillow numpy
-          python tools/check_framing.py
+          python tools/check_framing.py desktop_winui_front_1080.png desktop_winui_front_4k.png
           if ($LASTEXITCODE -ne 0) { throw "framing self-check failed" }
           Write-Host "smoke ok"
 
@@ -260,7 +276,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $PWD 'LiaDesktop-0.6.8-setup.exe'
+          $setup = Join-Path $PWD 'LiaDesktop-0.6.9-setup.exe'
           if (-not (Test-Path $setup)) { throw "setup missing" }
           $dir = Join-Path $env:LOCALAPPDATA 'LiaDesktop-smoke'
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
@@ -286,8 +302,8 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.6.8-win-x64.zip
-            LiaDesktop-0.6.8-setup.exe
+            LiaDesktop-0.6.9-win-x64.zip
+            LiaDesktop-0.6.9-setup.exe
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_profile.png
@@ -295,6 +311,8 @@ jobs:
             desktop_winui_eyes.png
             desktop_winui_rings.png
             desktop_winui_hud.png
+            desktop_winui_front_1080.png
+            desktop_winui_front_4k.png
             tasklist_before.txt
             tasklist_after.txt
           if-no-files-found: warn
@@ -310,7 +328,8 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "CI smoke PNGs (draft until HUD QA)"
           for f in desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
-                   desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png; do
+                   desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
+                   desktop_winui_front_1080.png desktop_winui_front_4k.png; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
           done
 
@@ -322,11 +341,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.6.8** — clean jaw, neck fade below chin
+          Lia Desktop **v0.6.9** — Gemini resilience, mic STT, HiDPI centre stage
 
-          - Fade below jaw only; depth prepass kills transparency blotches
-          - Face matches v0.6.6; arcs/camera unchanged
-          - CI: face MAD vs v0.6.6 + neck alpha + arcs
+          - Gemini: 90s timeout, 503/429 retry+fallback via ListModels, RU errors, model dropdown
+          - Mic fallback: WASAPI+VAD → Gemini audio STT when Windows Speech missing
+          - Hologram centred in centre column; CI 1080p + 4K framing asserts
 
 
           EOF
@@ -336,9 +355,10 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "$NOTES"
           fi
-          for f in LiaDesktop-0.6.8-win-x64.zip LiaDesktop-0.6.8-setup.exe \
+          for f in LiaDesktop-0.6.9-win-x64.zip LiaDesktop-0.6.9-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
+                   desktop_winui_front_1080.png desktop_winui_front_4k.png \
                    tasklist_before.txt tasklist_after.txt; do
             if [ -f "$f" ]; then
               gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber
@@ -348,16 +368,16 @@ jobs:
           done
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG} (draft)"
 
-      - name: Mirror assets to draft v0.6.8 on main pushes
+      - name: Mirror assets to draft v0.6.9 on main pushes
         if: success() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.6.8
+          TAG=v0.6.9
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "Cinematic HUD v0.6.8 (draft)"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "Cinematic HUD v0.6.9 (draft)"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft || true
-          for f in LiaDesktop-0.6.8-win-x64.zip LiaDesktop-0.6.8-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png tasklist_after.txt; do
+          for f in LiaDesktop-0.6.9-win-x64.zip LiaDesktop-0.6.9-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png tasklist_after.txt; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
           done

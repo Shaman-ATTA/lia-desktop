@@ -11,7 +11,11 @@ public sealed class AppServices
     public ToolHost Tools { get; private set; } = null!;
     public AgentService Agent { get; private set; } = null!;
     public SpeechListen Speech { get; } = new();
+    public MicGeminiListen MicGemini { get; private set; } = null!;
     public LiaConfig Config { get; private set; } = new();
+
+    /// <summary>True when Windows ru-RU speech works; otherwise Gemini mic is the default.</summary>
+    public bool WindowsSpeechOk => Speech.IsAvailable;
 
     public void Bootstrap()
     {
@@ -21,14 +25,24 @@ public sealed class AppServices
         Tts = new EdgeTts(Log);
         Tools = new ToolHost(Log, () => Secrets.Load().WorkspacePath);
         Agent = new AgentService(Gemini, Secrets, Log, Tools, Tts);
+        MicGemini = new MicGeminiListen(Gemini, Log);
         _ = Gemini.EnsureModelAsync();
-        _ = Speech.InitAsync();
+        _ = InitSpeechAsync();
+    }
+
+    async Task InitSpeechAsync()
+    {
+        await Speech.InitAsync();
+        if (!Speech.IsAvailable)
+            Log.Info("Windows Speech (ru-RU) недоступен — микрофон через Gemini STT.");
     }
 
     public async Task ShutdownAsync()
     {
         Agent.Abort();
         Tts.Stop();
+        try { await MicGemini.StopAsync(); } catch { /* */ }
+        MicGemini.Dispose();
         Speech.Dispose();
         await Tools.DisposeAsync();
     }

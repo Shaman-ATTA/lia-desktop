@@ -30,7 +30,7 @@
     <AssemblyName>LiaDesktop</AssemblyName>
     <Product>Lia Assistant</Product>
     <Company>ATTA CORP</Company>
-    <Version>0.6.8</Version>
+    <Version>0.6.9</Version>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <!-- Shrink satellite assemblies — keep en only -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -49,6 +49,7 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.11" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 
   <ItemGroup>

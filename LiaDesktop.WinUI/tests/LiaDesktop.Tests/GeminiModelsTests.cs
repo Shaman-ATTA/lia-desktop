@@ -74,6 +74,31 @@ public class GeminiModelsTests
     }
 
     [Fact]
+    public async Task Resolve_MigratesPhantom38()
+    {
+        var json =
+            """
+            {"models":[
+              {"name":"models/gemini-2.5-flash","supportedGenerationMethods":["generateContent"]},
+              {"name":"models/gemini-2.5-flash-lite","supportedGenerationMethods":["generateContent"]}
+            ]}
+            """;
+        var http = new HttpClient(new StubHandler(json, System.Net.HttpStatusCode.OK));
+        var r = await GeminiModels.ResolveAsync("k", "gemini-3.8-flash", http);
+        Assert.Equal("gemini-2.5-flash", r.Model);
+        Assert.True(r.Migrated);
+    }
+
+    [Fact]
+    public void Classify_ShowsHttpStatus()
+    {
+        var err = new GeminiHttpException("Resource exhausted", 503, 2, """{"error":{"message":"Resource exhausted"}}""");
+        var c = GeminiModels.Classify(err);
+        Assert.Contains("HTTP 503", c.UserMessage);
+        Assert.Contains("перегружена", c.UserMessage);
+    }
+
+    [Fact]
     public void Classify_AuthModelNetwork()
     {
         var auth = GeminiModels.Classify(new HttpRequestException("API key not valid", null, System.Net.HttpStatusCode.BadRequest));

@@ -327,22 +327,70 @@ def arc_ring_pixel_count(path: Path) -> tuple[int, int, int, int]:
     return int(ring.sum()), int(face.sum()), left_n, right_n
 
 
+def center_column_head_stats(path: Path) -> tuple[float, float, float]:
+    """Return (head_cx_frac, col_cx_frac, head_h_frac_of_column).
+
+    Centre column is the middle 56% of the stage (0.22 | 0.56 | 0.22).
+    head_cx_frac / col_cx_frac are in full-image X; head height vs column height.
+    """
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    h, w, _ = vp.shape
+    col_x0, col_x1 = int(w * 0.22), int(w * 0.78)
+    col_cx = 0.5 * (col_x0 + col_x1) / w
+    bb = _head_bbox(vp)
+    if bb is None:
+        return 0.0, col_cx, 0.0
+    lo, hi, bx0, bx1 = bb
+    head_cx = 0.5 * (bx0 + bx1) / w
+    head_h = (hi - lo + 1) / max(1, h)
+    return float(head_cx), float(col_cx), float(head_h)
+
+
+def assert_center_column(path: Path, label: str | None = None) -> int:
+    """Gate: head centred in centre column (±3%) and height 60–80%."""
+    name = label or path.name
+    if not path.is_file():
+        print(f"FAIL: missing {name}", file=sys.stderr)
+        return 1
+    hcx, ccx, hh = center_column_head_stats(path)
+    drift = abs(hcx - ccx)
+    print(f"{name} center_col: head_cx={hcx:.3f} col_cx={ccx:.3f} drift={drift:.3f} head_h={hh:.3f}")
+    if drift > 0.03:
+        print(f"FAIL: {name} head not centred (drift {drift:.1%} > 3%)", file=sys.stderr)
+        return 1
+    if hh < 0.60 or hh > 0.80:
+        print(f"FAIL: {name} head height {hh:.1%} not in 60–80%", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
+    # Optional: python check_framing.py desktop_winui_front_1080.png ...
+    extra = [Path(a) for a in sys.argv[1:] if a.endswith(".png")]
+
     front = Path("desktop_winui_front.png")
-    if not front.is_file():
+    if not front.is_file() and not extra:
         print("missing desktop_winui_front.png", file=sys.stderr)
         return 2
-    frac, top, bot = viewport_content_frac(front)
-    print(f"front head_height_frac={frac:.3f} top_margin={top:.3f} bot_margin={bot:.3f}")
-    # Jaw opaque again (fade below chin); expect ~58-80% with soft neck remaining.
-    if frac < 0.52:
-        print(f"FAIL: head too small ({frac:.1%}) — expected ~60-75%", file=sys.stderr)
-        return 1
-    if frac > 0.90:
-        print(f"FAIL: head too large / cropped ({frac:.1%})", file=sys.stderr)
-        return 1
-    if top < 0.02:
-        print(f"WARN: top margin thin ({top:.3f}) — may crop crown", file=sys.stderr)
+
+    if front.is_file():
+        frac, top, bot = viewport_content_frac(front)
+        print(f"front head_height_frac={frac:.3f} top_margin={top:.3f} bot_margin={bot:.3f}")
+        # Jaw opaque again (fade below chin); expect ~58-80% with soft neck remaining.
+        if frac < 0.52:
+            print(f"FAIL: head too small ({frac:.1%}) — expected ~60-75%", file=sys.stderr)
+            return 1
+        if frac > 0.90:
+            print(f"FAIL: head too large / cropped ({frac:.1%})", file=sys.stderr)
+            return 1
+        if top < 0.02:
+            print(f"WARN: top margin thin ({top:.3f}) — may crop crown", file=sys.stderr)
+
+        if assert_center_column(front) != 0:
+            return 1
 
     for name in (
         "desktop_winui_threequarter.png",
@@ -439,6 +487,14 @@ def main() -> int:
                 f"FAIL: {name} jaw/chin drifted from v0.6.6 (MAD {mad:.1f} > 12)",
                 file=sys.stderr,
             )
+            return 1
+
+    # HiDPI / large-TV front shots (also accept as argv)
+    for p in extra or [
+        Path("desktop_winui_front_1080.png"),
+        Path("desktop_winui_front_4k.png"),
+    ]:
+        if p.is_file() and assert_center_column(p) != 0:
             return 1
 
     print("framing check ok")

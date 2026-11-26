@@ -7,35 +7,18 @@
     Title="Lia · ATTA CORP">
 
   <Grid x:Name="Root" Background="#FF05070C">
-    <!-- Full-bleed hologram (arcs drawn inside DX pass behind the head) -->
-    <render:HoloPanel x:Name="Holo" Margin="0,36,0,120"/>
-
-    <!-- HudCanvas kept for wave/misc; arcs are NOT drawn here -->
-    <Canvas x:Name="HudCanvas" IsHitTestVisible="False" Margin="0,36,0,120"/>
-
-    <!-- Soft vignette so glass cards read over the head -->
-    <Grid IsHitTestVisible="False" Margin="0,36,0,120">
+    <!-- Stage: head+arcs live ONLY in the centre column so side glass never covers them.
+         0.22 | 0.56 | 0.22 matches CI framing; opaque side fills kill translucent-over-head. -->
+    <Grid x:Name="StageGrid" Margin="0,36,0,120">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="0.22*"/>
         <ColumnDefinition Width="0.56*"/>
         <ColumnDefinition Width="0.22*"/>
       </Grid.ColumnDefinitions>
-      <Border Grid.Column="0">
-        <Border.Background>
-          <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
-            <GradientStop Color="#CC05070C" Offset="0"/>
-            <GradientStop Color="#0005070C" Offset="1"/>
-          </LinearGradientBrush>
-        </Border.Background>
-      </Border>
-      <Border Grid.Column="2">
-        <Border.Background>
-          <LinearGradientBrush StartPoint="1,0.5" EndPoint="0,0.5">
-            <GradientStop Color="#CC05070C" Offset="0"/>
-            <GradientStop Color="#0005070C" Offset="1"/>
-          </LinearGradientBrush>
-        </Border.Background>
-      </Border>
+      <Border Grid.Column="0" Background="#FF05070C"/>
+      <Border Grid.Column="2" Background="#FF05070C"/>
+      <render:HoloPanel x:Name="Holo" Grid.Column="1"/>
+      <Canvas x:Name="HudCanvas" Grid.Column="1" IsHitTestVisible="False"/>
     </Grid>
 
 

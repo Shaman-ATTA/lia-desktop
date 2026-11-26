@@ -1,5 +1,9 @@
 # Lia Desktop — ship report
 
+## v0.6.9 — Gemini / mic / HiDPI (pending CI)
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.9
+
 ## v0.6.8 — clean jaw, neck fade below chin (published)
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.8

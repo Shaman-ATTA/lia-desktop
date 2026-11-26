@@ -16,17 +16,19 @@ public sealed class HoloPanel : SwapChainPanel
     bool _inited;
     int _tickErrors;
     DateTime _last = DateTime.UtcNow;
+    int _lastW, _lastH;
+    double _lastScale = -1;
 
     public HoloRenderer Renderer => _renderer;
 
     public HoloPanel()
     {
-        // SwapChainPanel does not support Background — leave transparent by default.
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SizeChanged += OnSizeChanged;
         CompositionScaleChanged += (_, _) => CreateSwapChain();
         PointerMoved += OnPointerMoved;
+        ActualThemeChanged += (_, _) => { };
     }
 
     void OnPointerMoved(object sender, PointerRoutedEventArgs e)
@@ -42,6 +44,9 @@ public sealed class HoloPanel : SwapChainPanel
         if (_inited) return;
         try
         {
+            if (XamlRoot != null)
+                XamlRoot.Changed += (_, _) => CreateSwapChain();
+
             _renderer.InitDevice();
             var mesh = Path.Combine(AppContext.BaseDirectory, "Assets", "models", "lia_pbr_head.bin");
             if (!File.Exists(mesh))
@@ -49,12 +54,11 @@ public sealed class HoloPanel : SwapChainPanel
             if (File.Exists(mesh)) _renderer.LoadMesh(mesh);
             _inited = true;
             CreateSwapChain();
-            // ~30fps UI tick; Present(1) still vsyncs — cuts idle CPU vs dual 60Hz timers
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
             var ticking = false;
             _timer.Tick += (_, _) =>
             {
-                if (ticking) return; // drop overlapped ticks under load
+                if (ticking) return;
                 ticking = true;
                 try
                 {
@@ -94,15 +98,26 @@ public sealed class HoloPanel : SwapChainPanel
 
     void OnSizeChanged(object sender, SizeChangedEventArgs e) => CreateSwapChain();
 
+    /// <summary>Physical pixel scale: max(CompositionScale, XamlRoot.RasterizationScale).</summary>
+    double EffectiveScale()
+    {
+        var sx = Math.Max(CompositionScaleX, CompositionScaleY);
+        var root = XamlRoot?.RasterizationScale ?? 0;
+        return Math.Max(1.0, Math.Max(sx, root));
+    }
+
     void CreateSwapChain()
     {
         if (!_inited || _renderer.Device == null) return;
-        // Native DPI: render at CompositionScale (not DIP) — no blurry upscale
-        var sx = Math.Max(1.0, CompositionScaleX);
-        var sy = Math.Max(1.0, CompositionScaleY);
-        var w = Math.Max(1, (int)Math.Round(ActualWidth * sx));
-        var h = Math.Max(1, (int)Math.Round(ActualHeight * sy));
+        var scale = EffectiveScale();
+        var w = Math.Max(1, (int)Math.Round(ActualWidth * scale));
+        var h = Math.Max(1, (int)Math.Round(ActualHeight * scale));
         if (w < 2 || h < 2) return;
+        if (w == _lastW && h == _lastH && Math.Abs(scale - _lastScale) < 0.001) return;
+        _lastW = w;
+        _lastH = h;
+        _lastScale = scale;
+        Program.BootLog($"SwapChain {w}x{h} scale={scale:0.###} dip={ActualWidth:0}x{ActualHeight:0}");
 
         try
         {
@@ -124,7 +139,6 @@ public sealed class HoloPanel : SwapChainPanel
             };
             _swap = factory.CreateSwapChainForComposition(_renderer.Device, desc);
 
-            // Bind DXGI swapchain to WinUI SwapChainPanel via ISwapChainPanelNative
             var panelPtr = ((IWinRTObject)this).NativeObject.ThisPtr;
             var iid = typeof(ISwapChainPanelNative).GUID;
             var hr = Marshal.QueryInterface(panelPtr, ref iid, out var nativePtr);
@@ -147,6 +161,7 @@ public sealed class HoloPanel : SwapChainPanel
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine("CreateSwapChain: " + ex);
+            Program.BootLog("CreateSwapChain: " + ex.Message);
         }
     }
 }

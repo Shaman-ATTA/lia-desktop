@@ -21,6 +21,30 @@ public partial class App : Application
         };
     }
 
+    /// <summary>Parse --smoke-size=1920x1080 or LIA_SMOKE_SIZE. Default 1280x800.</summary>
+    public static (int W, int H) ParseSmokeSize()
+    {
+        static bool TryParse(string? s, out int w, out int h)
+        {
+            w = h = 0;
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            var parts = s.Split('x', 'X', '×');
+            return parts.Length == 2
+                   && int.TryParse(parts[0], out w) && int.TryParse(parts[1], out h)
+                   && w >= 640 && h >= 480;
+        }
+
+        foreach (var a in Environment.GetCommandLineArgs())
+        {
+            if (a.StartsWith("--smoke-size=", StringComparison.OrdinalIgnoreCase) &&
+                TryParse(a["--smoke-size=".Length..], out var w, out var h))
+                return (w, h);
+        }
+        if (TryParse(Environment.GetEnvironmentVariable("LIA_SMOKE_SIZE"), out var ew, out var eh))
+            return (ew, eh);
+        return (1280, 800);
+    }
+
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         Program.BootLog("OnLaunched");
@@ -36,9 +60,10 @@ public partial class App : Application
             Program.BootLog($"hwnd=0x{hwnd.ToInt64():X}");
             var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
             var appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
-            appWindow.Resize(new Windows.Graphics.SizeInt32(1280, 800));
+            var (w, h) = ParseSmokeSize();
+            appWindow.Resize(new Windows.Graphics.SizeInt32(w, h));
             appWindow.Show();
-            Program.BootLog("AppWindow.Show done");
+            Program.BootLog($"AppWindow.Show done size={w}x{h}");
         }
         catch (Exception ex)
         {

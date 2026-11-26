@@ -66,28 +66,48 @@ public sealed partial class MainWindow : Window
             VoiceLine.Text = "ГОЛОС  ГОВОРЮ";
             FadeInSubtitle();
         });
+        _player.Volume = 1.0;
+        _player.AudioCategory = MediaPlayerAudioCategory.Speech;
+        _player.MediaEnded += (_, _) => DispatcherQueue.TryEnqueue(OnSpeakEnded);
+        _player.MediaFailed += (_, e) => DispatcherQueue.TryEnqueue(() =>
+        {
+            _s.Log.Error("TTS playback failed", e.ErrorMessage ?? "MediaFailed");
+            OnSpeakEnded();
+        });
         _s.Agent.SpeakFile += path => DispatcherQueue.TryEnqueue(() =>
         {
             try
             {
-                _speaking = true;
-                _player.Source = MediaSource.CreateFromUri(new Uri(path));
-                _player.Play();
-                _player.MediaEnded += (_, _) => DispatcherQueue.TryEnqueue(() =>
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
                 {
-                    _speaking = false;
-                    StatusCaption.Text = "ОЖИДАНИЕ";
-                    VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
-                    Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";
-                    Holo.Renderer.Jaw = 0;
-                    Holo.Renderer.Funnel = 0;
-                    Holo.Renderer.Wide = 0;
-                });
+                    _s.Log.Error("TTS: файл не найден", path ?? "");
+                    return;
+                }
+                _speaking = true;
+                StatusCaption.Text = "ГОВОРЮ";
+                VoiceLine.Text = "ГОЛОС  ГОВОРЮ";
+                // file:/// URI — MediaPlayer needs an absolute path URI
+                var uri = new Uri(Path.GetFullPath(path));
+                _player.Source = MediaSource.CreateFromUri(uri);
+                _player.Play();
+                _s.Log.Info("TTS: воспроизведение SvetlanaNeural");
             }
-            catch { /* */ }
+            catch (Exception ex)
+            {
+                _s.Log.Error("TTS playback", ex.Message);
+                OnSpeakEnded();
+            }
         });
 
         _s.Speech.FinalResult += OnSpeechFinal;
+        _s.MicGemini.FinalResult += text => DispatcherQueue.TryEnqueue(() =>
+        {
+            // Gemini mic session ends after one utterance — reset listening chrome
+            _listening = false;
+            Holo.Renderer.SetListening(false);
+            MicGlyph.Text = "◉";
+            OnSpeechFinal(text);
+        });
         _clock.Tick += (_, _) => TickTelemetry();
         _clock.Start();
 
@@ -416,7 +436,8 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            if (!_s.Speech.IsAvailable) return;
+            // Auto-wake uses Windows STT only; Gemini mic is push-to-talk (needs utterance end).
+            if (!_s.WindowsSpeechOk) return;
             await _s.Speech.StartAsync();
             _listening = true;
             Holo.Renderer.SetListening(true);
@@ -622,32 +643,52 @@ public sealed partial class MainWindow : Window
         await _s.Agent.RunAsync(text);
     }
 
+    void OnSpeakEnded()
+    {
+        _speaking = false;
+        StatusCaption.Text = "ОЖИДАНИЕ";
+        VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
+        Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";
+        Holo.Renderer.Jaw = 0;
+        Holo.Renderer.Funnel = 0;
+        Holo.Renderer.Wide = 0;
+    }
+
     async void Mic_Click(object sender, RoutedEventArgs e)
     {
-        if (!_s.Speech.IsAvailable)
-        {
-            _s.Log.Info("Распознавание речи Windows недоступно — введите текст.");
-            CommandBox.Focus(FocusState.Programmatic);
-            return;
-        }
         if (_listening)
         {
-            await _s.Speech.StopAsync();
+            if (_s.WindowsSpeechOk) await _s.Speech.StopAsync();
+            else await _s.MicGemini.StopAsync();
             _listening = false;
             Holo.Renderer.SetListening(false);
             MicGlyph.Text = "◉";
             VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
             StatusCaption.Text = "ОЖИДАНИЕ";
+            return;
+        }
+
+        // Default: Windows STT when available; else Gemini mic (WASAPI + VAD).
+        if (_s.WindowsSpeechOk)
+        {
+            await _s.Speech.StartAsync();
         }
         else
         {
-            await _s.Speech.StartAsync();
-            _listening = true;
-            Holo.Renderer.SetListening(true);
-            MicGlyph.Text = "■";
-            VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
-            StatusCaption.Text = "СЛУШАЮ";
+            var cfg = _s.Secrets.Load();
+            if (string.IsNullOrWhiteSpace(cfg.ApiKey))
+            {
+                _s.Log.Info("Распознавание речи Windows недоступно — нужен ключ Gemini для микрофона, или введите текст.");
+                CommandBox.Focus(FocusState.Programmatic);
+                return;
+            }
+            await _s.MicGemini.StartAsync();
         }
+        _listening = true;
+        Holo.Renderer.SetListening(true);
+        MicGlyph.Text = "■";
+        VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
+        StatusCaption.Text = "СЛУШАЮ";
     }
 
     void OnSpeechFinal(string text)
@@ -692,7 +733,41 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(ApiKeyBox.Password))
             cfg.ApiKey = ApiKeyBox.Password;
         cfg.WorkspacePath = WorkspaceBox.Text?.Trim() ?? cfg.WorkspacePath;
-        cfg.Model = ModelBox.SelectedItem?.ToString() ?? cfg.Model;
+        var picked = ModelBox.SelectedItem?.ToString()?.Trim() ?? "";
+
+        // Validate against ListModels — never persist a phantom id.
+        if (cfg.Provider == "gemini" && !string.IsNullOrWhiteSpace(cfg.ApiKey))
+        {
+            try
+            {
+                var models = await GeminiModels.ListAsync(cfg.ApiKey);
+                var ids = models.Select(m => m.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (string.IsNullOrEmpty(picked) || !ids.Contains(picked))
+                {
+                    var best = GeminiModels.PickBestFlash(models);
+                    if (best == null)
+                    {
+                        ModelsHint.Text = "Нет flash-моделей в ListModels";
+                        return;
+                    }
+                    if (!string.IsNullOrEmpty(picked))
+                        _s.Log.Info($"Модель «{picked}» нет в ListModels → {best}");
+                    picked = best;
+                }
+                ModelBox.Items.Clear();
+                foreach (var m in models) ModelBox.Items.Add(m.Id);
+                ModelBox.SelectedItem = picked;
+            }
+            catch (Exception ex)
+            {
+                var c = GeminiModels.Classify(ex);
+                ModelsHint.Text = c.UserMessage;
+                _s.Log.Error(c.UserMessage, c.Detail);
+                return;
+            }
+        }
+
+        cfg.Model = picked;
         cfg.VisionModel = cfg.Model;
         _s.Secrets.Save(cfg);
         try { AutostartService.SetEnabled(AutostartBox.IsChecked == true); }
@@ -714,10 +789,23 @@ public sealed partial class MainWindow : Window
                 ? _s.Secrets.Load().ApiKey
                 : ApiKeyBox.Password;
             var models = await GeminiModels.ListAsync(key);
+            var prev = ModelBox.SelectedItem?.ToString();
             ModelBox.Items.Clear();
             foreach (var m in models) ModelBox.Items.Add(m.Id);
-            if (ModelBox.Items.Count > 0) ModelBox.SelectedIndex = 0;
-            ModelsHint.Text = $"{models.Count} models";
+            if (!string.IsNullOrEmpty(prev))
+            {
+                for (var i = 0; i < ModelBox.Items.Count; i++)
+                {
+                    if (string.Equals(ModelBox.Items[i]?.ToString(), prev, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ModelBox.SelectedIndex = i;
+                        break;
+                    }
+                }
+            }
+            if (ModelBox.SelectedIndex < 0 && ModelBox.Items.Count > 0)
+                ModelBox.SelectedIndex = 0;
+            ModelsHint.Text = $"{models.Count} flash/generateContent";
         }
         catch (Exception ex)
         {

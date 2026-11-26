@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6.9 — Gemini resilience, mic STT fallback, HiDPI centre stage
+
+- Gemini: 90s HttpClient, retry 503/429 with 1/2/4/8/16s + Retry-After (max 5), ListModels fallback, RU HTTP errors; settings dropdown validates models
+- Mic: when Windows ru-RU Speech missing → WASAPI + VAD → Gemini inline audio STT; TTS playback hardened (SvetlanaNeural)
+- Layout: hologram only in centre 0.56 column; swapchain uses max(CompositionScale, RasterizationScale); CI 1080p/4K framing asserts
+
+
 ## v0.6.8 — neck fade below jaw; clean chin
 
 - Fade starts ≥25% neckHeight below chin tip (local Y); jaw/chin alpha=1

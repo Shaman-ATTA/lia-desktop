@@ -45,7 +45,8 @@ public static class GeminiModels
 
     public static bool IsOverload(string message, int? status) =>
         status is 429 or 503 ||
-        Regex.IsMatch(message, @"high demand|resource.?exhausted|unavailable|rate.?limit|quota|overloaded|try again later",
+        // Do NOT match bare "unavailable" — overlaps with model-not-found 404 text.
+        Regex.IsMatch(message, @"high demand|resource.?exhausted|rate.?limit|quota|overloaded|try again later|503|429",
             RegexOptions.IgnoreCase);
 
     public static double ScoreFlash(string id)
@@ -89,7 +90,7 @@ public static class GeminiModels
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new HttpRequestException("Нет ключа Gemini", null, System.Net.HttpStatusCode.Unauthorized);
 
-        http ??= new HttpClient();
+        http ??= new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
         var url = $"{ListUrl}?pageSize=100&key={Uri.EscapeDataString(apiKey.Trim())}";
         using var res = await http.GetAsync(url, ct);
         var body = await res.Content.ReadFromJsonAsync<ListModelsResponse>(cancellationToken: ct);
@@ -127,10 +128,23 @@ public static class GeminiModels
     public static ClassifiedGeminiError Classify(Exception err, int? status = null)
     {
         var detail = err.Message;
-        if (err is HttpRequestException httpEx && httpEx.StatusCode is { } sc)
+        if (err is GeminiHttpException ghe)
+        {
+            status ??= ghe.Status;
+            if (!string.IsNullOrWhiteSpace(ghe.ResponseBody) && detail.Length < 40)
+                detail = TryMsg(ghe.ResponseBody) ?? detail;
+        }
+        else if (err is HttpRequestException httpEx && httpEx.StatusCode is { } sc)
             status ??= (int)sc;
 
         var suggested = ParseSuggestedModel(detail);
+        var statusBit = status is int st ? $"HTTP {st}" : "ошибка";
+
+        if (err is TaskCanceledException or OperationCanceledException or TimeoutException)
+            return new(GeminiErrorKind.Network,
+                $"Таймаут Gemini ({statusBit}). Повторите запрос.",
+                detail, status ?? 408);
+
         if (status == 0 || Regex.IsMatch(detail, @"fetch failed|ECONNREFUSED|ENOTFOUND|network|ETIMEDOUT|сете|HttpRequestException", RegexOptions.IgnoreCase))
             return new(GeminiErrorKind.Network, "Нет связи с Gemini. Проверьте интернет.", detail, status);
 
@@ -139,14 +153,37 @@ public static class GeminiModels
             return new(GeminiErrorKind.Auth, "Ключ API отклонён. Проверьте ключ в Настройках (aistudio.google.com).", detail, status);
 
         if (IsOverload(detail, status))
-            return new(GeminiErrorKind.Model, "Модель перегружена. Повторяю запрос…", detail, status ?? 503, suggested);
+            return new(GeminiErrorKind.Model,
+                $"Модель перегружена ({statusBit}): {ShortRu(detail)}",
+                detail, status ?? 503, suggested);
 
         if (IsModelUnavailable(detail, status) || suggested != null)
             return new(GeminiErrorKind.Model,
-                suggested != null ? $"Модель недоступна → {suggested}" : "Модель Gemini недоступна. Выберите другую в Настройках.",
+                suggested != null
+                    ? $"Модель недоступна ({statusBit}) → {suggested}"
+                    : $"Модель Gemini недоступна ({statusBit}). Выберите другую в Настройках.",
                 detail, status ?? 404, suggested);
 
-        return new(GeminiErrorKind.Other, "Ошибка Gemini. Подробности в журнале.", detail, status);
+        return new(GeminiErrorKind.Other,
+            $"Ошибка Gemini ({statusBit}): {ShortRu(detail)}",
+            detail, status);
+    }
+
+    static string ShortRu(string detail)
+    {
+        var d = detail.Replace('\n', ' ').Trim();
+        if (d.Length > 160) d = d[..160] + "…";
+        return d;
+    }
+
+    static string? TryMsg(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.GetProperty("error").GetProperty("message").GetString();
+        }
+        catch { return null; }
     }
 
     sealed class ListModelsResponse
