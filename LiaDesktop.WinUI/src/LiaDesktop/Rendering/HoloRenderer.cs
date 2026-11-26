@@ -620,7 +620,7 @@ public sealed class HoloRenderer : IDisposable
         if (!_eyesCloseup)
         {
             _ctx.OMSetDepthStencilState(_dssRead);
-            _ctx.OMSetBlendState(_blendAlpha);
+            _ctx.OMSetBlendState(_blendPremul);
             _ctx.RSSetState(_rsNoCull);
             _ctx.PSSetShader(_psRing);
             _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
@@ -635,7 +635,7 @@ public sealed class HoloRenderer : IDisposable
                 var model = Matrix4x4.Transpose(
                     rot * Matrix4x4.CreateTranslation(0f, r.TransY, r.TransZ));
                 WriteFrame(viewProj, model, cam, 0, 1f);
-                WriteRing(r.Color, _ringsShowcase ? Math.Min(0.36f, r.Opacity * 1.1f) : r.Opacity);
+                WriteRing(r.Color, _ringsShowcase ? Math.Min(0.72f, r.Opacity * 1.25f) : r.Opacity);
                 _ctx.IASetVertexBuffer(0, r.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(r.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(r.IndexCount, 0, 0);
@@ -1077,30 +1077,42 @@ public sealed class HoloRenderer : IDisposable
 
     void BuildRings()
     {
-        void Add(float radius, float tube, float pitchDeg, float yaw, float roll,
-            float transY, float transZ, float spinY, float opacity)
+        // Thick segmented holographic orbits. Torus in XZ; maxZ ≈ tz + r·cos(pitch).
+        // Keep maxZ ≤ −0.05 (behind face). Varied tilts; yaw spin only.
+        void AddSeg(float radius, float tube, float pitchDeg, float yaw, float roll,
+            float transY, float transZ, float spinY, float opacity, int pieces, float gapFrac)
         {
             var pitch = pitchDeg * MathF.PI / 180f;
-            var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
-            _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, 0f, spinY, transY, transZ));
+            var total = MathF.PI * 2f;
+            var gap = total * gapFrac / Math.Max(1, pieces);
+            var span = (total - gap * pieces) / Math.Max(1, pieces);
+            for (var i = 0; i < pieces; i++)
+            {
+                var start = i * (span + gap);
+                var (vb, ib, count) = CreateTorus(radius, tube, span, start);
+                _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, 0f, spinY, transY, transZ));
+            }
         }
-        // Torus lies in XZ; max world Z ≈ transZ + radius·cos(pitch).
-        // Face/nose ≈ z+0.12 — keep maxZ ≤ −0.05 so NO segment crosses eyes/nose/mouth.
-        // Sides (±r) peek around the silhouette as a continuous halo; depth hides the rest.
-        // Radius ≤0.36 stays inside viewport (half-h≈0.52). Mild pitch only. No discard.
-        Add(0.36f, 0.0010f, 8f, 0.00f, 0.015f, 0.32f, -0.44f, 0.06f, 0.30f);   // crown behind
-        Add(0.34f, 0.0009f, -6f, 0.02f, -0.015f, -0.18f, -0.42f, 0.045f, 0.24f); // neck behind
+
+        // Crown cluster
+        AddSeg(0.38f, 0.0048f, 18f, 0.00f, 0.04f, 0.30f, -0.48f, 0.07f, 0.55f, 7, 0.18f);
+        AddSeg(0.44f, 0.0036f, 28f, 0.08f, -0.05f, 0.26f, -0.55f, -0.045f, 0.42f, 9, 0.22f);
+        // Mid / neck cluster
+        AddSeg(0.36f, 0.0042f, -16f, 0.03f, 0.02f, -0.14f, -0.46f, 0.055f, 0.48f, 6, 0.16f);
+        AddSeg(0.42f, 0.0032f, -32f, -0.06f, 0.08f, -0.22f, -0.52f, -0.04f, 0.38f, 8, 0.20f);
+        // Outer faint rim
+        AddSeg(0.50f, 0.0028f, 8f, 0.12f, -0.03f, 0.06f, -0.60f, 0.03f, 0.28f, 10, 0.24f);
     }
 
-    (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
+    (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, float startU = 0f)
     {
-        const int seg = 128, sides = 10;
+        const int seg = 96, sides = 12;
         var verts = new List<Vertex>();
         var indices = new List<int>();
-        var segs = Math.Max(8, (int)(seg * (arc / (MathF.PI * 2))));
+        var segs = Math.Max(6, (int)(seg * (arc / (MathF.PI * 2))));
         for (var i = 0; i <= segs; i++)
         {
-            var u = i / (float)segs * arc;
+            var u = startU + i / (float)segs * arc;
             for (var j = 0; j <= sides; j++)
             {
                 var v = j / (float)sides * MathF.PI * 2;

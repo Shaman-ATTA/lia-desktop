@@ -9,11 +9,61 @@
       <ResourceDictionary.MergedDictionaries>
         <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
       </ResourceDictionary.MergedDictionaries>
+
       <SolidColorBrush x:Key="LiaAmber" Color="#FF9A3C"/>
+      <SolidColorBrush x:Key="LiaAmberDim" Color="#88FF9A3C"/>
+      <SolidColorBrush x:Key="LiaAmberGlow" Color="#44FFB060"/>
       <SolidColorBrush x:Key="LiaCyan" Color="#5AD6FF"/>
-      <SolidColorBrush x:Key="LiaBg" Color="#0A0714"/>
-      <SolidColorBrush x:Key="LiaPanel" Color="#CC120E1C"/>
-      <SolidColorBrush x:Key="LiaMuted" Color="#88A0A8B8"/>
+      <SolidColorBrush x:Key="LiaCyanDim" Color="#665AD6FF"/>
+      <SolidColorBrush x:Key="LiaBg" Color="#E605070C"/>
+      <SolidColorBrush x:Key="LiaPanel" Color="#B810121A"/>
+      <SolidColorBrush x:Key="LiaPanelSolid" Color="#F010121A"/>
+      <SolidColorBrush x:Key="LiaMuted" Color="#99A8B4C0"/>
+      <SolidColorBrush x:Key="LiaHairline" Color="#55FF9A3C"/>
+      <SolidColorBrush x:Key="LiaText" Color="#E8F0F4"/>
+
+      <FontFamily x:Key="LiaUi">Segoe UI Variable Display, Segoe UI, Bahnschrift</FontFamily>
+      <FontFamily x:Key="LiaMono">Cascadia Mono, Consolas, Courier New</FontFamily>
+
+      <Style x:Key="HudLabel" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource LiaAmber}"/>
+        <Setter Property="FontFamily" Value="{StaticResource LiaUi}"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="CharacterSpacing" Value="120"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+      </Style>
+      <Style x:Key="HudMono" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource LiaCyan}"/>
+        <Setter Property="FontFamily" Value="{StaticResource LiaMono}"/>
+        <Setter Property="FontSize" Value="11"/>
+      </Style>
+      <Style x:Key="HudTab" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource LiaMuted}"/>
+        <Setter Property="FontFamily" Value="{StaticResource LiaUi}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="CharacterSpacing" Value="80"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+      </Style>
+      <Style x:Key="HudGhostButton" TargetType="Button">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{StaticResource LiaHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Foreground" Value="{StaticResource LiaAmber}"/>
+        <Setter Property="FontFamily" Value="{StaticResource LiaUi}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Padding" Value="14,6"/>
+        <Setter Property="CornerRadius" Value="0"/>
+      </Style>
+      <Style x:Key="HudLineInput" TargetType="TextBox">
+        <Setter Property="Background" Value="#22000000"/>
+        <Setter Property="BorderBrush" Value="{StaticResource LiaAmberDim}"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Setter Property="Foreground" Value="{StaticResource LiaText}"/>
+        <Setter Property="FontFamily" Value="{StaticResource LiaMono}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Padding" Value="4,8"/>
+        <Setter Property="CornerRadius" Value="0"/>
+      </Style>
     </ResourceDictionary>
   </Application.Resources>
 </Application>

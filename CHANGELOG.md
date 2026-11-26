@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.0 — Cinematic holographic HUD
+
+- Full-window sci-fi HUD redesign (borderless, acrylic/mica, custom title bar)
+- Head unchanged (materials, framing, lip sync from v0.5.5)
+- Floating glass telemetry / uplink cards with corner brackets + monospace readouts
+- Subtitle-style status, glowing mic orb + audio-reactive waveform, thin text tabs
+- Concentric animated 2D HUD arcs / ticks / scan sweep around the head
+- Thicker segmented glowing 3D orbit rings at varied tilts (still depth-occluded behind face)
+- Boot sequence; CONFIG ghost buttons (no default WinUI chrome / blue accent)
+- CI: front / 3-4 / speaking / eyes / rings / full-window HUD shots
+
 ## v0.5.5 — Clean chin, continuous halo rings
 
 - Removed mouth/chin grey haze (cavity darken) — uniform skin
@@ -46,15 +57,6 @@
 - Subtle hologram veil only (amber fresnel, thin scanlines) — face stays photoreal
 - Documented in `THIRD_PARTY.md`
 
-## v0.4.1 — Face polish + installer + smaller zip
-
-- Amber lips, almond eyes, thin holo brows, close-up camera, livelier head
-- Zip ~93 MB (Playwright win32-only); Inno setup ~65 MB; autostart/tray
-
-## v0.4.0 — Female hologram head (MakeHuman)
-
-- CC0 MakeHuman/MPFB female + bob hair — superseded by v0.5.0
-
 ## Earlier
 
-- v0.3.3 eyeball spheres · v0.3.2 rings · v0.3.0 WinUI
+- v0.4.x installer / female head · v0.3.x WinUI / rings

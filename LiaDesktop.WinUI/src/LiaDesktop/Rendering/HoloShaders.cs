@@ -273,15 +273,17 @@ struct PSIn {
   float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
-  // Full continuous ring — occlusion is depth-test only (no discard hack)
+  // Thick glowing tube — occlusion is depth-test only (no discard hack)
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
-  float fres = pow(1.0 - saturate(dot(N,V)), 2.2);
-  float pulse = 0.90 + 0.10 * sin(time * 1.2 + i.local.x * 2.5);
-  float3 amber = color * float3(1.0, 0.78, 0.42);
-  float3 c = amber * (0.18 + fres * 0.70) * pulse;
-  float a = saturate(opacity * (0.18 + fres * 0.50));
-  return float4(c, a);
+  float fres = pow(1.0 - saturate(dot(N,V)), 1.6);
+  float pulse = 0.88 + 0.12 * sin(time * 1.6 + i.local.x * 3.0);
+  float3 amber = color * float3(1.05, 0.82, 0.45);
+  float core = 0.55 + fres * 0.95;
+  float3 c = amber * core * pulse;
+  float a = saturate(opacity * (0.42 + fres * 0.58));
+  // Premul-ish boost so tubes read as luminous hologram bands
+  return float4(c * a * 1.15, a);
 }";
 
     /// <summary>Fullscreen triangle VS — POSITION.xy = clip, zw unused; TEXCOORD = uv.</summary>

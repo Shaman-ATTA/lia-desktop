@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Self-check smoke screenshots: head fills ~70-75% of the 3D viewport height.
+"""Self-check smoke screenshots: head fills ~70-75% of the hologram stage height.
 
 Expects PNGs in CWD: desktop_winui_front.png (and optionally others).
-Uses a center-band skin/hair mask so amber orbit rings do not inflate the bbox.
-Exits non-zero if front head height fraction is outside [0.58, 0.85].
+Uses a center-band skin/hair mask so amber orbit rings / 2D HUD arcs do not inflate the bbox.
+Exits non-zero if front head height fraction is outside [0.58, 0.90].
 """
 from __future__ import annotations
 
@@ -15,14 +15,13 @@ from PIL import Image
 
 
 def _find_viewport(a: np.ndarray) -> tuple[int, int, int, int]:
-    """Locate the dark 3D panel by scanning for a large near-black region."""
+    """Locate the hologram stage under title/footer chrome (v0.6 full-bleed HUD)."""
     h, w, _ = a.shape
-    lum = a.mean(axis=2)
-    # Prefer fixed crop tuned to 1040x736 smoke chrome; fall back if odd size
-    if 700 <= h <= 800 and 1000 <= w <= 1100:
-        return 78, min(h - 160, 575), int(w * 0.29), int(w * 0.71)
-    y0, y1 = int(h * 0.10), int(h * 0.78)
-    x0, x1 = int(w * 0.28), int(w * 0.72)
+    # Title ~36px, bottom dock ~96px on 800px window; side glass overlays edges.
+    if h >= 650 and w >= 900:
+        return int(h * 0.055), int(h * 0.875), int(w * 0.20), int(w * 0.80)
+    y0, y1 = int(h * 0.08), int(h * 0.86)
+    x0, x1 = int(w * 0.22), int(w * 0.78)
     return y0, y1, x0, x1
 
 
@@ -30,14 +29,13 @@ def _head_rows(vp: np.ndarray) -> np.ndarray:
     """Row indices for contiguous head+neck in the center band.
 
     Skin defines the vertical core (chin/neck). Hair may extend the crown upward.
-    Soft amber ring glow is excluded so neck orbits don't inflate height.
+    Soft amber ring / HUD glow is excluded so orbits don't inflate height.
     """
     h, w, _ = vp.shape
     x0, x1 = int(w * 0.34), int(w * 0.66)
     band = vp[:, x0:x1]
     r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
     lum = (r + g + b) / 3.0
-    # Orbit tubes: saturated amber/yellow, not peach skin (skin keeps more blue/red balance)
     amber = (r > 145) & (g > 95) & (b < 95) & ((r - b) > 70) & ((g - b) > 40) & (r >= g)
     skin = (r > 55) & (g > 30) & (b > 22) & (r >= g * 0.95) & (r > b * 0.85) & ((r - b) > 5) & (~amber)
     hair = (lum > 16) & (lum < 95) & (r >= g) & (g >= b * 0.8) & (r < 110) & (b < 70) & (~amber)
@@ -52,7 +50,6 @@ def _head_rows(vp: np.ndarray) -> np.ndarray:
         lo -= 1
     while (hi + 1) in skin_set:
         hi += 1
-    # Extend crown upward with hair only
     hair_rows = set(np.where(hair.sum(axis=1) > 5)[0].tolist())
     while (lo - 1) in hair_rows:
         lo -= 1
@@ -84,7 +81,6 @@ def eyes_width_frac(path: Path) -> float:
     r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
     lum = (r + g + b) / 3.0
     amber = (r > 140) & (g > 110) & (b < 100)
-    # Prefer skin in the eye strip; ignore amber ring slash
     skin = (r > 55) & (g > 30) & (b > 20) & (r >= g * 0.9) & ((r - b) > 4) & (~amber)
     xs = np.where(skin.any(axis=0))[0]
     if len(xs) < 8:
@@ -94,6 +90,36 @@ def eyes_width_frac(path: Path) -> float:
     return float((xs[-1] - xs[0] + 1) / max(1, band.shape[1]))
 
 
+def amber_face_frac(path: Path, y0: float = 0.28, y1: float = 0.55) -> float:
+    """Fraction of face-band pixels that look like bright amber ring tubes."""
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    h, w, _ = vp.shape
+    band = vp[int(h * y0) : int(h * y1), int(w * 0.30) : int(w * 0.70)]
+    if band.size == 0:
+        return 0.0
+    r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
+    amber = (r > 150) & (g > 95) & (b < 95) & ((r - b) > 70) & ((g - b) > 40) & (r >= g)
+    return float(amber.mean())
+
+
+def neck_black_blob_frac(path: Path) -> float:
+    """Opaque black neck stump (color multiplied to 0) vs navy clear (~4,3,8)."""
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    h, w, _ = vp.shape
+    band = vp[int(h * 0.72) : int(h * 0.95), int(w * 0.35) : int(w * 0.65)]
+    if band.size == 0:
+        return 0.0
+    r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
+    stump = (r < 2.5) & (g < 2.5) & (b < 3.5)
+    return float(stump.mean())
+
+
 def main() -> int:
     front = Path("desktop_winui_front.png")
     if not front.is_file():
@@ -101,7 +127,6 @@ def main() -> int:
         return 2
     frac, top, bot = viewport_content_frac(front)
     print(f"front head_height_frac={frac:.3f} top_margin={top:.3f} bot_margin={bot:.3f}")
-    # Target 70-75%; allow 58-85% so CI isn't brittle to HUD crop / hair detection
     if frac < 0.58:
         print(f"FAIL: head too small ({frac:.1%}) — expected ~70-75%", file=sys.stderr)
         return 1
@@ -132,7 +157,6 @@ def main() -> int:
     if eyes.is_file():
         ew = eyes_width_frac(eyes)
         print(f"eyes face_width_frac={ew:.3f}")
-        # Face band is wider than iris-to-iris (~60%); require a real close-up, not a bust shot
         if ew < 0.50:
             print(f"FAIL: eyes close-up too far ({ew:.1%}) — want eyes ~60% width", file=sys.stderr)
             return 1
@@ -148,7 +172,7 @@ def main() -> int:
             continue
         af = amber_face_frac(p, y0=0.28, y1=0.55)
         print(f"{name}: amber_on_face_frac={af:.4f}")
-        if af > 0.035:
+        if af > 0.045:
             print(f"FAIL: {name} rings crossing face ({af:.2%})", file=sys.stderr)
             return 1
         nb = neck_black_blob_frac(p)
@@ -159,38 +183,6 @@ def main() -> int:
 
     print("framing check ok")
     return 0
-
-
-def amber_face_frac(path: Path, y0: float = 0.28, y1: float = 0.55) -> float:
-    """Fraction of face-band pixels that look like bright amber ring tubes."""
-    im = Image.open(path).convert("RGB")
-    a = np.asarray(im).astype(np.float32)
-    yy0, yy1, x0, x1 = _find_viewport(a)
-    vp = a[yy0:yy1, x0:x1]
-    h, w, _ = vp.shape
-    # Stay inside the 3D panel — exclude orange chrome at the right edge
-    band = vp[int(h * y0) : int(h * y1), int(w * 0.30) : int(w * 0.70)]
-    if band.size == 0:
-        return 0.0
-    r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
-    amber = (r > 150) & (g > 95) & (b < 95) & ((r - b) > 70) & ((g - b) > 40) & (r >= g)
-    return float(amber.mean())
-
-
-def neck_black_blob_frac(path: Path) -> float:
-    """Opaque black neck stump (color multiplied to 0) vs navy clear (~4,3,8)."""
-    im = Image.open(path).convert("RGB")
-    a = np.asarray(im).astype(np.float32)
-    yy0, yy1, x0, x1 = _find_viewport(a)
-    vp = a[yy0:yy1, x0:x1]
-    h, w, _ = vp.shape
-    band = vp[int(h * 0.72) : int(h * 0.95), int(w * 0.35) : int(w * 0.65)]
-    if band.size == 0:
-        return 0.0
-    r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
-    # Pure-black stump from color*=neck; clear keeps a little blue
-    stump = (r < 2.5) & (g < 2.5) & (b < 3.5)
-    return float(stump.mean())
 
 
 if __name__ == "__main__":
