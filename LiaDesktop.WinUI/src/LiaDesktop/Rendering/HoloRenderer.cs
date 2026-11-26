@@ -51,7 +51,7 @@ public sealed class HoloRenderer : IDisposable
     static readonly Vector3 Amber = new(1f, 0.62f, 0.32f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
-    // Head local Y≈0.20..0.55; cam Z≈2.00 / fov 24° → ≈72–80% after neck trim at Y=0.305
+    // Head local Y≈0.20..0.55; cam Z≈1.88 / fov 24° → ≈72–80% after neck trim at Y=0.305
     const float HeadScale = 2.70f;
     const float HeadTransY = -1.00f;
     const int MsaaCount = 2; // 4x was ~2× CPU on WARP; 2x still cleans edges
@@ -556,16 +556,16 @@ public sealed class HoloRenderer : IDisposable
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
-            cam = new Vector3(orbit, 0.03f, 2.00f);
-            lookAt = new Vector3(0, 0.05f, 0.02f);
+            cam = new Vector3(orbit, 0.04f, 1.88f);
+            lookAt = new Vector3(0, 0.06f, 0.02f);
             fovDeg = 24f;
         }
         else
         {
-            // Head ≈72–80% after geometric neck trim (was 2.38→~63%)
+            // Head ≈72–80% (2.00→~69%; 1.88 targets ~74%)
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.03f, 2.00f);
-            lookAt = new Vector3(0, 0.05f, 0.02f);
+            cam = new Vector3(orbit, 0.04f, 1.88f);
+            lookAt = new Vector3(0, 0.06f, 0.02f);
             fovDeg = 24f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);

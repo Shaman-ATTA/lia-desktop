@@ -96,13 +96,13 @@ public sealed class PbrMesh
             eyeL = ReadVec(root, "eyeL", eyeL);
             eyeR = ReadVec(root, "eyeR", eyeR);
         }
-        // Geometric neck trim: drop triangles entirely below the cut (stump + shoulder notch).
-        // Shader still clips + fades for a smooth edge; this removes the jagged silhouette verts.
+        // Drop tris fully below the cut (stump). Keep straddling tris so the pixel shader
+        // clip(i.local.y - cutY) can slice a clean horizontal plane (all-above-only made notches).
         idx = TrimTrianglesBelow(pos, idx, cutY: 0.305f);
         return new PbrMesh(pos, nrm, uvs, idx, shapes, eyeL, eyeR);
     }
 
-    /// <summary>Keep a triangle only if ALL verts are at/above cutY — clean horizontal-ish trim, no stump/notch flaps.</summary>
+    /// <summary>Drop triangles with all verts below cutY. Straddlers stay for planar shader clip.</summary>
     static int[] TrimTrianglesBelow(float[] pos, int[] idx, float cutY)
     {
         var kept = new List<int>(idx.Length);
@@ -112,7 +112,7 @@ public sealed class PbrMesh
             var ya = pos[a * 3 + 1];
             var yb = pos[b * 3 + 1];
             var yc = pos[c * 3 + 1];
-            if (ya >= cutY && yb >= cutY && yc >= cutY)
+            if (ya >= cutY || yb >= cutY || yc >= cutY)
             {
                 kept.Add(a); kept.Add(b); kept.Add(c);
             }
