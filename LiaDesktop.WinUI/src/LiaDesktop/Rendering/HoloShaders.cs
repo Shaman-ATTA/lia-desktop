@@ -84,13 +84,14 @@ float4 main(PSIn i) : SV_TARGET {
   color *= (1.0 + 0.07 * scanWave * (1.0 - darkLash));
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Aggressive soft dissolve: mesh stump fully invisible; visible neck fades over ~neck height
-  float neckA = smoothstep(0.22, 0.50, i.local.y);
+  // Soft stump dissolve — keep most neck visible (framing ~70%+) while killing hard edge
+  float neckA = smoothstep(0.16, 0.34, i.local.y);
   float rad = length(i.local.xz);
-  // Outer shelf (3/4 hard right edge) fades earlier
-  neckA *= 1.0 - smoothstep(0.09, 0.16, rad) * (1.0 - smoothstep(0.28, 0.52, i.local.y));
+  // Outer shelf (3/4 right stump) dissolves a bit earlier, not the whole neck
+  float shelf = smoothstep(0.11, 0.18, rad);
+  neckA *= lerp(1.0, smoothstep(0.18, 0.36, i.local.y), shelf * 0.75);
   neckA = saturate(neckA);
-  if (neckA < 0.02) discard;
+  if (neckA < 0.008) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
