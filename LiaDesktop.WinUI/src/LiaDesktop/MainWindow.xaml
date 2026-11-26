@@ -63,7 +63,7 @@
 
     <!-- Floating glass: status + journal -->
     <Border x:Name="LeftCard" Width="236" HorizontalAlignment="Left" VerticalAlignment="Stretch"
-            Margin="18,56,0,128" Background="{StaticResource LiaPanel}"
+            Margin="18,56,0,140" Background="{StaticResource LiaPanel}"
             BorderBrush="{StaticResource LiaHairline}" BorderThickness="1" Padding="14">
       <Grid>
         <Grid.RowDefinitions>
@@ -104,7 +104,7 @@
 
     <!-- Floating glass: dialog + system -->
     <Border x:Name="RightCard" Width="252" HorizontalAlignment="Right" VerticalAlignment="Stretch"
-            Margin="0,56,18,128" Background="{StaticResource LiaPanel}"
+            Margin="0,56,18,140" Background="{StaticResource LiaPanel}"
             BorderBrush="{StaticResource LiaHairline}" BorderThickness="1" Padding="14">
       <StackPanel Spacing="10">
         <Canvas IsHitTestVisible="False" Height="0">
