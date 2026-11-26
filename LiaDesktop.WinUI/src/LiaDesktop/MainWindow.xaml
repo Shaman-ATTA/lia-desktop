@@ -8,10 +8,10 @@
 
   <Grid x:Name="Root" Background="#FF05070C">
     <!-- Full-bleed hologram stage (no boxed frame) -->
-    <render:HoloPanel x:Name="Holo" Margin="0,36,0,96"/>
+    <render:HoloPanel x:Name="Holo" Margin="0,36,0,120"/>
 
     <!-- Soft vignette so glass cards read over the head -->
-    <Grid IsHitTestVisible="False" Margin="0,36,0,96">
+    <Grid IsHitTestVisible="False" Margin="0,36,0,120">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="0.22*"/>
         <ColumnDefinition Width="0.56*"/>
@@ -36,7 +36,7 @@
     </Grid>
 
     <!-- 2D cinematic HUD arcs / ticks / scan (drawn in code) -->
-    <Canvas x:Name="HudCanvas" IsHitTestVisible="False" Margin="0,36,0,96"/>
+    <Canvas x:Name="HudCanvas" IsHitTestVisible="False" Margin="0,36,0,120"/>
 
     <!-- Custom title bar -->
     <Border x:Name="AppTitleBar" VerticalAlignment="Top" Height="36" Background="#9905070C"
@@ -63,7 +63,7 @@
 
     <!-- Floating glass: status + journal -->
     <Border x:Name="LeftCard" Width="236" HorizontalAlignment="Left" VerticalAlignment="Stretch"
-            Margin="18,56,0,120" Background="{StaticResource LiaPanel}"
+            Margin="18,56,0,128" Background="{StaticResource LiaPanel}"
             BorderBrush="{StaticResource LiaHairline}" BorderThickness="1" Padding="14">
       <Grid>
         <Grid.RowDefinitions>
@@ -104,7 +104,7 @@
 
     <!-- Floating glass: dialog + system -->
     <Border x:Name="RightCard" Width="252" HorizontalAlignment="Right" VerticalAlignment="Stretch"
-            Margin="0,56,18,120" Background="{StaticResource LiaPanel}"
+            Margin="0,56,18,128" Background="{StaticResource LiaPanel}"
             BorderBrush="{StaticResource LiaHairline}" BorderThickness="1" Padding="14">
       <StackPanel Spacing="10">
         <Canvas IsHitTestVisible="False" Height="0">
@@ -123,61 +123,64 @@
       </StackPanel>
     </Border>
 
-    <!-- Center subtitle strip (no box frame) -->
-    <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,118"
-                IsHitTestVisible="False" Spacing="4">
-      <TextBlock x:Name="StatusCaption" Text="ОЖИДАНИЕ" Foreground="{StaticResource LiaAmber}"
-                 FontFamily="{StaticResource LiaUi}" FontSize="14" CharacterSpacing="180"
-                 HorizontalAlignment="Center"/>
-      <TextBlock x:Name="Subtitle" Text="Скажите «Лиа» или нажмите микрофон"
-                 Foreground="{StaticResource LiaCyan}" Opacity="0.92"
-                 FontFamily="{StaticResource LiaUi}" FontSize="13"
-                 HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="520"
-                 TextAlignment="Center"/>
-    </StackPanel>
-
-    <!-- Bottom dock: tabs + glowing mic orb -->
-    <Border VerticalAlignment="Bottom" Height="96" Background="#E005070C"
+    <!-- Bottom dock: status (never over face) + tabs + glowing mic orb -->
+    <Border VerticalAlignment="Bottom" Height="120" Background="#E005070C"
             BorderBrush="#22FF9A3C" BorderThickness="0,1,0,0">
       <Grid>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="36">
-          <TextBlock Text="ГЛАВНАЯ" Style="{StaticResource HudTab}" Foreground="{StaticResource LiaAmber}"/>
-          <Grid Width="88" Height="88">
-            <!-- Soft glow -->
-            <Ellipse Width="78" Height="78" Opacity="0.22">
-              <Ellipse.Fill>
-                <RadialGradientBrush>
-                  <GradientStop Color="#FFFF9A3C" Offset="0"/>
-                  <GradientStop Color="#00FF9A3C" Offset="1"/>
-                </RadialGradientBrush>
-              </Ellipse.Fill>
-            </Ellipse>
-            <Canvas x:Name="WaveCanvas" Width="88" Height="88" IsHitTestVisible="False"/>
-            <Button x:Name="MicBtn" Width="56" Height="56" CornerRadius="28"
-                    Click="Mic_Click" HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Background="Transparent" BorderThickness="0" Padding="0">
-              <Grid Width="52" Height="52">
-                <Ellipse x:Name="MicGlow" Width="52" Height="52" Opacity="0.55">
-                  <Ellipse.Fill>
-                    <RadialGradientBrush>
-                      <GradientStop Color="#FFFFB060" Offset="0"/>
-                      <GradientStop Color="#AAFF6A20" Offset="0.55"/>
-                      <GradientStop Color="#33FF9A3C" Offset="1"/>
-                    </RadialGradientBrush>
-                  </Ellipse.Fill>
-                </Ellipse>
-                <Ellipse Width="40" Height="40" Stroke="{StaticResource LiaAmber}" StrokeThickness="1.4"
-                         Fill="#CC120E14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                <TextBlock x:Name="MicGlyph" Text="◉" Foreground="{StaticResource LiaAmber}"
-                           FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Grid>
-            </Button>
-          </Grid>
-          <TextBlock Text="АГЕНТ" Style="{StaticResource HudTab}"/>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,4,0,0"
+                    IsHitTestVisible="False" Spacing="1">
+          <TextBlock x:Name="StatusCaption" Text="ОЖИДАНИЕ" Foreground="{StaticResource LiaAmber}"
+                     FontFamily="{StaticResource LiaUi}" FontSize="12" CharacterSpacing="160"
+                     HorizontalAlignment="Center"/>
+          <TextBlock x:Name="Subtitle" Text="Скажите «Лиа» или нажмите микрофон"
+                     Foreground="{StaticResource LiaCyan}" Opacity="0.92"
+                     FontFamily="{StaticResource LiaUi}" FontSize="11"
+                     HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="520"
+                     TextAlignment="Center"/>
         </StackPanel>
-        <TextBlock Text="Ctrl+Alt+S · стоп" Foreground="{StaticResource LiaMuted}" FontSize="10"
-                   FontFamily="{StaticResource LiaMono}"
-                   HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,20,0"/>
+        <Grid Grid.Row="1">
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="36">
+            <TextBlock Text="ГЛАВНАЯ" Style="{StaticResource HudTab}" Foreground="{StaticResource LiaAmber}"/>
+            <Grid Width="72" Height="72">
+              <Ellipse Width="68" Height="68" Opacity="0.22">
+                <Ellipse.Fill>
+                  <RadialGradientBrush>
+                    <GradientStop Color="#FFFF9A3C" Offset="0"/>
+                    <GradientStop Color="#00FF9A3C" Offset="1"/>
+                  </RadialGradientBrush>
+                </Ellipse.Fill>
+              </Ellipse>
+              <Canvas x:Name="WaveCanvas" Width="72" Height="72" IsHitTestVisible="False"/>
+              <Button x:Name="MicBtn" Width="48" Height="48" CornerRadius="24"
+                      Click="Mic_Click" HorizontalAlignment="Center" VerticalAlignment="Center"
+                      Background="Transparent" BorderThickness="0" Padding="0">
+                <Grid Width="44" Height="44">
+                  <Ellipse x:Name="MicGlow" Width="44" Height="44" Opacity="0.55">
+                    <Ellipse.Fill>
+                      <RadialGradientBrush>
+                        <GradientStop Color="#FFFFB060" Offset="0"/>
+                        <GradientStop Color="#AAFF6A20" Offset="0.55"/>
+                        <GradientStop Color="#33FF9A3C" Offset="1"/>
+                      </RadialGradientBrush>
+                    </Ellipse.Fill>
+                  </Ellipse>
+                  <Ellipse Width="34" Height="34" Stroke="{StaticResource LiaAmber}" StrokeThickness="1.4"
+                           Fill="#CC120E14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="MicGlyph" Text="◉" Foreground="{StaticResource LiaAmber}"
+                             FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+              </Button>
+            </Grid>
+            <TextBlock Text="АГЕНТ" Style="{StaticResource HudTab}"/>
+          </StackPanel>
+          <TextBlock Text="Ctrl+Alt+S · стоп" Foreground="{StaticResource LiaMuted}" FontSize="10"
+                     FontFamily="{StaticResource LiaMono}"
+                     HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,20,0"/>
+        </Grid>
       </Grid>
     </Border>
 

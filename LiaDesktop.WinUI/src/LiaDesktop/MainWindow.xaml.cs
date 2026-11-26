@@ -273,8 +273,8 @@ public sealed partial class MainWindow : Window
         WaveCanvas.Children.Clear();
         _waveBars.Clear();
         const int n = 28;
-        var cx = 44.0;
-        var cy = 44.0;
+        var cx = 36.0;
+        var cy = 36.0;
         for (var i = 0; i < n; i++)
         {
             var ang = i / (double)n * Math.PI * 2;
@@ -293,7 +293,7 @@ public sealed partial class MainWindow : Window
             {
                 Children =
                 {
-                    new TranslateTransform { X = -1, Y = -30 },
+                    new TranslateTransform { X = -1, Y = -26 },
                     new RotateTransform { Angle = ang * 180 / Math.PI },
                 },
             };
@@ -389,11 +389,18 @@ public sealed partial class MainWindow : Window
             _proc.Refresh();
             var t = _proc.TotalProcessorTime;
             var wall = DateTime.UtcNow;
-            var dt = (wall - _lastCpuSample).TotalMilliseconds;
-            if (dt > 400)
+            // First sample only seeds baselines (Zero → lifetime CPU looked like 80%+)
+            if (_lastCpu == TimeSpan.Zero)
             {
-                // Real process CPU as % of one logical core (not a fake counter).
-                // Divide by ProcessorCount for machine-share % — show per-core so idle ~few %.
+                _lastCpu = t;
+                _lastCpuSample = wall;
+                _cpu = 0;
+                return;
+            }
+            var dt = (wall - _lastCpuSample).TotalMilliseconds;
+            if (dt > 500)
+            {
+                // Real process share of the machine (all logical cores)
                 var cpuDt = (t - _lastCpu).TotalMilliseconds;
                 var cores = Math.Max(1, Environment.ProcessorCount);
                 _cpu = Math.Clamp(cpuDt / dt / cores * 100.0, 0, 100);

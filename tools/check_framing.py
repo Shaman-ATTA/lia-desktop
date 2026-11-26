@@ -19,7 +19,8 @@ def _find_viewport(a: np.ndarray) -> tuple[int, int, int, int]:
     h, w, _ = a.shape
     # Title ~36px, bottom dock ~96px on 800px window; side glass overlays edges.
     if h >= 650 and w >= 900:
-        return int(h * 0.055), int(h * 0.875), int(w * 0.20), int(w * 0.80)
+        # title ~36px, bottom dock ~120px on 800px window
+        return int(h * 0.055), int(h * 0.85), int(w * 0.20), int(w * 0.80)
     y0, y1 = int(h * 0.08), int(h * 0.86)
     x0, x1 = int(w * 0.22), int(w * 0.78)
     return y0, y1, x0, x1
