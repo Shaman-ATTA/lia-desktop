@@ -185,11 +185,7 @@ public sealed partial class MainWindow : Window
 
         var cx = w * 0.5;
         var cy = h * 0.48;
-        var amber = (Color)Application.Current.Resources["LiaAmber"] is SolidColorBrush
-            ? ((SolidColorBrush)Application.Current.Resources["LiaAmber"]).Color
-            : Color.FromArgb(255, 255, 154, 60);
-        // Resources are brushes — pull colors explicitly
-        amber = Color.FromArgb(255, 255, 154, 60);
+        var amber = Color.FromArgb(255, 255, 154, 60);
         var cyan = Color.FromArgb(255, 90, 214, 255);
 
         double[] radii = [Math.Min(w, h) * 0.28, Math.Min(w, h) * 0.34, Math.Min(w, h) * 0.40, Math.Min(w, h) * 0.46];
@@ -202,8 +198,8 @@ public sealed partial class MainWindow : Window
             for (var s = 0; s < segs; s++)
             {
                 var start = s * (sweep + gap) + i * 7;
-                var path = MakeArc(cx, cy, r, start, sweep, i % 2 == 0 ? amber : cyan, i == 0 ? 1.6 : 1.1);
-                path.Opacity = 0.35 + i * 0.08;
+                var path = MakeArc(cx, cy, r, start, sweep, i % 2 == 0 ? amber : cyan, i == 0 ? 2.0 : 1.35);
+                path.Opacity = 0.55 + i * 0.08;
                 HudCanvas.Children.Add(path);
                 _hudArcs.Add(path);
             }
