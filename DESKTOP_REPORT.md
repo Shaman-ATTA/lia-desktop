@@ -1,8 +1,10 @@
 # Lia Desktop — ship report
 
-## v0.6.6 — visible arcs + soft neck fade
+## v0.6.6 — visible arcs + soft neck fade (published)
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.6
+
+QA: arcs L/R ~500+ each, 0 on face; neck soft fade; cam Z=2.82; framing ~76%.
 
 ## v0.6.5 — v0.6.2 head + arcs behind (published, QA rejected)
 

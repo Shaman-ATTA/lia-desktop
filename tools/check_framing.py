@@ -136,10 +136,10 @@ def _hud_arc_mask(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
     return amber | cyan
 
 
-def arc_ring_pixel_count(path: Path) -> tuple[int, int]:
+def arc_ring_pixel_count(path: Path) -> tuple[int, int, int, int]:
     """Count HUD arc pixels framing the head, and on the face band.
 
-    Returns (ring_count, face_count).
+    Returns (ring_count, face_count, left_n, right_n).
     Ring = amber/cyan in left+right mid-stage bands (outside head), excluding
     top chrome / bottom mic so UI accents can't fake a pass.
     """
