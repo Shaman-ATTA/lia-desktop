@@ -1107,12 +1107,12 @@ public sealed class HoloRenderer : IDisposable
         }
 
         // Rings use headOrient WITHOUT HeadScale — TransY world-ish (+ HeadTransY=-1).
-        // Crown: face-tilted halo above bun (world Y≈0.58), behind face plane.
-        AddSeg(0.28f, 0.0045f, 72f, 0.00f, 0.02f, 1.58f, -0.22f, 0.05f, 0.88f, 8, 0.10f); // crown core
-        AddSeg(0.28f, 0.0090f, 72f, 0.00f, 0.02f, 1.58f, -0.22f, 0.05f, 0.34f, 8, 0.10f); // crown glow
-        // Chin: below chin (world Y≈−0.32), behind neck — stays above bottom dock.
-        AddSeg(0.26f, 0.0034f, -10f, 0.02f, -0.02f, 0.68f, -0.58f, -0.03f, 0.62f, 8, 0.10f); // chin core
-        AddSeg(0.26f, 0.0070f, -10f, 0.02f, -0.02f, 0.68f, -0.58f, -0.03f, 0.22f, 8, 0.10f); // chin glow
+        // Crown: tilted halo above bun; keep maxZ well behind face (no forehead Z-fight).
+        AddSeg(0.26f, 0.0048f, 68f, 0.00f, 0.02f, 1.58f, -0.38f, 0.05f, 0.90f, 8, 0.10f); // crown core
+        AddSeg(0.26f, 0.0095f, 68f, 0.00f, 0.02f, 1.58f, -0.38f, 0.05f, 0.34f, 8, 0.10f); // crown glow
+        // Chin: below chin, deep behind neck so only side arcs show (never across skin).
+        AddSeg(0.30f, 0.0036f, -8f, 0.02f, -0.02f, 0.70f, -0.72f, -0.03f, 0.70f, 8, 0.12f); // chin core
+        AddSeg(0.30f, 0.0075f, -8f, 0.02f, -0.02f, 0.70f, -0.72f, -0.03f, 0.24f, 8, 0.12f); // chin glow
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, float startU = 0f)

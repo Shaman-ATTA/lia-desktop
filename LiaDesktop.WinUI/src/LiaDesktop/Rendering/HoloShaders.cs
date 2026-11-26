@@ -83,17 +83,17 @@ float4 main(PSIn i) : SV_TARGET {
   color *= (1.0 + 0.10 * scanWave * (1.0 - darkLash));       // ~10% scan dip
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Vertical neck dissolve (mesh Y≈0.20 stump → 0.36 chin). pad.x selects pass:
+  // Vertical neck dissolve (mesh Y≈0.20 stump → chin). pad.x selects pass:
   // 0 = solid (depth-write), 1 = fade band only (depth-read, premul) — avoids hard Z silhouette.
-  float neckA = smoothstep(0.22, 0.36, i.local.y);
+  float neckA = smoothstep(0.24, 0.38, i.local.y);
   float neckPass = pad.x;
   if (neckPass < 0.5) {
-    clip(neckA - 0.92); // solid face/upper neck only
+    clip(neckA - 0.95); // solid face/upper neck only
     neckA = 1.0;
   } else {
-    clip(0.92 - neckA); // fade band only
-    clip(neckA - 0.02);
-    neckA = neckA * neckA; // softer ramp into void
+    clip(0.95 - neckA); // fade band only
+    clip(neckA - 0.015);
+    neckA = neckA * neckA * neckA; // very soft into void — no silhouette edge
   }
 
   color = color / (1.0 + color * 0.65);
