@@ -69,24 +69,38 @@ float4 main(PSIn i) : SV_TARGET {
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
   float3 color = diffuse + key * spec;
 
-  // Amber hologram veil: uniform scanlines + soft fresnel rim (subtle but clearly visible)
-  float ndv = saturate(dot(N,V));
-  float fres = pow(1.0 - ndv, 1.8);
-  float scanWave = 0.5 + 0.5 * sin((i.world.y + time * 0.08) * 130.0);
-  float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.14, 0.93, 0.72), 0.28);
-  color += amber * fres * 0.85 * max(glow, 0.9);  // silhouette rim
-  color += amber * 0.055 * scanWave;               // additive scanlines
-  color *= (1.0 + 0.07 * (scanWave * 2.0 - 1.0));
+  // Mouth cavity: dark interior + suppress morph spikes (tan vertical blob)
+  float mouthZone = smoothstep(0.055, 0.030, abs(i.local.x))
+                  * smoothstep(0.26, 0.30, i.local.y) * smoothstep(0.40, 0.36, i.local.y)
+                  * smoothstep(0.00, 0.035, i.local.z);
+  float inward = saturate(0.35 - saturate(dot(N, V)));
+  float cavity = saturate(mouthZone * (0.55 + inward * 1.2));
+  // Upper teeth stay brighter (front lip-line, higher Y, facing camera)
+  float teeth = mouthZone * saturate(dot(N, V)) * smoothstep(0.34, 0.37, i.local.y);
+  color = lerp(color, color * float3(0.12, 0.06, 0.05), cavity * 0.92);
+  color = lerp(color, float3(0.78, 0.72, 0.62) * (0.45 + ndl * 0.4), teeth * 0.55);
 
-  // Neck → discard geometry (true transparency). Keep enough neck for ~70% framing.
-  // No dither stipple, no black multiply — hard cut into clear bg.
-  float neckA = smoothstep(0.22, 0.32, i.local.y);
-  clip(neckA - 0.05);
+  // Thin faint scrolling scanlines (~3-4 px period in screen space) + soft amber rim
+  float ndv = saturate(dot(N,V));
+  float fres = pow(1.0 - ndv, 2.0);
+  float luma = dot(albedo, float3(0.299, 0.587, 0.114));
+  // Kill amber sparkle on dark painted lashes/brows in the albedo
+  float darkLash = saturate(1.0 - luma * 4.0);
+  fres *= (1.0 - darkLash * 0.95);
+  float scanWave = sin(i.pos.y * (6.2831853 / 3.5) + time * 1.35);
+  float3 amber = float3(1.0, 0.62, 0.28);
+  color = lerp(color, color * float3(1.10, 0.94, 0.78), 0.14 * (1.0 - darkLash));
+  color += amber * fres * 0.48 * max(glow, 0.85);
+  color *= (1.0 + 0.08 * scanWave); // ~8% intensity, thin bands
+
+  // Neck: smooth alpha fade over lower ~25% of neck (premultiplied)
+  float neckA = smoothstep(0.20, 0.30, i.local.y);
+  clip(neckA - 0.01);
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
-  return float4(color, 1.0);
+  // Premultiplied RGB
+  return float4(color * neckA, neckA);
 }";
 
     public const string PixelHair = @"
@@ -108,14 +122,14 @@ struct PSIn {
 };
 float4 main(PSIn i) : SV_TARGET {
   float4 op = opacityMap.Sample(samp, i.uv);
-  // Drop eyelid/lash cards (eye height) — they sparkle; albedo already has hair fill
-  clip(i.local.y - 0.40);
+  // Drop eyelid/lash cards entirely — gold sparkle on CU; albedo already has hair fill
+  clip(i.local.y - 0.46);
 
   float a = op.a;
   if (a < 0.02) a = max(op.r, max(op.g, op.b));
   clip(a - 0.50);
 
-  // Near-black hair cards only (bun/ponytail volume)
+  // Near-black hair cards only (bun/ponytail volume) — no additive holo/fresnel
   float3 hairCol = float3(0.03, 0.02, 0.015);
   float luma = dot(op.rgb, float3(0.299, 0.587, 0.114));
   if (luma < 0.20 && a > 0.80)
@@ -123,17 +137,12 @@ float4 main(PSIn i) : SV_TARGET {
   hairCol = min(hairCol, float3(0.08, 0.05, 0.035));
 
   float3 N = normalize(i.nrm);
-  float3 V = normalize(camPos - i.world);
   float3 L = normalize(float3(0.3, 0.7, 0.6));
   float ndl = saturate(dot(N,L)*0.45+0.55);
   float3 color = hairCol * ndl;
-  // Match skin holo veil on hair cards too
-  float ndv = saturate(dot(N,V));
-  float fres = pow(1.0 - ndv, 1.8);
-  float scanWave = 0.5 + 0.5 * sin((i.world.y + time * 0.08) * 130.0);
-  float3 amber = float3(1.0, 0.62, 0.28);
-  color += amber * fres * 0.70;
-  color += amber * 0.045 * scanWave;
+  // Very faint scan only (no amber fresnel — that sparked on any residual cards)
+  float scanWave = sin(i.pos.y * (6.2831853 / 3.5) + time * 1.35);
+  color *= (1.0 + 0.04 * scanWave);
   color = pow(saturate(color), 1.0/2.2);
   return float4(color, 1.0);
 }";
@@ -274,11 +283,14 @@ struct PSIn {
   float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
+  // Safety: never draw over eyes/mouth on the front of the head
+  if (i.world.z > 0.04 && abs(i.world.x) < 0.16 && i.world.y > -0.10 && i.world.y < 0.22)
+    clip(-1);
+
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
   float fres = pow(1.0 - saturate(dot(N,V)), 2.2);
   float pulse = 0.90 + 0.10 * sin(time * 1.2 + i.local.x * 2.5);
-  // Soft amber glow tube — semi-transparent, not solid yellow
   float3 amber = color * float3(1.0, 0.78, 0.42);
   float3 c = amber * (0.18 + fres * 0.70) * pulse;
   float a = saturate(opacity * (0.18 + fres * 0.50));

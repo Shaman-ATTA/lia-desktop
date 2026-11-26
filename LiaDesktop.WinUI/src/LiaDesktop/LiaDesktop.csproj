@@ -30,7 +30,7 @@
     <AssemblyName>LiaDesktop</AssemblyName>
     <Product>Lia Assistant</Product>
     <Company>ATTA CORP</Company>
-    <Version>0.5.3</Version>
+    <Version>0.5.4</Version>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <!-- Shrink satellite assemblies — keep en only -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

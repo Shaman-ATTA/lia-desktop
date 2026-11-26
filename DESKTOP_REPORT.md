@@ -1,5 +1,11 @@
 # Lia Desktop — ship report
 
+## v0.5.4 — polish
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.4
+
+Neck alpha fade · thin scanlines · tilted halo rings · clean open mouth · no lash sparkle.
+
 ## v0.5.3 — rings / neck / holo
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.3

@@ -94,6 +94,7 @@ public sealed class HoloRenderer : IDisposable
     ID3D11DepthStencilState? _dssOff;
     ID3D11BlendState? _blendOpaque;
     ID3D11BlendState? _blendAlpha;
+    ID3D11BlendState? _blendPremul;
     ID3D11RasterizerState? _rs;
     ID3D11RasterizerState? _rsNoCull;
     ID3D11SamplerState? _samplerLinearWrap;
@@ -232,6 +233,23 @@ public sealed class HoloRenderer : IDisposable
         });
         _blendOpaque = _device.CreateBlendState(BlendDescription.Opaque);
         _blendAlpha = _device.CreateBlendState(BlendDescription.AlphaBlend);
+        var premulDesc = new BlendDescription
+        {
+            AlphaToCoverageEnable = false,
+            IndependentBlendEnable = false,
+        };
+        premulDesc.RenderTarget[0] = new RenderTargetBlendDescription
+        {
+            BlendEnable = true,
+            SourceBlend = Blend.One,
+            DestinationBlend = Blend.InverseSourceAlpha,
+            BlendOperation = BlendOperation.Add,
+            SourceBlendAlpha = Blend.One,
+            DestinationBlendAlpha = Blend.InverseSourceAlpha,
+            BlendOperationAlpha = BlendOperation.Add,
+            RenderTargetWriteMask = ColorWriteEnable.All,
+        };
+        _blendPremul = _device.CreateBlendState(premulDesc);
         _rs = _device.CreateRasterizerState(new RasterizerDescription
         {
             CullMode = CullMode.Back,
@@ -503,7 +521,8 @@ public sealed class HoloRenderer : IDisposable
         if (_mesh != null && _morphScratch != null)
         {
             var lid = BlinkLidAmount();
-            _mesh.Morph(Math.Min(0.72f, jaw * 0.92f), funnel * 0.55f, wide * 0.55f, smile, brow, lid, _morphScratch);
+            // Cap jaw — high jawOpen + cavity lighting looked like a vertical tongue spike
+            _mesh.Morph(Math.Min(0.58f, jaw * 0.85f), funnel * 0.45f, wide * 0.45f, smile, brow, lid, _morphScratch);
             UploadHead(_morphScratch);
         }
 
@@ -565,9 +584,9 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 1) Skin — PBR + dithered neck clip to transparency (no-cull: bake winding can flip)
+        // 1) Skin — PBR + premultiplied neck alpha fade (no-cull: bake winding can flip)
         _ctx.OMSetDepthStencilState(_dssWrite);
-        _ctx.OMSetBlendState(_blendOpaque, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+        _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
         _ctx.RSSetState(_rsNoCull);
         WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         BindSkinTextures();
@@ -583,7 +602,7 @@ public sealed class HoloRenderer : IDisposable
         // 2) Eyes + cornea
         DrawEyes(viewProj, headWorld, cam, blinkAmt);
 
-        // 3) Hair/lashes — alpha-tested dark cards (opaque after clip)
+        // 3) Hair — alpha-tested dark cards (lashes clipped; no amber holo on cards)
         if (_hairVb != null && _hairIb != null && _hairIndexCount > 0)
         {
             _ctx.OMSetDepthStencilState(_dssRead);
@@ -598,8 +617,7 @@ public sealed class HoloRenderer : IDisposable
             _ctx.RSSetState(_rs);
         }
 
-        // 4) Rings — depth-tested neck/halo orbits; hidden in eyes close-up
-        // Spin ONLY around Y (in-plane for XZ torus). Accumulating roll/pitch tilts rings through the face.
+        // 4) Rings — tilted halo orbits; yaw-only spin; hidden in eyes close-up
         if (!_eyesCloseup)
         {
             _ctx.OMSetDepthStencilState(_dssRead);
@@ -611,13 +629,12 @@ public sealed class HoloRenderer : IDisposable
             {
                 var r = _rings[i];
                 var spinBoost = _ringsShowcase ? 2.8f : 1f;
-                // Tiny fixed pitch/roll; yaw spins the orbit without lifting it into the eyes
                 var rot = Matrix4x4.CreateFromYawPitchRoll(
                     r.BaseYaw + _time * r.SpinY * spinBoost,
                     r.BasePitch,
                     r.BaseRoll);
-                // Chin/neck height; slight Z back so front arc sits under the jaw
-                var model = Matrix4x4.Transpose(rot * Matrix4x4.CreateTranslation(0f, -0.22f, -0.06f));
+                var model = Matrix4x4.Transpose(
+                    rot * Matrix4x4.CreateTranslation(0f, r.TransY, r.TransZ));
                 WriteFrame(viewProj, model, cam, 0, 1f);
                 WriteRing(r.Color, _ringsShowcase ? Math.Min(0.36f, r.Opacity * 1.1f) : r.Opacity);
                 _ctx.IASetVertexBuffer(0, r.Vb, stride, 0);
@@ -1061,18 +1078,19 @@ public sealed class HoloRenderer : IDisposable
 
     void BuildRings()
     {
-        void Add(float radius, float tube, float pitchDeg, float yaw, float roll, float spinZ, float spinY = 0.015f, float opacity = 0.85f)
+        void Add(float radius, float tube, float pitchDeg, float yaw, float roll,
+            float transY, float transZ, float spinY, float opacity)
         {
             var pitch = pitchDeg * MathF.PI / 180f;
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
-            _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
+            _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, 0f, spinY, transY, transZ));
         }
-        // Near-horizontal neck orbits (torus in XZ). Pitch/roll FIXED & tiny so planes stay under chin.
-        // Radius ≈ 1.2–1.35× head width; thin soft amber tubes; depth-tested vs head.
-        // spinZ unused (kept for API); spinY = in-plane orbit only.
-        Add(0.50f, 0.0012f, 4f, 0.00f, 0.04f, 0f, 0.12f, 0.28f);
-        Add(0.56f, 0.0010f, -5f, 0.05f, -0.05f, 0f, 0.09f, 0.22f);
-        Add(0.62f, 0.0009f, 3f, -0.03f, 0.06f, 0f, 0.07f, 0.18f);
+        // World Y: eyes≈0.16, forehead≈0.28, chin≈-0.15 (after HeadScale/Trans).
+        // Tilt 12–22° so front arc is above forehead OR below chin — never through eyes/mouth.
+        // Radius ~1.25–1.4× head width; yaw-only spin; depth-tested vs head.
+        Add(0.46f, 0.0011f, 18f, 0.02f, 0.05f, 0.26f, -0.05f, 0.10f, 0.26f);  // forehead halo
+        Add(0.50f, 0.0010f, -16f, 0.04f, -0.04f, -0.20f, -0.04f, 0.08f, 0.22f); // below chin
+        Add(0.54f, 0.0009f, 12f, -0.03f, 0.06f, 0.04f, -0.08f, 0.06f, 0.18f);  // mid, pushed back
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
@@ -1180,6 +1198,7 @@ public sealed class HoloRenderer : IDisposable
         _dssOff?.Dispose();
         _blendOpaque?.Dispose();
         _blendAlpha?.Dispose();
+        _blendPremul?.Dispose();
         _rs?.Dispose();
         _rsNoCull?.Dispose();
         _ctx?.Dispose();
@@ -1200,13 +1219,13 @@ public sealed class HoloRenderer : IDisposable
         public ID3D11Buffer Vb, Ib;
         public uint IndexCount;
         public Vector3 Color;
-        public float Opacity, BasePitch, BaseYaw, BaseRoll, SpinZ, SpinY;
+        public float Opacity, BasePitch, BaseYaw, BaseRoll, SpinZ, SpinY, TransY, TransZ;
         public RingMesh(ID3D11Buffer vb, ID3D11Buffer ib, uint count, Vector3 c, float o,
-            float pitch, float yaw, float roll, float spinZ, float spinY)
+            float pitch, float yaw, float roll, float spinZ, float spinY, float transY, float transZ)
         {
             Vb = vb; Ib = ib; IndexCount = count; Color = c; Opacity = o;
             BasePitch = pitch; BaseYaw = yaw; BaseRoll = roll;
-            SpinZ = spinZ; SpinY = spinY;
+            SpinZ = spinZ; SpinY = spinY; TransY = transY; TransZ = transZ;
         }
     }
 }

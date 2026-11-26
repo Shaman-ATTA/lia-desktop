@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.4 — Neck fade, thin scanlines, halo rings, mouth, lashes
+
+- Smooth premultiplied neck alpha fade (no hard cut)
+- Thin faint scrolling scanlines (~3–4 px, ~8%) + amber fresnel rim
+- Tilted forehead/chin halo rings, depth-tested; never cover eyes/mouth
+- Open mouth: jaw morph declutter + dark cavity / upper teeth
+- No gold sparkle on lashes (clip cards + no amber on dark albedo)
+
 ## v0.5.3 — Rings depth/halo, neck alpha, holo veil
 
 - Rings: near-horizontal neck/halo orbits (no face crossings), depth-tested, thinner soft amber; hidden in eyes CU

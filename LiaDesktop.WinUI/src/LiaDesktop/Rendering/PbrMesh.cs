@@ -37,11 +37,11 @@ public sealed class PbrMesh
     {
         var b = BasePositions;
         Array.Copy(b, dest, b.Length);
-        Add(dest, Shape("jawOpen"), jaw);
+        // jawOpen alone — stacking viseme_aa created a vertical tooth/tongue spike
+        Add(dest, Shape("jawOpen"), Math.Clamp(jaw, 0, 0.85f));
         Add(dest, Shape("mouthFunnel"), funnel);
         // wide ≈ pucker inverse-ish — use smile stretch via mouthSmile + slight pucker
         Add(dest, Shape("mouthPucker"), Math.Clamp(wide * 0.35f, 0, 1));
-        Add(dest, Shape("viseme_aa"), Math.Clamp(jaw * 0.45f, 0, 1));
         Add(dest, Shape("mouthSmileLeft"), smile);
         Add(dest, Shape("mouthSmileRight"), smile);
         Add(dest, Shape("browInnerUp"), brow);
