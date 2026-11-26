@@ -248,13 +248,16 @@ public static class SelfTestRunner
             return 1;
         }
 
-        // TTS: wait briefly for SpeakFile
-        for (var i = 0; i < 40 && speakPath == null; i++)
-            await Task.Delay(100);
+        // SpeakFile is raised before RunAsync returns; if TTS failed, retry directly.
+        if (speakPath == null || !File.Exists(speakPath) || new FileInfo(speakPath).Length <= 0)
+        {
+            L($"{name}: SpeakFile missing — retrying EdgeTts directly…");
+            speakPath = await s.Tts.SpeakToFileAsync(narrated!, CancellationToken.None);
+        }
 
         if (speakPath == null || !File.Exists(speakPath))
         {
-            L($"FAIL {name}: TTS file missing (SpeakFile not raised / edge-tts failed)");
+            L($"FAIL {name}: TTS file missing (edge-tts / websocket failed)");
             return 1;
         }
         var len = new FileInfo(speakPath).Length;
