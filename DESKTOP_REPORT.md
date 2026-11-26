@@ -1,8 +1,10 @@
 # Lia Desktop — ship report
 
-## v0.6.8 — clean jaw, neck fade below chin
+## v0.6.8 — clean jaw, neck fade below chin (published)
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.8
+
+QA: jaw/chin MAD vs v0.6.6 front 8.0 / hud 3.8 (gate ≤12); neck α ~0.10; arcs ~1100 ring / 0 on face; framing ~70%. Depth prepass + NoCull + LessEqual color. Fade strictly below jaw (fadeTop≈0.306).
 
 ## v0.6.7 — hologram neck dissolve (published, QA rejected)
 
