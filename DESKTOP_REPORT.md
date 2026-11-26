@@ -1,8 +1,10 @@
 # Lia Desktop — ship report
 
-## v0.6.7 — hologram neck dissolve
+## v0.6.7 — hologram neck dissolve (published)
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.7
+
+QA: neck_bottom_avg_alpha≈0.03; arcs L/R intact; cam/framing unchanged.
 
 ## v0.6.6 — visible arcs + soft neck fade (published)
 
