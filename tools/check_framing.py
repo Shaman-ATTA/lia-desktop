@@ -121,6 +121,83 @@ def neck_black_blob_frac(path: Path) -> float:
     return float(stump.mean())
 
 
+def _head_bbox(vp: np.ndarray) -> tuple[int, int, int, int] | None:
+    """Tight bbox of head+neck content (incl. faint dissolve), stage-local coords."""
+    h, w, _ = vp.shape
+    r, g, b = vp[:, :, 0], vp[:, :, 1], vp[:, :, 2]
+    lum = (r + g + b) / 3.0
+    amber = (r > 145) & (g > 95) & (b < 95) & ((r - b) > 70) & ((g - b) > 40) & (r >= g)
+    # Include dim/faded neck (warm, above navy) so dissolve zone stays in the box
+    content = (
+        (r > 18)
+        & (g > 10)
+        & (b > 8)
+        & (r >= g * 0.85)
+        & (r > b * 0.7)
+        & (lum > 22)
+        & (~amber)
+    )
+    # Prefer center column so side HUD glass doesn't inflate bbox
+    x0c, x1c = int(w * 0.28), int(w * 0.72)
+    band = content[:, x0c:x1c]
+    ys = np.where(band.any(axis=1))[0]
+    xs_all = np.where(content.any(axis=0))[0]
+    if len(ys) < 8 or len(xs_all) < 8:
+        return None
+    # Contiguous vertical run near mid-face
+    cy = int(h * 0.40)
+    yset = set(ys.tolist())
+    near = int(ys[np.argmin(np.abs(ys - cy))])
+    lo = hi = near
+    while (lo - 1) in yset:
+        lo -= 1
+    while (hi + 1) in yset:
+        hi += 1
+    row = content[lo : hi + 1]
+    xs = np.where(row.any(axis=0))[0]
+    if len(xs) < 8:
+        return None
+    return lo, hi, int(xs[0]), int(xs[-1])
+
+
+def neck_bottom_avg_alpha(path: Path) -> float:
+    """Estimate mean premul alpha in the bottom 10% of the head bbox.
+
+    Screenshots are composited RGB over navy (~4,3,8). Invert:
+      c ≈ skin*a + navy*(1-a)  →  a ≈ ||c-navy|| / ||skinRef-navy||
+    Navy padding around the silhouette is ignored — only content pixels
+    (est alpha > 0.04) are averaged, so a hard stump cannot hide in the mean.
+    """
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    box = _head_bbox(vp)
+    if box is None:
+        return 1.0
+    y0, y1, bx0, bx1 = box
+    hh = max(1, y1 - y0 + 1)
+    # Keep center third of the bbox width (neck column), bottom 10% of height
+    bw = bx1 - bx0 + 1
+    cx0 = bx0 + int(bw * 0.28)
+    cx1 = bx0 + int(bw * 0.72)
+    y1e = min(vp.shape[0] - 1, y1 + max(2, int(hh * 0.06)))
+    band_h = max(1, int(0.10 * (y1e - y0 + 1)))
+    band_y0 = y1e - band_h + 1
+    band = vp[band_y0 : y1e + 1, cx0 : cx1 + 1]
+    if band.size == 0:
+        return 1.0
+    navy = np.array([4.0, 3.0, 8.0], dtype=np.float32)
+    skin_ref = np.array([165.0, 125.0, 95.0], dtype=np.float32)
+    denom = float(np.linalg.norm(skin_ref - navy)) + 1e-3
+    dist = np.linalg.norm(band - navy, axis=2)
+    est = np.clip(dist / denom, 0.0, 1.0)
+    content = est > 0.04
+    if not np.any(content):
+        return 0.0  # fully dissolved into navy
+    return float(est[content].mean())
+
+
 def _hud_arc_mask(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Bright amber OR cyan HUD strokes (not skin)."""
     amber = (
@@ -256,6 +333,16 @@ def main() -> int:
         if face_n > 80:
             print(
                 f"FAIL: {name} arc pixels on face ({face_n} > 80)",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Soft hologram neck: bottom of head bbox must be nearly transparent
+        na = neck_bottom_avg_alpha(p)
+        print(f"{name}: neck_bottom_avg_alpha={na:.4f}")
+        if na >= 0.10:
+            print(
+                f"FAIL: {name} neck bottom still opaque (avg alpha {na:.3f} >= 0.10)",
                 file=sys.stderr,
             )
             return 1

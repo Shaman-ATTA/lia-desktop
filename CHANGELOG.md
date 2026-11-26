@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.7 — hologram neck dissolve
+
+- Lower ~40% of neck fades to transparent (premul) with side-edge falloff
+- Stepped cut / shoulder notch dissolve into navy; arcs/cam unchanged
+- CI: neck_bottom_avg_alpha < 0.1
+
 ## v0.6.6 — Visible arcs behind head + soft neck fade
 
 - Fix CW fullscreen triangle backface-cull that wiped DX arcs

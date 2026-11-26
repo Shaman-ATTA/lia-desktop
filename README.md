@@ -8,7 +8,7 @@ Windows App SDK / **WinUI 3** unpackaged self-contained app with **DirectX 11** 
 
 ## Install
 
-1. Download **LiaDesktop-0.6.6-setup.exe** (installer) or **LiaDesktop-0.6.6-win-x64.zip** (portable) from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
+1. Download **LiaDesktop-0.6.7-setup.exe** (installer) or **LiaDesktop-0.6.7-win-x64.zip** (portable) from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
 2. Run the setup (per-user, no admin) or unpack the zip and run `LiaDesktop.exe`.
 3. **CONFIG** → Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Optional: «Запускать вместе с Windows».
 
@@ -19,7 +19,7 @@ Head asset: Microsoft Rocketbox `Female_Adult_07` (MIT) — see `THIRD_PARTY.md`
 - Cinematic holographic HUD (acrylic/mica, glass cards, mic orb, audio-reactive waveform)
 - DX11 photoreal PBR head (Rocketbox) — framing/materials/lip sync frozen since v0.5.5
 - Dense concentric amber/cyan arcs drawn behind the head (DX pre-pass)
-- v0.6.2 head framing + soft lower-neck alpha dissolve
+- v0.6.2 head framing + hologram neck dissolve (lower 40%)
 
 - Gemini: ListModels auto-pick, 404 switch, 503/429 backoff + fallback
 - Tools: files, PowerShell, Playwright, screenshot, mouse/keyboard

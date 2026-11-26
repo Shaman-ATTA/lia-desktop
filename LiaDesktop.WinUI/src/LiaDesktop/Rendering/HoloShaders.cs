@@ -83,16 +83,21 @@ float4 main(PSIn i) : SV_TARGET {
   color *= (1.0 + 0.10 * scanWave * (1.0 - darkLash));       // ~10% scan dip
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Soft lower-neck dissolve: bottom edge + shoulder notch fade into navy.
-  // neckHeight spans cut→jaw; fade covers the lower ~25% so the stump dissolves.
-  float neckBottomY = 0.14;
-  float neckHeight = 0.48; // cut → mid-face; 0.25*h ≈ 0.12 soft band
-  float neckA = smoothstep(neckBottomY, neckBottomY + 0.25 * neckHeight, i.local.y);
-  if (neckA < 0.008) discard;
+  // Hologram-bust dissolve: lower ~40% of neck → fully transparent; side edges soft.
+  // Do not touch face (above fadeTop). Premultiplied so cut/notch vanish into navy.
+  float neckBottomY = 0.12;
+  float neckHeight = 0.40; // cut → under-jaw / mid-neck span
+  float fadeTop = neckBottomY + 0.40 * neckHeight; // alpha 0 at bottom → 1 at fadeTop
+  float vertA = smoothstep(neckBottomY, fadeTop, i.local.y);
+  // Side falloff kills stepped mesh silhouette inside the dissolve band
+  float ax = abs(i.local.x);
+  float sideA = smoothstep(0.092, 0.026, ax); // 1 at center, 0 at outer neck/shoulder
+  float neckA = vertA * lerp(sideA, 1.0, pow(saturate(vertA), 0.55));
+  if (neckA < 0.006) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
-  return float4(color * neckA, neckA); // premul — head blends over arcs/navy
+  return float4(color * neckA, neckA); // premul
 }";
 
     public const string PixelHair = @"
