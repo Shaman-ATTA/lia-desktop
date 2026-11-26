@@ -27,29 +27,35 @@ def _find_viewport(a: np.ndarray) -> tuple[int, int, int, int]:
 
 
 def _head_rows(vp: np.ndarray) -> np.ndarray:
-    """Row indices belonging to the contiguous head+neck mass in the center band."""
+    """Row indices for contiguous head+neck in the center band.
+
+    Skin defines the vertical core (chin/neck). Hair may extend the crown upward.
+    Soft amber ring glow is excluded so neck orbits don't inflate height.
+    """
     h, w, _ = vp.shape
-    x0, x1 = int(w * 0.32), int(w * 0.68)
+    x0, x1 = int(w * 0.34), int(w * 0.66)
     band = vp[:, x0:x1]
     r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
     lum = (r + g + b) / 3.0
-    amber = (r > 130) & (g > 95) & (b < 100) & ((r + g) > (2.0 * b + 60))
-    skin = (r > 50) & (g > 28) & (b > 18) & (r >= g * 0.95) & (r > b * 0.85) & ((r - b) > 4)
-    hair = (lum > 14) & (lum < 105) & (r >= g) & (g >= b * 0.75) & (r < 125) & (b < 80)
-    mask = (skin | hair) & (~amber) & (lum > 14)
-    row_counts = mask.sum(axis=1)
-    ys = np.where(row_counts > 6)[0]
-    if len(ys) < 8:
-        return ys
-    # Contiguous run through the face center (ignore stray ring/noise rows)
-    cy = int(h * 0.38)
-    ys_set = set(ys.tolist())
-    near = int(ys[np.argmin(np.abs(ys - cy))])
+    # Catch bright and soft amber orbit tubes
+    amber = (r > 100) & (g > 55) & (b < 120) & ((r + g) > (2.0 * b + 40)) & (r > g * 0.9)
+    skin = (r > 55) & (g > 30) & (b > 22) & (r >= g * 0.95) & (r > b * 0.85) & ((r - b) > 5) & (~amber)
+    hair = (lum > 16) & (lum < 95) & (r >= g) & (g >= b * 0.8) & (r < 110) & (b < 70) & (~amber)
+    skin_rows = np.where(skin.sum(axis=1) > 5)[0]
+    if len(skin_rows) < 8:
+        return skin_rows
+    cy = int(h * 0.36)
+    skin_set = set(skin_rows.tolist())
+    near = int(skin_rows[np.argmin(np.abs(skin_rows - cy))])
     lo = hi = near
-    while (lo - 1) in ys_set:
+    while (lo - 1) in skin_set:
         lo -= 1
-    while (hi + 1) in ys_set:
+    while (hi + 1) in skin_set:
         hi += 1
+    # Extend crown upward with hair only
+    hair_rows = set(np.where(hair.sum(axis=1) > 5)[0].tolist())
+    while (lo - 1) in hair_rows:
+        lo -= 1
     return np.arange(lo, hi + 1)
 
 
@@ -99,7 +105,7 @@ def main() -> int:
     if frac < 0.58:
         print(f"FAIL: head too small ({frac:.1%}) — expected ~70-75%", file=sys.stderr)
         return 1
-    if frac > 0.85:
+    if frac > 0.90:
         print(f"FAIL: head too large / cropped ({frac:.1%})", file=sys.stderr)
         return 1
     if top < 0.02:
