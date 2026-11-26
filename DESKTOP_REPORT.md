@@ -1,8 +1,10 @@
 # Lia Desktop — ship report
 
-## v0.6.9 — Gemini / mic / HiDPI (pending CI)
+## v0.6.9 — Gemini / mic / HiDPI (published)
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.9
+
+Selftest PASS (mock + live); centre-column framing drift=0, head~70–73%; arcs OK.
 
 ## v0.6.8 — clean jaw, neck fade below chin (published)
 
