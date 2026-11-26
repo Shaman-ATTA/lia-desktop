@@ -1100,12 +1100,14 @@ public sealed class HoloRenderer : IDisposable
             }
         }
 
-        // Two clearly visible halos (core + soft glow shell). maxZ ≈ tz+r·cos(pitch) ≤ −0.05.
-        // Crown (~forehead) and neck (below chin) — sides peek around silhouette; depth hides the rest.
-        AddSeg(0.40f, 0.0036f, 14f, 0.00f, 0.02f, 0.32f, -0.48f, 0.035f, 0.68f, 8, 0.08f); // crown core
-        AddSeg(0.40f, 0.0075f, 14f, 0.00f, 0.02f, 0.32f, -0.48f, 0.035f, 0.24f, 8, 0.08f); // crown glow
-        AddSeg(0.42f, 0.0032f, -12f, 0.03f, -0.02f, -0.22f, -0.50f, -0.03f, 0.60f, 8, 0.08f); // neck core
-        AddSeg(0.42f, 0.0068f, -12f, 0.03f, -0.02f, -0.22f, -0.50f, -0.03f, 0.20f, 8, 0.08f); // neck glow
+        // Rings use headOrient WITHOUT HeadScale — TransY is world-ish (+ HeadTransY=-1).
+        // Head world Y ≈ −0.47..+0.49. maxZ ≈ tz + r·cos(pitch) ≤ −0.05 (behind face).
+        // Crown: tilted halo above/behind bun (was TransY=0.32 → world −0.68, invisible).
+        AddSeg(0.34f, 0.0042f, 52f, 0.00f, 0.04f, 1.52f, -0.36f, 0.04f, 0.78f, 8, 0.10f); // crown core
+        AddSeg(0.34f, 0.0085f, 52f, 0.00f, 0.04f, 1.52f, -0.36f, 0.04f, 0.28f, 8, 0.10f); // crown glow
+        // Lower: below chin, above bottom dock (was TransY=-0.22 → world −1.22, clipped by status bar).
+        AddSeg(0.30f, 0.0034f, -16f, 0.02f, -0.02f, 0.78f, -0.42f, -0.03f, 0.62f, 8, 0.10f); // neck core
+        AddSeg(0.30f, 0.0070f, -16f, 0.02f, -0.02f, 0.78f, -0.42f, -0.03f, 0.22f, 8, 0.10f); // neck glow
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, float startU = 0f)

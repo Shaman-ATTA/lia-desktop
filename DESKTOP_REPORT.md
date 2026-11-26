@@ -1,5 +1,9 @@
 # Lia Desktop — ship report
 
+## v0.6.3 — soft neck / crown halo / chin ring in-frame
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.3
+
 ## v0.6.2 — visible halos / softer neck / brighter HUD
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.2

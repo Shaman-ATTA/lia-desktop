@@ -83,16 +83,11 @@ float4 main(PSIn i) : SV_TARGET {
   color *= (1.0 + 0.10 * scanWave * (1.0 - darkLash));       // ~10% scan dip
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Soft stump dissolve over last ~15% of neck height (framing stays ~0.75–0.80)
-  float neckA = smoothstep(0.15, 0.26, i.local.y);
-  float rad = length(i.local.xz);
-  float nearStump = 1.0 - smoothstep(0.15, 0.28, i.local.y);
-  // Soften jagged lateral silhouette (esp. 3/4 right edge)
-  float shelf = smoothstep(0.10, 0.17, rad);
-  neckA *= 1.0 - nearStump * fres * 0.55;
-  neckA *= 1.0 - shelf * nearStump * 0.70;
+  // Pure vertical dissolve over lower ~25% of neck (mesh Y≈0.20..0.34 → chin).
+  // No radial shelf/fresnel tricks — those left a hard stepped stump + shoulder notch.
+  float neckA = smoothstep(0.198, 0.30, i.local.y);
   neckA = saturate(neckA);
-  if (neckA < 0.01) discard;
+  if (neckA < 0.012) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);

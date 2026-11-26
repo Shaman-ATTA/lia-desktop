@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6.3 — Soft neck dissolve, crown halo, chin ring in-frame
+
+- Neck: pure vertical alpha over lower ~25% (no stepped stump / shoulder notch)
+- Crown halo: tilted ring above/behind head (never on skin)
+- Lower ring raised/shrunk so it sits below chin inside the viewport (not clipped by dock)
+- Framing still ~75–80%; face/materials/lip sync unchanged
+
 ## v0.6.2 — Visible halos, softer neck, brighter HUD
 
 - Crown + neck 3D amber rings visible again (core + glow), head-parented, behind face
