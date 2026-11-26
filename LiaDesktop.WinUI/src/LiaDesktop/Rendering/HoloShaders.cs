@@ -67,39 +67,37 @@ float4 main(PSIn i) : SV_TARGET {
   float3 diffuse = albedo * (ambient + key * wrap * 0.95 + fill * (1.0-ndl) * 0.22);
   float sss = saturate(1.0 - abs(i.local.x)*8.0) * 0.12;
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
-  float3 color = diffuse + key * spec;
+  float luma = dot(albedo, float3(0.299, 0.587, 0.114));
+  float darkLash = saturate((0.18 - luma) * 10.0);
+  float3 color = diffuse + key * spec * (1.0 - darkLash);
 
-  // Mouth cavity: dark interior + suppress morph spikes (tan vertical blob)
+  // Mouth cavity: dark interior; keep upper teeth readable
   float mouthZone = smoothstep(0.055, 0.030, abs(i.local.x))
                   * smoothstep(0.26, 0.30, i.local.y) * smoothstep(0.40, 0.36, i.local.y)
                   * smoothstep(0.00, 0.035, i.local.z);
   float inward = saturate(0.35 - saturate(dot(N, V)));
   float cavity = saturate(mouthZone * (0.55 + inward * 1.2));
-  // Upper teeth stay brighter (front lip-line, higher Y, facing camera)
   float teeth = mouthZone * saturate(dot(N, V)) * smoothstep(0.34, 0.37, i.local.y);
   color = lerp(color, color * float3(0.12, 0.06, 0.05), cavity * 0.92);
   color = lerp(color, float3(0.78, 0.72, 0.62) * (0.45 + ndl * 0.4), teeth * 0.55);
 
-  // Thin faint scrolling scanlines (~3-4 px period in screen space) + soft amber rim
+  // Thin faint scrolling scanlines: ~4 px period, ~1 px dark line, ~7% dip
   float ndv = saturate(dot(N,V));
-  float fres = pow(1.0 - ndv, 2.0);
-  float luma = dot(albedo, float3(0.299, 0.587, 0.114));
-  // Kill amber sparkle on dark painted lashes/brows in the albedo
-  float darkLash = saturate(1.0 - luma * 4.0);
-  fres *= (1.0 - darkLash * 0.95);
-  float scanWave = sin(i.pos.y * (6.2831853 / 3.5) + time * 1.35);
+  float fres = pow(1.0 - ndv, 2.2) * (1.0 - darkLash);
+  float scanCell = frac(i.pos.y / 4.0 + time * 0.22);
+  float scanWave = (scanCell < 0.28) ? -1.0 : 0.0;
   float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.10, 0.94, 0.78), 0.14 * (1.0 - darkLash));
-  color += amber * fres * 0.48 * max(glow, 0.85);
-  color *= (1.0 + 0.08 * scanWave); // ~8% intensity, thin bands
+  color = lerp(color, color * float3(1.08, 0.95, 0.80), 0.12 * (1.0 - darkLash));
+  color += amber * fres * 0.42 * max(glow, 0.85);
+  color *= (1.0 + 0.07 * scanWave * (1.0 - darkLash));
+  color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Neck: smooth alpha fade over lower ~25% of neck (premultiplied)
-  float neckA = smoothstep(0.20, 0.30, i.local.y);
-  clip(neckA - 0.01);
+  // Neck fade through lower neck volume (premultiplied)
+  float neckA = smoothstep(0.21, 0.33, i.local.y);
+  clip(neckA - 0.02);
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
-  // Premultiplied RGB
   return float4(color * neckA, neckA);
 }";
 
@@ -283,8 +281,8 @@ struct PSIn {
   float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
-  // Safety: never draw over eyes/mouth on the front of the head
-  if (i.world.z > 0.04 && abs(i.world.x) < 0.16 && i.world.y > -0.10 && i.world.y < 0.22)
+  // Safety: never draw over eyes/mouth/nose on the front of the head
+  if (i.world.z > 0.00 && abs(i.world.x) < 0.20 && i.world.y > -0.14 && i.world.y < 0.26)
     clip(-1);
 
   float3 N = normalize(i.nrm);

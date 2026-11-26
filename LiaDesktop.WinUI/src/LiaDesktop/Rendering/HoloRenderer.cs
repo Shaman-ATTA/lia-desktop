@@ -1086,11 +1086,11 @@ public sealed class HoloRenderer : IDisposable
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, 0f, spinY, transY, transZ));
         }
         // World Y: eyes≈0.16, forehead≈0.28, chin≈-0.15 (after HeadScale/Trans).
-        // Tilt 12–22° so front arc is above forehead OR below chin — never through eyes/mouth.
-        // Radius ~1.25–1.4× head width; yaw-only spin; depth-tested vs head.
-        Add(0.46f, 0.0011f, 18f, 0.02f, 0.05f, 0.26f, -0.05f, 0.10f, 0.26f);  // forehead halo
-        Add(0.50f, 0.0010f, -16f, 0.04f, -0.04f, -0.20f, -0.04f, 0.08f, 0.22f); // below chin
-        Add(0.54f, 0.0009f, 12f, -0.03f, 0.06f, 0.04f, -0.08f, 0.06f, 0.18f);  // mid, pushed back
+        // Tilt 15–25°; front arc above forehead OR below chin — never through eyes/mouth.
+        // Larger radius so side arcs stay outside the face; yaw-only spin; depth-tested.
+        Add(0.48f, 0.0010f, 22f, 0.02f, 0.04f, 0.30f, -0.06f, 0.09f, 0.24f);  // forehead
+        Add(0.52f, 0.0009f, -20f, 0.03f, -0.05f, -0.24f, -0.05f, 0.07f, 0.20f); // below chin
+        Add(0.50f, 0.00085f, 15f, -0.02f, 0.05f, 0.32f, -0.12f, 0.05f, 0.16f); // back halo
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
