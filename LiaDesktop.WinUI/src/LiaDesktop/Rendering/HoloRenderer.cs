@@ -51,7 +51,7 @@ public sealed class HoloRenderer : IDisposable
     static readonly Vector3 Amber = new(1f, 0.62f, 0.32f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
-    // Head local Y≈0.20..0.55 → world span ≈0.95; cam Z≈2.82 / fov 24° → head+neck ≈75–80% height
+    // Head local Y≈0.20..0.55 → world span ≈0.95; cam Z≈2.55 / fov 24° → ≈75–80% after neck dissolve
     const float HeadScale = 2.70f;
     const float HeadTransY = -1.00f;
     const int MsaaCount = 2; // 4x was ~2× CPU on WARP; 2x still cleans edges
@@ -556,17 +556,17 @@ public sealed class HoloRenderer : IDisposable
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
-            // Same framing as default — head+neck ≈75–80% (CI threequarter failed at 2.45→~89%)
-            cam = new Vector3(orbit, 0.00f, 2.82f);
-            lookAt = new Vector3(0, 0.00f, 0.02f);
+            // Same framing as default — head ≈75–80% after soft-neck dissolve
+            cam = new Vector3(orbit, 0.00f, 2.55f);
+            lookAt = new Vector3(0, 0.02f, 0.02f);
             fovDeg = 24f;
         }
         else
         {
-            // Head+neck ≈75–80% of viewport height (soft neck + rings need air around crown)
+            // Head ≈75–80% after neck dissolve (was 2.82→~68% with longer fade)
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.00f, 2.82f);
-            lookAt = new Vector3(0, 0.00f, 0.02f);
+            cam = new Vector3(orbit, 0.00f, 2.55f);
+            lookAt = new Vector3(0, 0.02f, 0.02f);
             fovDeg = 24f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
@@ -1102,12 +1102,12 @@ public sealed class HoloRenderer : IDisposable
 
         // Rings use headOrient WITHOUT HeadScale — TransY is world-ish (+ HeadTransY=-1).
         // Head world Y ≈ −0.47..+0.49. maxZ ≈ tz + r·cos(pitch) ≤ −0.05 (behind face).
-        // Crown: tilted halo above/behind bun (was TransY=0.32 → world −0.68, invisible).
-        AddSeg(0.34f, 0.0042f, 52f, 0.00f, 0.04f, 1.52f, -0.36f, 0.04f, 0.78f, 8, 0.10f); // crown core
-        AddSeg(0.34f, 0.0085f, 52f, 0.00f, 0.04f, 1.52f, -0.36f, 0.04f, 0.28f, 8, 0.10f); // crown glow
-        // Lower: below chin, above bottom dock (was TransY=-0.22 → world −1.22, clipped by status bar).
-        AddSeg(0.30f, 0.0034f, -16f, 0.02f, -0.02f, 0.78f, -0.42f, -0.03f, 0.62f, 8, 0.10f); // neck core
-        AddSeg(0.30f, 0.0070f, -16f, 0.02f, -0.02f, 0.78f, -0.42f, -0.03f, 0.22f, 8, 0.10f); // neck glow
+        // Crown: small tilted halo ABOVE bun, well behind (avoid forehead Z fight).
+        AddSeg(0.26f, 0.0040f, 38f, 0.00f, 0.03f, 1.60f, -0.55f, 0.045f, 0.82f, 8, 0.10f); // crown core
+        AddSeg(0.26f, 0.0080f, 38f, 0.00f, 0.03f, 1.60f, -0.55f, 0.045f, 0.30f, 8, 0.10f); // crown glow
+        // Lower: just under chin, small radius so full ellipse stays above the bottom dock.
+        AddSeg(0.24f, 0.0032f, -14f, 0.02f, -0.02f, 0.92f, -0.48f, -0.035f, 0.64f, 8, 0.10f); // chin core
+        AddSeg(0.24f, 0.0065f, -14f, 0.02f, -0.02f, 0.92f, -0.48f, -0.035f, 0.22f, 8, 0.10f); // chin glow
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, float startU = 0f)

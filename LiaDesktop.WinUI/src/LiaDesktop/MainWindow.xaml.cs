@@ -188,9 +188,11 @@ public sealed partial class MainWindow : Window
         var amber = Color.FromArgb(255, 255, 154, 60);
         var cyan = Color.FromArgb(255, 90, 214, 255);
 
-        // Concentric arcs OUTSIDE face+neck — no center needles / chords.
+        // Concentric arcs OUTSIDE face+neck — keep fully inside HudCanvas (Margin bottom=120).
         var m = Math.Min(w, h);
-        double[] radii = [m * 0.50, m * 0.56, m * 0.62, m * 0.68];
+        // cy + rMax must stay < h − pad so the lower arc isn't clipped by the dock.
+        var rMax = Math.Min(m * 0.52, Math.Min(Math.Min(cx, cy) - 10, h - cy - 14));
+        double[] radii = [rMax * 0.78, rMax * 0.86, rMax * 0.93, rMax];
         for (var i = 0; i < radii.Length; i++)
         {
             var r = radii[i];
@@ -219,7 +221,7 @@ public sealed partial class MainWindow : Window
         {
             var ang = t / 60.0 * Math.PI * 2;
             var len = t % 5 == 0 ? 12 : 6;
-            if (outer - len < m * 0.46) continue;
+            if (outer - len < rMax * 0.72) continue;
             var line = new Line
             {
                 X1 = cx + Math.Cos(ang) * (outer - len),

@@ -83,11 +83,11 @@ float4 main(PSIn i) : SV_TARGET {
   color *= (1.0 + 0.10 * scanWave * (1.0 - darkLash));       // ~10% scan dip
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Pure vertical dissolve over lower ~25% of neck (mesh Y≈0.20..0.34 → chin).
-  // No radial shelf/fresnel tricks — those left a hard stepped stump + shoulder notch.
-  float neckA = smoothstep(0.198, 0.30, i.local.y);
-  neckA = saturate(neckA);
-  if (neckA < 0.012) discard;
+  // Pure vertical dissolve: kill stump + shoulder notch (widest low band ≈Y 0.28),
+  // ease in through upper neck → chin. No radial shelf tricks (those left hard edges).
+  float neckA = smoothstep(0.26, 0.38, i.local.y);
+  neckA *= neckA; // softer near zero — no visible silhouette edge
+  if (neckA < 0.02) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
@@ -135,8 +135,8 @@ float4 main(PSIn i) : SV_TARGET {
   float scanWave = sin(i.pos.y * (6.2831853 / 3.5) + time * 1.35);
   color *= (1.0 + 0.04 * scanWave);
   color = pow(saturate(color), 1.0/2.2);
-  // Drop cards that hang into the neck stump (skin fade handles the rest)
-  clip(i.local.y - 0.20);
+  // Drop cards that hang into the dissolved neck band
+  clip(i.local.y - 0.30);
   return float4(color, 1.0);
 }";
 
