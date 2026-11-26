@@ -512,8 +512,8 @@ public sealed class HoloRenderer : IDisposable
         var wide = float.IsNaN(_forcedJaw) ? _wide : 0.08f;
 
         var smile = float.IsNaN(_forcedJaw)
-            ? 0.12f + 0.06f * MathF.Sin(_time * 0.35f)
-            : 0.08f;
+            ? 0.06f + 0.03f * MathF.Sin(_time * 0.35f)
+            : 0.04f;
         var brow = float.IsNaN(_forcedJaw)
             ? 0.08f + 0.05f * MathF.Sin(_time * 0.41f + 1.2f)
             : 0.05f;
@@ -1084,12 +1084,11 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, 0f, spinY, transY, transZ));
         }
-        // Two continuous halos. Cam z≈2.45 fov24 → half-h≈0.52; keep radius ≤0.40 so fully on-screen.
-        // Crown: center above forehead; +15° pitch lifts front arc over the crown (not through face).
-        // Neck: center below chin; −15° drops front arc under the jaw.
-        // Depth-test hides the back half — no pixel discard.
-        Add(0.38f, 0.0010f, 15f, 0.00f, 0.03f, 0.34f, -0.08f, 0.08f, 0.26f);  // crown
-        Add(0.40f, 0.0009f, -15f, 0.02f, -0.03f, -0.28f, -0.06f, 0.06f, 0.22f); // below chin
+        // Continuous halos BEHIND the head (Z back). Sides/top peek around the silhouette;
+        // depth hides anything the head occludes — never draws through eyes/nose/mouth.
+        // Radius fits viewport (half-h≈0.52). Yaw-only spin. No pixel discard.
+        Add(0.40f, 0.0010f, 16f, 0.00f, 0.02f, 0.24f, -0.24f, 0.07f, 0.28f);  // crown halo
+        Add(0.38f, 0.0009f, -14f, 0.02f, -0.02f, -0.20f, -0.20f, 0.05f, 0.22f); // neck halo behind
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)

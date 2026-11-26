@@ -62,8 +62,9 @@ float4 main(PSIn i) : SV_TARGET {
   float specPow = lerp(96.0, 12.0, rough);
   float spec = pow(saturate(dot(N,H)), specPow) * (1.0 - rough) * 0.55;
   float3 key = float3(1.00, 0.92, 0.82);
-  float3 fill = float3(0.45, 0.55, 0.75);
-  float3 ambient = float3(0.22, 0.18, 0.16);
+  // Warm fill — cool blue fill read as grey-blue chin haze under the lip
+  float3 fill = float3(0.55, 0.48, 0.42);
+  float3 ambient = float3(0.24, 0.20, 0.17);
   float3 diffuse = albedo * (ambient + key * wrap * 0.95 + fill * (1.0-ndl) * 0.22);
   float sss = saturate(1.0 - abs(i.local.x)*8.0) * 0.12;
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
