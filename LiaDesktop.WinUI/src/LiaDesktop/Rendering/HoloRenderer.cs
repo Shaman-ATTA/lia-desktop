@@ -51,7 +51,7 @@ public sealed class HoloRenderer : IDisposable
     static readonly Vector3 Amber = new(1f, 0.62f, 0.32f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
-    // Head local Y≈0.20..0.55 → world span ≈0.95; cam/fov tuned so head+neck ≈72% viewport height
+    // Head local Y≈0.20..0.55 → world span ≈0.95; cam Z≈2.82 / fov 24° → head+neck ≈75–80% height
     const float HeadScale = 2.70f;
     const float HeadTransY = -1.00f;
     const int MsaaCount = 2; // 4x was ~2× CPU on WARP; 2x still cleans edges
@@ -556,15 +556,16 @@ public sealed class HoloRenderer : IDisposable
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
-            cam = new Vector3(orbit, 0.00f, 2.45f);
+            // Same framing as default — head+neck ≈75–80% (CI threequarter failed at 2.45→~89%)
+            cam = new Vector3(orbit, 0.00f, 2.82f);
             lookAt = new Vector3(0, 0.00f, 0.02f);
             fovDeg = 24f;
         }
         else
         {
-            // Head+neck ≈70-75% of viewport height (not the v0.5.1 tiny-head bug)
+            // Head+neck ≈75–80% of viewport height (soft neck + rings need air around crown)
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.00f, 2.45f);
+            cam = new Vector3(orbit, 0.00f, 2.82f);
             lookAt = new Vector3(0, 0.00f, 0.02f);
             fovDeg = 24f;
         }
