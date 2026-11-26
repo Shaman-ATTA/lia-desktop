@@ -49,13 +49,20 @@ public sealed class HoloPanel : SwapChainPanel
             if (File.Exists(mesh)) _renderer.LoadMesh(mesh);
             _inited = true;
             CreateSwapChain();
+            // ~60fps capped; Present(1) waits for vsync so we don't busy-spin the GPU
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            var ticking = false;
             _timer.Tick += (_, _) =>
             {
-                var now = DateTime.UtcNow;
-                var dt = (float)(now - _last).TotalSeconds;
-                _last = now;
-                try { _renderer.Tick(Math.Clamp(dt, 0.001f, 0.1f)); }
+                if (ticking) return; // drop overlapped ticks under load
+                ticking = true;
+                try
+                {
+                    var now = DateTime.UtcNow;
+                    var dt = (float)(now - _last).TotalSeconds;
+                    _last = now;
+                    _renderer.Tick(Math.Clamp(dt, 0.001f, 0.1f));
+                }
                 catch (Exception ex)
                 {
                     if (_tickErrors < 3)
@@ -64,6 +71,7 @@ public sealed class HoloPanel : SwapChainPanel
                         Program.BootLog("Tick: " + ex);
                     }
                 }
+                finally { ticking = false; }
             };
             _timer.Start();
         }

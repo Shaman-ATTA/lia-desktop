@@ -84,9 +84,13 @@ float4 main(PSIn i) : SV_TARGET {
   color *= (1.0 + 0.07 * scanWave * (1.0 - darkLash));
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Neck fade through lower neck volume (premultiplied)
-  float neckA = smoothstep(0.21, 0.33, i.local.y);
-  clip(neckA - 0.02);
+  // Soft neck dissolve — wide band so 3/4 silhouette has no hard stump edge
+  float neckA = smoothstep(0.12, 0.42, i.local.y);
+  // Extra fade on outer neck/shoulder verts (asymmetric mesh shelf on one side)
+  float rad = length(i.local.xz);
+  float shelf = smoothstep(0.10, 0.18, rad);
+  neckA *= lerp(1.0, smoothstep(0.20, 0.48, i.local.y), shelf);
+  if (neckA < 0.003) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
@@ -134,6 +138,8 @@ float4 main(PSIn i) : SV_TARGET {
   float scanWave = sin(i.pos.y * (6.2831853 / 3.5) + time * 1.35);
   color *= (1.0 + 0.04 * scanWave);
   color = pow(saturate(color), 1.0/2.2);
+  // Drop cards that hang into the neck stump (skin fade handles the rest)
+  clip(i.local.y - 0.20);
   return float4(color, 1.0);
 }";
 
@@ -273,17 +279,15 @@ struct PSIn {
   float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
-  // Thick glowing tube — occlusion is depth-test only (no discard hack)
+  // Clean glowing tube — depth-test only (no discard). Soft fresnel, no scribble noise.
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
-  float fres = pow(1.0 - saturate(dot(N,V)), 1.6);
-  float pulse = 0.88 + 0.12 * sin(time * 1.6 + i.local.x * 3.0);
-  float3 amber = color * float3(1.05, 0.82, 0.45);
-  float core = 0.55 + fres * 0.95;
-  float3 c = amber * core * pulse;
-  float a = saturate(opacity * (0.42 + fres * 0.58));
-  // Premul-ish boost so tubes read as luminous hologram bands
-  return float4(c * a * 1.15, a);
+  float fres = pow(1.0 - saturate(dot(N,V)), 2.0);
+  float pulse = 0.94 + 0.06 * sin(time * 1.1);
+  float3 amber = color * float3(1.0, 0.78, 0.42);
+  float3 c = amber * (0.35 + fres * 0.75) * pulse;
+  float a = saturate(opacity * (0.30 + fres * 0.55));
+  return float4(c * a, a);
 }";
 
     /// <summary>Fullscreen triangle VS — POSITION.xy = clip, zw unused; TEXCOORD = uv.</summary>

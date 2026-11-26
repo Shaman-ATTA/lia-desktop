@@ -19,7 +19,7 @@ public sealed partial class MainWindow : Window
 {
     readonly AppServices _s = App.Services;
     readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
-    readonly DispatcherTimer _hudTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
+    readonly DispatcherTimer _hudTimer = new() { Interval = TimeSpan.FromMilliseconds(50) }; // ~20fps HUD; DX vsyncs at 60
     readonly MediaPlayer _player = new();
     readonly Process _proc = Process.GetCurrentProcess();
     readonly Random _rng = new(33);
@@ -45,8 +45,8 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         StyleCaptionButtons();
 
-        VoiceLine.Text = "VOICE  STANDBY";
-        StatusCaption.Text = "STANDBY";
+        VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
+        StatusCaption.Text = "ОЖИДАНИЕ";
         RefreshModelLine();
         Closed += OnClosed;
 
@@ -61,9 +61,9 @@ public sealed partial class MainWindow : Window
         _s.Agent.Narrate += t => DispatcherQueue.TryEnqueue(() =>
         {
             _speaking = true;
-            StatusCaption.Text = "SPEAKING";
+            StatusCaption.Text = "ГОВОРЮ";
             Subtitle.Text = t.Length > 140 ? t[..140] : t;
-            VoiceLine.Text = "VOICE  SPEAKING";
+            VoiceLine.Text = "ГОЛОС  ГОВОРЮ";
             FadeInSubtitle();
         });
         _s.Agent.SpeakFile += path => DispatcherQueue.TryEnqueue(() =>
@@ -76,8 +76,8 @@ public sealed partial class MainWindow : Window
                 _player.MediaEnded += (_, _) => DispatcherQueue.TryEnqueue(() =>
                 {
                     _speaking = false;
-                    StatusCaption.Text = "STANDBY";
-                    VoiceLine.Text = "VOICE  STANDBY";
+                    StatusCaption.Text = "ОЖИДАНИЕ";
+                    VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
                     Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";
                     Holo.Renderer.Jaw = 0;
                     Holo.Renderer.Funnel = 0;
@@ -150,13 +150,13 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            BootStatus.Text = "LINKING DX11…";
+            BootStatus.Text = "ПОДКЛЮЧЕНИЕ DX11…";
             await Task.Delay(420);
-            BootStatus.Text = "LOADING PBR HEAD…";
+            BootStatus.Text = "ЗАГРУЗКА PBR-ГОЛОВЫ…";
             await Task.Delay(520);
-            BootStatus.Text = "CALIBRATING ORBITS…";
+            BootStatus.Text = "КАЛИБРОВКА ОРБИТ…";
             await Task.Delay(480);
-            BootStatus.Text = "ONLINE";
+            BootStatus.Text = "НА СВЯЗИ";
             await Task.Delay(280);
             for (var i = 0; i <= 20; i++)
             {
@@ -188,72 +188,50 @@ public sealed partial class MainWindow : Window
         var amber = Color.FromArgb(255, 255, 154, 60);
         var cyan = Color.FromArgb(255, 90, 214, 255);
 
-        double[] radii = [Math.Min(w, h) * 0.28, Math.Min(w, h) * 0.34, Math.Min(w, h) * 0.40, Math.Min(w, h) * 0.46];
+        // Concentric arcs OUTSIDE the face disc — no center needles / sweep / chords.
+        // Face ≈ 0.36 of min(w,h); keep innermost ≥ 0.44 so skin stays clear.
+        var m = Math.Min(w, h);
+        double[] radii = [m * 0.44, m * 0.50, m * 0.56, m * 0.62];
         for (var i = 0; i < radii.Length; i++)
         {
             var r = radii[i];
             var segs = 6 + i;
-            var gap = 12.0;
+            var gap = 14.0;
             var sweep = (360.0 - segs * gap) / segs;
             for (var s = 0; s < segs; s++)
             {
-                var start = s * (sweep + gap) + i * 7;
-                var path = MakeArc(cx, cy, r, start, sweep, i % 2 == 0 ? amber : cyan, i == 0 ? 2.0 : 1.35);
-                path.Opacity = 0.55 + i * 0.08;
+                var start = s * (sweep + gap) + i * 9;
+                var path = MakeArc(cx, cy, r, start, sweep, i % 2 == 0 ? amber : cyan, i == 0 ? 1.5 : 1.15);
+                path.Opacity = 0.40 + i * 0.07;
                 HudCanvas.Children.Add(path);
                 _hudArcs.Add(path);
             }
         }
 
-        // Tick marks on outer ring
+        // Tick marks on outer ring only (short radial marks — never reach the face)
         var outer = radii[^1];
-        for (var t = 0; t < 48; t++)
+        var tickInner = outer - 12;
+        for (var t = 0; t < 60; t++)
         {
-            var ang = t / 48.0 * Math.PI * 2;
-            var len = t % 6 == 0 ? 10 : 5;
+            var ang = t / 60.0 * Math.PI * 2;
+            var len = t % 5 == 0 ? 11 : 5;
             var x0 = cx + Math.Cos(ang) * (outer - len);
             var y0 = cy + Math.Sin(ang) * (outer - len);
             var x1 = cx + Math.Cos(ang) * outer;
             var y1 = cy + Math.Sin(ang) * outer;
+            // Safety: never draw inside face radius
+            if (outer - len < m * 0.40) continue;
             var line = new Line
             {
                 X1 = x0, Y1 = y0, X2 = x1, Y2 = y1,
                 Stroke = new SolidColorBrush(amber),
-                StrokeThickness = t % 6 == 0 ? 1.4 : 0.8,
-                Opacity = 0.45,
+                StrokeThickness = t % 5 == 0 ? 1.3 : 0.7,
+                Opacity = 0.40,
             };
             HudCanvas.Children.Add(line);
             _hudTicks.Add(line);
         }
-
-        // Radial gauge needles (decorative)
-        for (var g = 0; g < 3; g++)
-        {
-            var rr = radii[1] + g * 8;
-            var needle = new Line
-            {
-                Stroke = new SolidColorBrush(cyan),
-                StrokeThickness = 1.2,
-                Opacity = 0.55,
-                X1 = cx, Y1 = cy,
-                X2 = cx + rr, Y2 = cy,
-            };
-            HudCanvas.Children.Add(needle);
-            _hudTicks.Add(needle);
-        }
-
-        // Scan sweep wedge as thin line
-        var sweepLine = new Line
-        {
-            X1 = cx, Y1 = cy,
-            X2 = cx, Y2 = cy - outer,
-            Stroke = new SolidColorBrush(Color.FromArgb(180, 255, 154, 60)),
-            StrokeThickness = 1.5,
-            Opacity = 0.5,
-        };
-        sweepLine.Tag = "sweep";
-        HudCanvas.Children.Add(sweepLine);
-        _hudTicks.Add(sweepLine);
+        _ = tickInner; // kept for clarity
 
         BuildWaveBars();
     }
@@ -330,35 +308,22 @@ public sealed partial class MainWindow : Window
         var pulse = _listening || _speaking ? 0.55f + 0.45f * MathF.Sin(_hudT * 6f) : 0.12f;
         _waveAmp += ((_listening || _speaking ? 1f : 0.15f) - _waveAmp) * 0.12f;
 
-        // Rotate HUD arcs gently
+        // Rotate HUD arcs gently (reuse transforms — avoid per-frame alloc)
         var cx = HudCanvas.ActualWidth * 0.5;
         var cy = HudCanvas.ActualHeight * 0.48;
         for (var i = 0; i < _hudArcs.Count; i++)
         {
             var p = _hudArcs[i];
             var dir = (i % 2 == 0) ? 1 : -1;
-            var speed = 4.0 + (i % 5);
-            p.RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5);
-            // Approximate rotation around canvas center via RotateTransform on path bounds — use CompositeTransform
-            p.RenderTransform = new RotateTransform
+            var speed = 3.0 + (i % 5);
+            if (p.RenderTransform is not RotateTransform rt)
             {
-                Angle = _hudT * speed * dir,
-                CenterX = cx,
-                CenterY = cy,
-            };
-        }
-
-        foreach (var line in _hudTicks)
-        {
-            if (line.Tag as string == "sweep")
-            {
-                var ang = _hudT * 40.0 * Math.PI / 180.0;
-                var outer = Math.Min(HudCanvas.ActualWidth, HudCanvas.ActualHeight) * 0.46;
-                line.X1 = cx;
-                line.Y1 = cy;
-                line.X2 = cx + Math.Cos(ang) * outer;
-                line.Y2 = cy + Math.Sin(ang) * outer;
+                rt = new RotateTransform();
+                p.RenderTransform = rt;
             }
+            rt.CenterX = cx;
+            rt.CenterY = cy;
+            rt.Angle = _hudT * speed * dir;
         }
 
         for (var i = 0; i < _waveBars.Count; i++)
@@ -395,17 +360,17 @@ public sealed partial class MainWindow : Window
     void TickTelemetry()
     {
         var now = DateTime.Now;
-        SysLine.Text = $"{now:yyyy.MM.dd}  {now:HH:mm:ss}  LINK OK";
+        SysLine.Text = $"{now:yyyy.MM.dd}  {now:HH:mm:ss}  СВЯЗЬ ОК";
         var model = ModelLabel();
         SampleCpuRam();
         _pingMs = 8 + _rng.Next(0, 18);
-        LinkLine.Text = $"LINK   OK · {_pingMs}ms";
-        CpuLine.Text = $"CPU    {_cpu,5:0.0}%";
-        RamLine.Text = $"RAM    {_proc.WorkingSet64 / (1024.0 * 1024.0):0} MB";
-        NetLine.Text = $"NET    uplink {_pingMs}ms";
-        SysPanel.Text = $"TIME   {now:HH:mm:ss}\nDATE   {now:yyyy.MM.dd}\nMODEL  {model}\nFPS    60 · DX11";
+        LinkLine.Text = $"СВЯЗЬ  ОК · {_pingMs} мс";
+        CpuLine.Text = $"ЦП     {_cpu,5:0.0}%";
+        RamLine.Text = $"ОЗУ    {_proc.WorkingSet64 / (1024.0 * 1024.0):0} МБ";
+        NetLine.Text = $"СЕТЬ   uplink {_pingMs} мс";
+        SysPanel.Text = $"ВРЕМЯ  {now:HH:mm:ss}\nДАТА   {now:yyyy.MM.dd}\nМОДЕЛЬ {model}\nКАДРЫ  60 · DX11";
         if (ModelLine.Text is null || !ModelLine.Text.Contains(model, StringComparison.Ordinal))
-            ModelLine.Text = $"MODEL  {model}";
+            ModelLine.Text = $"МОДЕЛЬ {model}";
 
         var hour = now.Hour;
         GreetingLine.Text = hour switch
@@ -425,10 +390,13 @@ public sealed partial class MainWindow : Window
             var t = _proc.TotalProcessorTime;
             var wall = DateTime.UtcNow;
             var dt = (wall - _lastCpuSample).TotalMilliseconds;
-            if (dt > 200)
+            if (dt > 400)
             {
+                // Real process CPU as % of one logical core (not a fake counter).
+                // Divide by ProcessorCount for machine-share % — show per-core so idle ~few %.
                 var cpuDt = (t - _lastCpu).TotalMilliseconds;
-                _cpu = Math.Clamp(cpuDt / dt / Environment.ProcessorCount * 100.0, 0, 100);
+                var cores = Math.Max(1, Environment.ProcessorCount);
+                _cpu = Math.Clamp(cpuDt / dt / cores * 100.0, 0, 100);
                 _lastCpu = t;
                 _lastCpuSample = wall;
             }
@@ -493,14 +461,14 @@ public sealed partial class MainWindow : Window
             await _s.Speech.StartAsync();
             _listening = true;
             Holo.Renderer.SetListening(true);
-            VoiceLine.Text = "VOICE  LISTENING";
-            StatusCaption.Text = "LISTENING";
+            VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
+            StatusCaption.Text = "СЛУШАЮ";
             MicGlyph.Text = "■";
         }
         catch { /* */ }
     }
 
-    void RefreshModelLine() => ModelLine.Text = $"MODEL  {ModelLabel()}";
+    void RefreshModelLine() => ModelLine.Text = $"МОДЕЛЬ {ModelLabel()}";
 
     string ModelLabel()
     {
@@ -559,9 +527,9 @@ public sealed partial class MainWindow : Window
         {
             _listening = true;
             Holo.Renderer.SetListening(true);
-            VoiceLine.Text = "VOICE  LISTENING";
-            StatusCaption.Text = "HUD ONLINE";
-            Subtitle.Text = "Cinematic holo interface · N-33";
+            VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
+            StatusCaption.Text = "ИНТЕРФЕЙС";
+            Subtitle.Text = "Голографический интерфейс · N-33";
             MicGlyph.Text = "■";
             BootOverlay.Visibility = Visibility.Collapsed;
         }
@@ -575,35 +543,35 @@ public sealed partial class MainWindow : Window
                 ringsShowcase);
             if (eyesCloseup)
             {
-                StatusCaption.Text = "EYES";
-                Subtitle.Text = "Close-up · iris / specular";
+                StatusCaption.Text = "ГЛАЗА";
+                Subtitle.Text = "Крупный план · радужка / блик";
             }
             else if (ringsShowcase)
             {
-                StatusCaption.Text = "ORBITS";
-                Subtitle.Text = "Segmented halo rings · depth occluded";
+                StatusCaption.Text = "ОРБИТЫ";
+                Subtitle.Text = "Сегментированные кольца · глубина";
             }
             else if (hudShowcase) { /* set above */ }
             else if (jaw is > 0.05f)
             {
                 _speaking = true;
-                StatusCaption.Text = "SPEAKING";
-                VoiceLine.Text = "VOICE  SPEAKING";
-                Subtitle.Text = "Viseme demo · lips open";
+                StatusCaption.Text = "ГОВОРЮ";
+                VoiceLine.Text = "ГОЛОС  ГОВОРЮ";
+                Subtitle.Text = "Демонстрация визем · губы открыты";
             }
             else if (yaw is { } yProf && Math.Abs(yProf) >= 70f)
             {
-                StatusCaption.Text = "PROFILE";
-                Subtitle.Text = "Side silhouette";
+                StatusCaption.Text = "ПРОФИЛЬ";
+                Subtitle.Text = "Боковой ракурс · силуэт";
             }
             else if (yaw is { } yAbs && Math.Abs(yAbs) >= 20f)
             {
                 StatusCaption.Text = "3/4";
-                Subtitle.Text = "Idle orbit";
+                Subtitle.Text = "Ракурс · орбита";
             }
             else if (yaw.HasValue)
             {
-                StatusCaption.Text = "FRONT";
+                StatusCaption.Text = "ФРОНТ";
                 Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";
             }
         }
@@ -620,8 +588,8 @@ public sealed partial class MainWindow : Window
             _hotkey.Triggered += () => DispatcherQueue.TryEnqueue(() =>
             {
                 _s.Agent.Abort();
-                StatusCaption.Text = "ABORTED";
-                VoiceLine.Text = "VOICE  STOP";
+                StatusCaption.Text = "СТОП";
+                VoiceLine.Text = "ГОЛОС  СТОП";
                 _speaking = false;
             });
         }
@@ -690,8 +658,8 @@ public sealed partial class MainWindow : Window
         var text = CommandBox.Text?.Trim() ?? "";
         if (string.IsNullOrEmpty(text)) return;
         CommandBox.Text = "";
-        StatusCaption.Text = "THINKING";
-        VoiceLine.Text = "VOICE  THINKING";
+        StatusCaption.Text = "ДУМАЮ";
+        VoiceLine.Text = "ГОЛОС  ДУМАЮ";
         await _s.Agent.RunAsync(text);
     }
 
@@ -709,8 +677,8 @@ public sealed partial class MainWindow : Window
             _listening = false;
             Holo.Renderer.SetListening(false);
             MicGlyph.Text = "◉";
-            VoiceLine.Text = "VOICE  STANDBY";
-            StatusCaption.Text = "STANDBY";
+            VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
+            StatusCaption.Text = "ОЖИДАНИЕ";
         }
         else
         {
@@ -718,8 +686,8 @@ public sealed partial class MainWindow : Window
             _listening = true;
             Holo.Renderer.SetListening(true);
             MicGlyph.Text = "■";
-            VoiceLine.Text = "VOICE  LISTENING";
-            StatusCaption.Text = "LISTENING";
+            VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
+            StatusCaption.Text = "СЛУШАЮ";
         }
     }
 

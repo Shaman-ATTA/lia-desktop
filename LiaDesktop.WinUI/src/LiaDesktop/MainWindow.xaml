@@ -56,7 +56,7 @@
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="12" Margin="0,0,8,0">
           <TextBlock x:Name="SysLine" Style="{StaticResource HudMono}" FontSize="10" VerticalAlignment="Center"/>
-          <Button Content="CONFIG" Click="Settings_Click" Style="{StaticResource HudGhostButton}" Padding="10,3"/>
+          <Button Content="НАСТРОЙКИ" Click="Settings_Click" Style="{StaticResource HudGhostButton}" Padding="10,3"/>
         </StackPanel>
       </Grid>
     </Border>
@@ -79,11 +79,11 @@
           <Path x:Name="LeftBracketBR" Stroke="{StaticResource LiaAmber}" StrokeThickness="1.2"/>
         </Canvas>
         <StackPanel Spacing="8">
-          <TextBlock Text="TELEMETRY" Style="{StaticResource HudLabel}"/>
+          <TextBlock Text="ТЕЛЕМЕТРИЯ" Style="{StaticResource HudLabel}"/>
           <TextBlock x:Name="VoiceLine" Style="{StaticResource HudMono}"/>
           <TextBlock x:Name="ModelLine" Style="{StaticResource HudMono}"/>
-          <TextBlock Text="MESH   HOLO · DX11" Style="{StaticResource HudMono}"/>
-          <TextBlock x:Name="LinkLine" Text="LINK   OK · 12ms" Style="{StaticResource HudMono}"/>
+          <TextBlock Text="СЕТКА  HOLO · DX11" Style="{StaticResource HudMono}"/>
+          <TextBlock x:Name="LinkLine" Text="СВЯЗЬ  ОК · 12 мс" Style="{StaticResource HudMono}"/>
           <TextBlock x:Name="CpuLine" Style="{StaticResource HudMono}"/>
           <TextBlock x:Name="RamLine" Style="{StaticResource HudMono}"/>
           <TextBlock x:Name="NetLine" Style="{StaticResource HudMono}"/>
@@ -94,7 +94,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
-          <TextBlock Text="JOURNAL" Style="{StaticResource HudLabel}"/>
+          <TextBlock Text="ЖУРНАЛ" Style="{StaticResource HudLabel}"/>
           <ScrollViewer Grid.Row="1" Margin="0,8,0,0" VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="LogPanel" Spacing="5"/>
           </ScrollViewer>
@@ -110,15 +110,15 @@
         <Canvas IsHitTestVisible="False" Height="0">
           <Path Stroke="{StaticResource LiaCyan}" StrokeThickness="1.2" Data="M 0,18 L 0,0 L 18,0"/>
         </Canvas>
-        <TextBlock Text="UPLINK" Style="{StaticResource HudLabel}"/>
-        <TextBlock Text="Команда или голос" Foreground="{StaticResource LiaMuted}"
+        <TextBlock Text="КАНАЛ" Style="{StaticResource HudLabel}"/>
+        <TextBlock Text="Скажите задачу или введите команду" Foreground="{StaticResource LiaMuted}"
                    FontFamily="{StaticResource LiaUi}" FontSize="11"/>
         <TextBox x:Name="CommandBox" PlaceholderText="›" Style="{StaticResource HudLineInput}"
                  AcceptsReturn="False" KeyDown="CommandBox_KeyDown"/>
-        <Button Content="TRANSMIT" Click="Send_Click" Style="{StaticResource HudGhostButton}"
+        <Button Content="ОТПРАВИТЬ" Click="Send_Click" Style="{StaticResource HudGhostButton}"
                 HorizontalAlignment="Stretch"/>
         <Border Height="1" Background="{StaticResource LiaHairline}" Margin="0,6,0,2"/>
-        <TextBlock Text="SYSTEM" Style="{StaticResource HudLabel}"/>
+        <TextBlock Text="СИСТЕМА" Style="{StaticResource HudLabel}"/>
         <TextBlock x:Name="SysPanel" Style="{StaticResource HudMono}" TextWrapping="Wrap"/>
       </StackPanel>
     </Border>
@@ -126,7 +126,7 @@
     <!-- Center subtitle strip (no box frame) -->
     <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,118"
                 IsHitTestVisible="False" Spacing="4">
-      <TextBlock x:Name="StatusCaption" Text="STANDBY" Foreground="{StaticResource LiaAmber}"
+      <TextBlock x:Name="StatusCaption" Text="ОЖИДАНИЕ" Foreground="{StaticResource LiaAmber}"
                  FontFamily="{StaticResource LiaUi}" FontSize="14" CharacterSpacing="180"
                  HorizontalAlignment="Center"/>
       <TextBlock x:Name="Subtitle" Text="Скажите «Лиа» или нажмите микрофон"
@@ -141,7 +141,7 @@
             BorderBrush="#22FF9A3C" BorderThickness="0,1,0,0">
       <Grid>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="36">
-          <TextBlock Text="HOME" Style="{StaticResource HudTab}" Foreground="{StaticResource LiaAmber}"/>
+          <TextBlock Text="ГЛАВНАЯ" Style="{StaticResource HudTab}" Foreground="{StaticResource LiaAmber}"/>
           <Grid Width="88" Height="88">
             <!-- Soft glow -->
             <Ellipse Width="78" Height="78" Opacity="0.22">
@@ -173,9 +173,9 @@
               </Grid>
             </Button>
           </Grid>
-          <TextBlock Text="AGENT" Style="{StaticResource HudTab}"/>
+          <TextBlock Text="АГЕНТ" Style="{StaticResource HudTab}"/>
         </StackPanel>
-        <TextBlock Text="Ctrl+Alt+S · abort" Foreground="{StaticResource LiaMuted}" FontSize="10"
+        <TextBlock Text="Ctrl+Alt+S · стоп" Foreground="{StaticResource LiaMuted}" FontSize="10"
                    FontFamily="{StaticResource LiaMono}"
                    HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,20,0"/>
       </Grid>
@@ -186,7 +186,7 @@
       <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
         <TextBlock Text="ЛИА" Foreground="{StaticResource LiaAmber}" FontFamily="{StaticResource LiaUi}"
                    FontSize="42" CharacterSpacing="320" HorizontalAlignment="Center" FontWeight="SemiBold"/>
-        <TextBlock x:Name="BootStatus" Text="INITIALIZING HOLOMESH…" Foreground="{StaticResource LiaCyan}"
+        <TextBlock x:Name="BootStatus" Text="ИНИЦИАЛИЗАЦИЯ HOLOMESH…" Foreground="{StaticResource LiaCyan}"
                    FontFamily="{StaticResource LiaMono}" FontSize="12" HorizontalAlignment="Center" CharacterSpacing="40"/>
         <ProgressBar x:Name="BootBar" Width="220" Height="2" IsIndeterminate="True"
                      Foreground="{StaticResource LiaAmber}" Background="#22FF9A3C"/>
@@ -199,35 +199,35 @@
               BorderBrush="{StaticResource LiaAmber}" BorderThickness="1"
               HorizontalAlignment="Center" VerticalAlignment="Center">
         <StackPanel Spacing="10">
-          <TextBlock Text="CONFIG · LIA" Foreground="{StaticResource LiaAmber}"
+          <TextBlock Text="НАСТРОЙКИ · ЛИА" Foreground="{StaticResource LiaAmber}"
                      FontFamily="{StaticResource LiaUi}" FontSize="16" CharacterSpacing="80"/>
           <TextBlock Text="Ключ Gemini (aistudio.google.com/apikey). Модель — ListModels."
                      Foreground="{StaticResource LiaMuted}" TextWrapping="Wrap" FontSize="12"/>
-          <TextBlock Text="PROVIDER" Style="{StaticResource HudLabel}"/>
+          <TextBlock Text="ПРОВАЙДЕР" Style="{StaticResource HudLabel}"/>
           <ComboBox x:Name="ProviderBox" HorizontalAlignment="Stretch">
             <ComboBoxItem Content="gemini" IsSelected="True"/>
             <ComboBoxItem Content="ollama"/>
           </ComboBox>
-          <TextBlock Text="API KEY" Style="{StaticResource HudLabel}"/>
+          <TextBlock Text="API-КЛЮЧ" Style="{StaticResource HudLabel}"/>
           <PasswordBox x:Name="ApiKeyBox"/>
-          <TextBlock Text="MODEL" Style="{StaticResource HudLabel}"/>
+          <TextBlock Text="МОДЕЛЬ" Style="{StaticResource HudLabel}"/>
           <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <ComboBox x:Name="ModelBox" HorizontalAlignment="Stretch"/>
-            <Button Grid.Column="1" Content="REFRESH" Margin="8,0,0,0" Click="RefreshModels_Click"
+            <Button Grid.Column="1" Content="ОБНОВИТЬ" Margin="8,0,0,0" Click="RefreshModels_Click"
                     Style="{StaticResource HudGhostButton}"/>
           </Grid>
           <TextBlock x:Name="ModelsHint" Foreground="{StaticResource LiaMuted}" FontSize="11"/>
-          <TextBlock Text="WORKSPACE" Style="{StaticResource HudLabel}"/>
+          <TextBlock Text="РАБОЧАЯ ПАПКА" Style="{StaticResource HudLabel}"/>
           <TextBox x:Name="WorkspaceBox" Style="{StaticResource HudLineInput}"/>
           <CheckBox x:Name="AutostartBox" Content="Запускать вместе с Windows (в трее, ждать «Лиа»)"
                     Foreground="{StaticResource LiaMuted}" Margin="0,8,0,0"/>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,8,0,0">
-            <Button Content="CANCEL" Click="SettingsCancel_Click" Style="{StaticResource HudGhostButton}"/>
-            <Button Content="SAVE" Click="SettingsSave_Click" Style="{StaticResource HudGhostButton}"
+            <Button Content="ОТМЕНА" Click="SettingsCancel_Click" Style="{StaticResource HudGhostButton}"/>
+            <Button Content="СОХРАНИТЬ" Click="SettingsSave_Click" Style="{StaticResource HudGhostButton}"
                     BorderBrush="{StaticResource LiaAmber}" Foreground="{StaticResource LiaAmber}"/>
           </StackPanel>
         </StackPanel>

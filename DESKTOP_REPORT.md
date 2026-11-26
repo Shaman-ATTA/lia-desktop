@@ -1,19 +1,16 @@
 # Lia Desktop — ship report
 
-## v0.6.0 — cinematic holographic HUD
+## v0.6.1 — clean orbits / RU HUD
 
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.0
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.1
 
-Head / materials / framing / lip sync **unchanged** from v0.5.5. Full-window sci-fi HUD shell:
-borderless acrylic, floating glass cards, mic orb + waveform, segmented glowing rings, 2D arcs/gauges.
-Smoke: front · 3/4 · speaking · eyes · rings · **hud**.
+Head locked. Clean 3D halos (head-parented, behind face). No HUD lines on skin.
+Russian UI. Wider neck fade. Real CPU%.
+
+## v0.6.0 — cinematic HUD (draft / superseded)
+
+Face-crossing scribbles — do not ship.
 
 ## v0.5.5 — clean chin / continuous rings
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.5
-
-Uniform lower-face skin · continuous crown+neck halos · neck fade kept.
-
-## Earlier
-
-See CHANGELOG.md for v0.5.4 → v0.4.x history.

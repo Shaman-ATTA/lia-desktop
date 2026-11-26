@@ -605,7 +605,7 @@ public sealed class HoloRenderer : IDisposable
         if (_hairVb != null && _hairIb != null && _hairIndexCount > 0)
         {
             _ctx.OMSetDepthStencilState(_dssRead);
-            _ctx.OMSetBlendState(_blendOpaque);
+            _ctx.OMSetBlendState(_blendOpaque); // opaque; neck stump is skin-only fade
             _ctx.RSSetState(_rsNoCull);
             WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
             BindHairTextures();
@@ -616,9 +616,13 @@ public sealed class HoloRenderer : IDisposable
             _ctx.RSSetState(_rs);
         }
 
-        // 4) Rings — tilted halo orbits; yaw-only spin; hidden in eyes close-up
+        // 4) Rings — parented to head orient (so yaw never slices the face);
+        //    placed behind face plane in head space; hidden in eyes close-up
         if (!_eyesCloseup)
         {
+            var headOrient = Matrix4x4.CreateRotationX(pitch)
+                             * Matrix4x4.CreateRotationY(yaw)
+                             * Matrix4x4.CreateTranslation(0, HeadTransY + breathY, 0);
             _ctx.OMSetDepthStencilState(_dssRead);
             _ctx.OMSetBlendState(_blendPremul);
             _ctx.RSSetState(_rsNoCull);
@@ -627,15 +631,15 @@ public sealed class HoloRenderer : IDisposable
             for (var i = 0; i < _rings.Count; i++)
             {
                 var r = _rings[i];
-                var spinBoost = _ringsShowcase ? 2.8f : 1f;
+                var spinBoost = _ringsShowcase ? 2.2f : 1f;
                 var rot = Matrix4x4.CreateFromYawPitchRoll(
                     r.BaseYaw + _time * r.SpinY * spinBoost,
                     r.BasePitch,
                     r.BaseRoll);
-                var model = Matrix4x4.Transpose(
-                    rot * Matrix4x4.CreateTranslation(0f, r.TransY, r.TransZ));
+                var ringLocal = rot * Matrix4x4.CreateTranslation(0f, r.TransY, r.TransZ);
+                var model = Matrix4x4.Transpose(ringLocal * headOrient);
                 WriteFrame(viewProj, model, cam, 0, 1f);
-                WriteRing(r.Color, _ringsShowcase ? Math.Min(0.72f, r.Opacity * 1.25f) : r.Opacity);
+                WriteRing(r.Color, _ringsShowcase ? Math.Min(0.55f, r.Opacity * 1.15f) : r.Opacity);
                 _ctx.IASetVertexBuffer(0, r.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(r.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(r.IndexCount, 0, 0);
@@ -1077,8 +1081,8 @@ public sealed class HoloRenderer : IDisposable
 
     void BuildRings()
     {
-        // Thick segmented holographic orbits. Torus in XZ; maxZ ≈ tz + r·cos(pitch).
-        // Keep maxZ ≤ −0.05 (behind face). Varied tilts; yaw spin only.
+        // 2–3 clean evenly-segmented halos. Torus in XZ; maxZ ≈ tz + r·cos(pitch).
+        // Keep maxZ ≤ −0.05 (behind face plane in head space). Slow yaw spin.
         void AddSeg(float radius, float tube, float pitchDeg, float yaw, float roll,
             float transY, float transZ, float spinY, float opacity, int pieces, float gapFrac)
         {
@@ -1094,14 +1098,10 @@ public sealed class HoloRenderer : IDisposable
             }
         }
 
-        // Crown cluster
-        AddSeg(0.38f, 0.0048f, 18f, 0.00f, 0.04f, 0.30f, -0.48f, 0.07f, 0.55f, 7, 0.18f);
-        AddSeg(0.44f, 0.0036f, 28f, 0.08f, -0.05f, 0.26f, -0.55f, -0.045f, 0.42f, 9, 0.22f);
-        // Mid / neck cluster
-        AddSeg(0.36f, 0.0042f, -16f, 0.03f, 0.02f, -0.14f, -0.46f, 0.055f, 0.48f, 6, 0.16f);
-        AddSeg(0.42f, 0.0032f, -32f, -0.06f, 0.08f, -0.22f, -0.52f, -0.04f, 0.38f, 8, 0.20f);
-        // Outer faint rim
-        AddSeg(0.50f, 0.0028f, 8f, 0.12f, -0.03f, 0.06f, -0.60f, 0.03f, 0.28f, 10, 0.24f);
+        // Crown halo (~+12°), neck halo (~−10°), outer faint rim — smooth tubes, even gaps
+        AddSeg(0.37f, 0.0020f, 12f, 0.00f, 0.02f, 0.30f, -0.50f, 0.04f, 0.42f, 8, 0.10f);
+        AddSeg(0.39f, 0.0018f, -10f, 0.04f, -0.02f, -0.18f, -0.48f, -0.035f, 0.36f, 8, 0.10f);
+        AddSeg(0.46f, 0.0014f, 6f, 0.08f, 0.02f, 0.06f, -0.58f, 0.025f, 0.26f, 10, 0.12f);
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, float startU = 0f)

@@ -172,8 +172,9 @@ def main() -> int:
             continue
         af = amber_face_frac(p, y0=0.28, y1=0.55)
         print(f"{name}: amber_on_face_frac={af:.4f}")
-        if af > 0.045:
-            print(f"FAIL: {name} rings crossing face ({af:.2%})", file=sys.stderr)
+        # v0.6.1: zero HUD/ring pixels on skin — keep tight
+        if af > 0.020:
+            print(f"FAIL: {name} rings/HUD on face ({af:.2%})", file=sys.stderr)
             return 1
         nb = neck_black_blob_frac(p)
         print(f"{name}: neck_black_blob_frac={nb:.4f}")

@@ -103,11 +103,11 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command 7z -ErrorAction SilentlyContinue) {
-            7z a -tzip -mx=9 LiaDesktop-0.6.0-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
+            7z a -tzip -mx=9 LiaDesktop-0.6.1-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
           } else {
-            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.6.0-win-x64.zip -CompressionLevel Optimal -Force
+            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.6.1-win-x64.zip -CompressionLevel Optimal -Force
           }
-          Get-Item LiaDesktop-0.6.0-win-x64.zip | Format-List Name,Length
+          Get-Item LiaDesktop-0.6.1-win-x64.zip | Format-List Name,Length
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -120,10 +120,10 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found" }
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           & $iscc /Q installer\LiaDesktop.iss
-          $setup = Get-Item artifacts\LiaDesktop-0.6.0-setup.exe
-          Copy-Item $setup.FullName .\LiaDesktop-0.6.0-setup.exe -Force
+          $setup = Get-Item artifacts\LiaDesktop-0.6.1-setup.exe
+          Copy-Item $setup.FullName .\LiaDesktop-0.6.1-setup.exe -Force
           $setup | Format-List Name,Length
-          $zip = Get-Item LiaDesktop-0.6.0-win-x64.zip
+          $zip = Get-Item LiaDesktop-0.6.1-win-x64.zip
           Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
 
       - name: Smoke launch + screenshots + clean exit proof
@@ -260,7 +260,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $PWD 'LiaDesktop-0.6.0-setup.exe'
+          $setup = Join-Path $PWD 'LiaDesktop-0.6.1-setup.exe'
           if (-not (Test-Path $setup)) { throw "setup missing" }
           $dir = Join-Path $env:LOCALAPPDATA 'LiaDesktop-smoke'
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
@@ -286,8 +286,8 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.6.0-win-x64.zip
-            LiaDesktop-0.6.0-setup.exe
+            LiaDesktop-0.6.1-win-x64.zip
+            LiaDesktop-0.6.1-setup.exe
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_profile.png
@@ -322,12 +322,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.6.0** — cinematic holographic HUD
+          Lia Desktop **v0.6.1** — clean orbits, RU HUD
 
-          - Head / materials / framing / lip sync unchanged from v0.5.5
-          - Borderless acrylic HUD, floating glass cards, mic orb + waveform
-          - Segmented glowing 3D rings + 2D arcs / gauges / scan sweep
-          - See THIRD_PARTY.md for license
+          - Head unchanged from v0.5.5
+          - Clean depth-tested 3D halos (no face scribbles)
+          - No HUD lines across the face; Russian UI; wider neck fade
+          - See THIRD_PARTY.md
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -335,7 +335,7 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "$NOTES"
           fi
-          for f in LiaDesktop-0.6.0-win-x64.zip LiaDesktop-0.6.0-setup.exe \
+          for f in LiaDesktop-0.6.1-win-x64.zip LiaDesktop-0.6.1-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
                    tasklist_before.txt tasklist_after.txt; do
@@ -347,16 +347,16 @@ jobs:
           done
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG} (draft)"
 
-      - name: Mirror assets to draft v0.6.0 on main pushes
+      - name: Mirror assets to draft v0.6.1 on main pushes
         if: success() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.6.0
+          TAG=v0.6.1
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "Cinematic HUD v0.6.0 (draft)"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "Cinematic HUD v0.6.1 (draft)"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft || true
-          for f in LiaDesktop-0.6.0-win-x64.zip LiaDesktop-0.6.0-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png tasklist_after.txt; do
+          for f in LiaDesktop-0.6.1-win-x64.zip LiaDesktop-0.6.1-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png tasklist_after.txt; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
           done
