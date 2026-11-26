@@ -4,7 +4,7 @@ using NAudio.Wave;
 namespace LiaDesktop.Services;
 
 /// <summary>
-/// WASAPI mic capture + simple energy VAD → Gemini inline-audio transcription (ru).
+/// Default-mic capture (WaveInEvent) + energy VAD → Gemini inline-audio transcription (ru).
 /// Used when Windows.Media.SpeechRecognition (ru-RU) is not installed.
 /// </summary>
 public sealed class MicGeminiListen : IDisposable
@@ -12,7 +12,7 @@ public sealed class MicGeminiListen : IDisposable
     readonly GeminiClient _gemini;
     readonly AppLog _log;
     readonly ConcurrentQueue<byte[]> _chunks = new();
-    WasapiCapture? _capture;
+    WaveInEvent? _capture;
     WaveFormat? _format;
     CancellationTokenSource? _session;
     Task? _pipeline;
@@ -35,14 +35,20 @@ public sealed class MicGeminiListen : IDisposable
         var ct = _session.Token;
 
         while (_chunks.TryDequeue(out _)) { }
-        _capture = new WasapiCapture(); // default mic
-        _format = _capture.WaveFormat;
+
+        // WaveInEvent is in core NAudio.Wave (WasapiCapture needs NAudio.Wasapi pack).
+        _format = new WaveFormat(16000, 16, 1);
+        _capture = new WaveInEvent
+        {
+            WaveFormat = _format,
+            BufferMilliseconds = 50,
+        };
         _capture.DataAvailable += OnData;
         _capture.RecordingStopped += (_, _) => { };
         _capture.StartRecording();
         IsListening = true;
         _armed = true;
-        _log.Info("Микрофон: Gemini STT (WASAPI)…");
+        _log.Info("Микрофон: Gemini STT (WaveIn)…");
         _pipeline = Task.Run(() => PipelineAsync(ct), ct);
         await Task.CompletedTask;
     }
@@ -70,7 +76,6 @@ public sealed class MicGeminiListen : IDisposable
 
     async Task PipelineAsync(CancellationToken ct)
     {
-        // 16-bit PCM energy VAD: wait for speech, then silence → clip
         var pcm = new MemoryStream();
         var speechStarted = false;
         var silenceMs = 0;
@@ -78,7 +83,7 @@ public sealed class MicGeminiListen : IDisposable
         const int maxMs = 12000;
         const int silenceEndMs = 900;
         const int minSpeechMs = 350;
-        var frameMsEst = 20; // updated from chunk size
+        var frameMsEst = 20;
 
         try
         {
@@ -168,7 +173,7 @@ public sealed class MicGeminiListen : IDisposable
 
     static float Rms16(WaveFormat fmt, byte[] chunk)
     {
-        if (fmt.BitsPerSample != 16) return 0.05f; // assume audible
+        if (fmt.BitsPerSample != 16) return 0.05f;
         var n = chunk.Length / 2;
         if (n <= 0) return 0;
         double sum = 0;
