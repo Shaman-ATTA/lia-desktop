@@ -242,10 +242,11 @@ def _hud_arc_mask(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def face_region_mad(current: Path, reference: Path) -> float:
-    """Mean abs RGB diff on the face band (eyes→chin), excluding neck fade.
+    """Mean abs RGB diff on jaw/chin (where v0.6.7 blotches lived).
 
-    Face band ≈ 28–58% of stage height (above fade which starts below jaw).
-    Returns MAD in 0–255 units.
+    Full-face MAD is dominated by time-varying scanlines (~10–12 even when
+    clean). Chin/jaw band separates clean (~7) from blotchy (~19–47).
+    Band stays above the neck fade (fadeTop ≈ below jaw).
     """
     if not reference.is_file():
         return 999.0
@@ -262,8 +263,8 @@ def face_region_mad(current: Path, reference: Path) -> float:
     c = cur[yy0:yy1, x0:x1]
     r = ref[yy0:yy1, x0:x1]
     h, w, _ = c.shape
-    # Eyes→chin, center face; exclude lower neck fade band
-    y0b, y1b = int(h * 0.22), int(h * 0.58)
+    # Jaw → chin only (above fade band)
+    y0b, y1b = int(h * 0.48), int(h * 0.58)
     x0b, x1b = int(w * 0.34), int(w * 0.66)
     cb = c[y0b:y1b, x0b:x1b]
     rb = r[y0b:y1b, x0b:x1b]
@@ -429,11 +430,11 @@ def main() -> int:
                 print(f"WARN: missing face ref {ref}", file=sys.stderr)
             continue
         mad = face_region_mad(p, ref)
-        print(f"{name}: face_mad_vs_v066={mad:.2f}")
-        # v0.6.7 jaw-blotch front scored ~10.7 vs v0.6.6; keep under 9
-        if mad > 9.0:
+        print(f"{name}: jaw_chin_mad_vs_v066={mad:.2f}")
+        # Clean ~7; v0.6.7 blotchy chin ~19. Gate under 12.
+        if mad > 12.0:
             print(
-                f"FAIL: {name} face drifted from v0.6.6 (MAD {mad:.1f} > 9) — jaw/chin regress?",
+                f"FAIL: {name} jaw/chin drifted from v0.6.6 (MAD {mad:.1f} > 12)",
                 file=sys.stderr,
             )
             return 1

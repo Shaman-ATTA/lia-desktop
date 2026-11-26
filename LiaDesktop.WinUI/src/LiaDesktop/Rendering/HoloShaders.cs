@@ -90,7 +90,9 @@ float4 main(PSIn i) : SV_TARGET {
   float neckHeight = chinY - cutY;                 // ≈ 0.144
   float fadeTop = chinY - 0.25 * neckHeight;       // ≈ 0.306 — below jaw
   float fadeBot = cutY;
-  float neckA = smoothstep(fadeBot, fadeTop, i.local.y); // pure gradient, no side/pow
+  // Pure vertical gradient; square so the mesh cut hits ~0 faster (CI neck α).
+  float neckA = smoothstep(fadeBot, fadeTop, i.local.y);
+  neckA *= neckA;
   if (neckA < 0.01) discard;
 
   color = color / (1.0 + color * 0.65);
