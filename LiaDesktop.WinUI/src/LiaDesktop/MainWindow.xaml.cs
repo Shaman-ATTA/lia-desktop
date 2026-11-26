@@ -188,8 +188,7 @@ public sealed partial class MainWindow : Window
         var amber = Color.FromArgb(255, 255, 154, 60);
         var cyan = Color.FromArgb(255, 90, 214, 255);
 
-        // Concentric arcs OUTSIDE the face disc — no center needles / sweep / chords.
-        // Face+neck disc ≈ 0.42 of min(w,h); keep innermost clear of skin/neck.
+        // Concentric arcs OUTSIDE face+neck — no center needles / chords.
         var m = Math.Min(w, h);
         double[] radii = [m * 0.50, m * 0.56, m * 0.62, m * 0.68];
         for (var i = 0; i < radii.Length; i++)
@@ -201,37 +200,39 @@ public sealed partial class MainWindow : Window
             for (var s = 0; s < segs; s++)
             {
                 var start = s * (sweep + gap) + i * 9;
-                var path = MakeArc(cx, cy, r, start, sweep, i % 2 == 0 ? amber : cyan, i == 0 ? 1.5 : 1.15);
-                path.Opacity = 0.40 + i * 0.07;
+                var col = i % 2 == 0 ? amber : cyan;
+                // Soft glow underlay + brighter core stroke
+                var glow = MakeArc(cx, cy, r, start, sweep, col, i == 0 ? 4.5 : 3.5);
+                glow.Opacity = 0.22 + i * 0.04;
+                glow.Stroke = new SolidColorBrush(Color.FromArgb(90, col.R, col.G, col.B));
+                HudCanvas.Children.Add(glow);
+                var path = MakeArc(cx, cy, r, start, sweep, col, i == 0 ? 2.0 : 1.55);
+                path.Opacity = 0.62 + i * 0.08;
                 HudCanvas.Children.Add(path);
-                _hudArcs.Add(path);
+                _hudArcs.Add(path); // rotate the bright core
             }
         }
 
-        // Tick marks on outer ring only (short radial marks — never reach the face)
+        // Tick marks on outer ring only
         var outer = radii[^1];
-        var tickInner = outer - 12;
         for (var t = 0; t < 60; t++)
         {
             var ang = t / 60.0 * Math.PI * 2;
-            var len = t % 5 == 0 ? 11 : 5;
-            var x0 = cx + Math.Cos(ang) * (outer - len);
-            var y0 = cy + Math.Sin(ang) * (outer - len);
-            var x1 = cx + Math.Cos(ang) * outer;
-            var y1 = cy + Math.Sin(ang) * outer;
-            // Safety: never draw inside face radius
-            if (outer - len < m * 0.40) continue;
+            var len = t % 5 == 0 ? 12 : 6;
+            if (outer - len < m * 0.46) continue;
             var line = new Line
             {
-                X1 = x0, Y1 = y0, X2 = x1, Y2 = y1,
+                X1 = cx + Math.Cos(ang) * (outer - len),
+                Y1 = cy + Math.Sin(ang) * (outer - len),
+                X2 = cx + Math.Cos(ang) * outer,
+                Y2 = cy + Math.Sin(ang) * outer,
                 Stroke = new SolidColorBrush(amber),
-                StrokeThickness = t % 5 == 0 ? 1.3 : 0.7,
-                Opacity = 0.40,
+                StrokeThickness = t % 5 == 0 ? 1.5 : 0.85,
+                Opacity = 0.55,
             };
             HudCanvas.Children.Add(line);
             _hudTicks.Add(line);
         }
-        _ = tickInner; // kept for clarity
 
         BuildWaveBars();
     }
@@ -315,7 +316,7 @@ public sealed partial class MainWindow : Window
         {
             var p = _hudArcs[i];
             var dir = (i % 2 == 0) ? 1 : -1;
-            var speed = 3.0 + (i % 5);
+            var speed = 1.2 + (i % 4) * 0.35; // slow drift
             if (p.RenderTransform is not RotateTransform rt)
             {
                 rt = new RotateTransform();

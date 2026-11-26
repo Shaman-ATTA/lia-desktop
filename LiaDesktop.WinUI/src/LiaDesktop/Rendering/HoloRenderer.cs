@@ -639,7 +639,7 @@ public sealed class HoloRenderer : IDisposable
                 var ringLocal = rot * Matrix4x4.CreateTranslation(0f, r.TransY, r.TransZ);
                 var model = Matrix4x4.Transpose(ringLocal * headOrient);
                 WriteFrame(viewProj, model, cam, 0, 1f);
-                WriteRing(r.Color, _ringsShowcase ? Math.Min(0.55f, r.Opacity * 1.15f) : r.Opacity);
+                WriteRing(r.Color, _ringsShowcase ? Math.Min(0.85f, r.Opacity * 1.2f) : r.Opacity);
                 _ctx.IASetVertexBuffer(0, r.Vb, stride, 0);
                 _ctx.IASetIndexBuffer(r.Ib, Format.R32_UInt, 0);
                 _ctx.DrawIndexed(r.IndexCount, 0, 0);
@@ -1099,10 +1099,12 @@ public sealed class HoloRenderer : IDisposable
             }
         }
 
-        // Crown + mid + outer — all behind face, no neck-level ring crossing chin/neck
-        AddSeg(0.37f, 0.0020f, 12f, 0.00f, 0.02f, 0.32f, -0.52f, 0.04f, 0.40f, 8, 0.10f);
-        AddSeg(0.42f, 0.0016f, 8f, 0.05f, -0.02f, 0.12f, -0.56f, -0.03f, 0.32f, 8, 0.10f);
-        AddSeg(0.48f, 0.0013f, 5f, 0.08f, 0.02f, 0.02f, -0.62f, 0.025f, 0.24f, 10, 0.12f);
+        // Two clearly visible halos (core + soft glow shell). maxZ ≈ tz+r·cos(pitch) ≤ −0.05.
+        // Crown (~forehead) and neck (below chin) — sides peek around silhouette; depth hides the rest.
+        AddSeg(0.40f, 0.0036f, 14f, 0.00f, 0.02f, 0.32f, -0.48f, 0.035f, 0.68f, 8, 0.08f); // crown core
+        AddSeg(0.40f, 0.0075f, 14f, 0.00f, 0.02f, 0.32f, -0.48f, 0.035f, 0.24f, 8, 0.08f); // crown glow
+        AddSeg(0.42f, 0.0032f, -12f, 0.03f, -0.02f, -0.22f, -0.50f, -0.03f, 0.60f, 8, 0.08f); // neck core
+        AddSeg(0.42f, 0.0068f, -12f, 0.03f, -0.02f, -0.22f, -0.50f, -0.03f, 0.20f, 8, 0.08f); // neck glow
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, float startU = 0f)

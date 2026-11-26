@@ -1,23 +1,19 @@
 # Changelog
 
-## v0.6.1 — Clean orbits, no face overlays, RU UI
+## v0.6.2 — Visible halos, softer neck, brighter HUD
 
-- 2–3 clean segmented 3D halos parented to head (no face-slicing scribbles)
-- Removed center HUD needles / sweep that crossed the face; 2D arcs stay outside skin
-- Real process CPU%; HUD timer ~20fps; skip overlapped render ticks
-- Full Russian UI strings
-- Wider neck alpha fade (no hard 3/4 stump edge)
-- Head / materials / framing / lip sync still locked from v0.5.5
+- Crown + neck 3D amber rings visible again (core + glow), head-parented, behind face
+- Neck stump alpha dissolve over last ~15% height; framing ~0.75–0.80
+- Brighter 2D arcs with soft glow underlay + slow rotation (outside face/neck)
+- Subtle holo veil: faint scanlines + amber silhouette rim (no skin hue shift)
+- Head / materials / lip sync still locked from v0.5.5
 
-## v0.6.0 — Cinematic holographic HUD (superseded)
+## v0.6.1 — Clean orbits, RU HUD
 
-- Full-window sci-fi HUD shell (acrylic, glass cards, mic orb, arcs)
-- Too-aggressive 3D rings + face-crossing HUD lines — fixed in v0.6.1
+- Face-clean HUD; Russian UI; head-parented rings; real CPU%
 
-## v0.5.5 — Clean chin, continuous halo rings
-
-- Uniform lower-face skin · continuous crown+neck halos · neck fade kept
+## v0.6.0 — Cinematic HUD shell (superseded)
 
 ## Earlier
 
-See git history for v0.5.4 → v0.3.x.
+See git history for v0.5.x.

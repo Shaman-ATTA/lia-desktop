@@ -73,25 +73,26 @@ float4 main(PSIn i) : SV_TARGET {
   // Same skin shading everywhere (incl. chin/mouth) — no cavity darken/haze
   float3 color = diffuse + key * spec * (1.0 - darkLash);
 
-  // Thin faint scrolling scanlines: ~4 px period, ~1 px dark line, ~7% dip
+  // Subtle holo veil: faint scanlines + amber silhouette rim — no skin hue shift
   float ndv = saturate(dot(N,V));
-  float fres = pow(1.0 - ndv, 2.2) * (1.0 - darkLash);
-  float scanCell = frac(i.pos.y / 4.0 + time * 0.22);
-  float scanWave = (scanCell < 0.28) ? -1.0 : 0.0;
+  float fres = pow(1.0 - ndv, 2.4) * (1.0 - darkLash);
+  float scanCell = frac(i.pos.y / 4.0 + time * 0.18);
+  float scanWave = (scanCell < 0.22) ? -1.0 : 0.0;
   float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.08, 0.95, 0.80), 0.12 * (1.0 - darkLash));
-  color += amber * fres * 0.42 * max(glow, 0.85);
-  color *= (1.0 + 0.07 * scanWave * (1.0 - darkLash));
+  color += amber * fres * 0.48 * max(glow, 0.85);           // rim only
+  color *= (1.0 + 0.10 * scanWave * (1.0 - darkLash));       // ~10% scan dip
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Soft stump dissolve — keep most neck visible (framing ~70%+) while killing hard edge
-  float neckA = smoothstep(0.16, 0.34, i.local.y);
+  // Soft stump dissolve over last ~15% of neck height (framing stays ~0.75–0.80)
+  float neckA = smoothstep(0.15, 0.26, i.local.y);
   float rad = length(i.local.xz);
-  // Outer shelf (3/4 right stump) dissolves a bit earlier, not the whole neck
-  float shelf = smoothstep(0.11, 0.18, rad);
-  neckA *= lerp(1.0, smoothstep(0.18, 0.36, i.local.y), shelf * 0.75);
+  float nearStump = 1.0 - smoothstep(0.15, 0.28, i.local.y);
+  // Soften jagged lateral silhouette (esp. 3/4 right edge)
+  float shelf = smoothstep(0.10, 0.17, rad);
+  neckA *= 1.0 - nearStump * fres * 0.55;
+  neckA *= 1.0 - shelf * nearStump * 0.70;
   neckA = saturate(neckA);
-  if (neckA < 0.008) discard;
+  if (neckA < 0.01) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
@@ -280,14 +281,14 @@ struct PSIn {
   float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
-  // Clean glowing tube — depth-test only (no discard). Soft fresnel, no scribble noise.
+  // Bright clean glow tube — depth-test only. Readable from the sides of the head.
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
-  float fres = pow(1.0 - saturate(dot(N,V)), 2.0);
-  float pulse = 0.94 + 0.06 * sin(time * 1.1);
-  float3 amber = color * float3(1.0, 0.78, 0.42);
-  float3 c = amber * (0.35 + fres * 0.75) * pulse;
-  float a = saturate(opacity * (0.30 + fres * 0.55));
+  float fres = pow(1.0 - saturate(dot(N,V)), 1.7);
+  float pulse = 0.92 + 0.08 * sin(time * 1.0);
+  float3 amber = color * float3(1.08, 0.82, 0.42);
+  float3 c = amber * (0.55 + fres * 0.90) * pulse;
+  float a = saturate(opacity * (0.45 + fres * 0.55));
   return float4(c * a, a);
 }";
 
