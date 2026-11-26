@@ -629,15 +629,17 @@ public sealed class HoloRenderer : IDisposable
         {
             _ctx.IASetVertexBuffer(0, _headVb, stride, 0);
             _ctx.IASetIndexBuffer(_headIb, Format.R32_UInt, 0);
-            // 1a) Depth only (front faces) — establishes opaque silhouette depth
+            // 1a) Depth only (front faces) — establishes silhouette depth
             _ctx.OMSetDepthStencilState(_dssWrite);
             _ctx.OMSetBlendState(_blendNoColor!);
             _ctx.RSSetState(_rs); // cull back
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
-            // 1b) Color premul, depth-equal — no inner/back overdraw
-            _ctx.OMSetDepthStencilState(_dssEqual!);
+            // 1b) Color premul, depth test on / write off (LessEqual — MSAA-safe).
+            //    Equal fails under MSAA and blacked-out the face; LessEqual still
+            //    rejects farther back-faces so jaw blotches stay gone.
+            _ctx.OMSetDepthStencilState(_dssRead);
             _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
-            _ctx.RSSetState(_rsNoCull);
+            _ctx.RSSetState(_rs); // cull back — match prepass faces
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
         _ctx.RSSetState(_rs);
