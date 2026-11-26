@@ -5,6 +5,7 @@
 - Gemini: 90s HttpClient, retry 503/429 with 1/2/4/8/16s + Retry-After (max 5), ListModels fallback, RU HTTP errors; settings dropdown validates models
 - Mic: when Windows ru-RU Speech missing → WASAPI + VAD → Gemini inline audio STT; TTS playback hardened (SvetlanaNeural)
 - Layout: hologram only in centre 0.56 column; swapchain uses max(CompositionScale, RasterizationScale); CI 1080p/4K framing asserts
+- CI E2E `--selftest` against mock Gemini (normal / 503×2 / 429 Retry-After / slow 20s / 404→ListModels) + optional live `GEMINI_API_KEY`; gates release via `selftest.txt`
 
 
 ## v0.6.8 — neck fade below jaw; clean chin

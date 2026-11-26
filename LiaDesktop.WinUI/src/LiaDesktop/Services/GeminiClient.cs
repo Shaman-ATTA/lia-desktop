@@ -293,7 +293,7 @@ public sealed class GeminiClient
             });
         }
 
-        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{Uri.EscapeDataString(model)}:generateContent?key={Uri.EscapeDataString(apiKey)}";
+        var url = $"{GeminiEndpoints.GenerateContent(model)}?key={Uri.EscapeDataString(apiKey)}";
         using var req = new HttpRequestMessage(HttpMethod.Post, url)
         {
             Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),

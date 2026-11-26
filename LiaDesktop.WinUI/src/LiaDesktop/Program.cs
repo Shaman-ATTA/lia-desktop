@@ -32,6 +32,18 @@ public static class Program
 
         try
         {
+            GeminiEndpoints.ApplyFromArgs(args);
+            var selftest = SelfTestRunner.Detect(args);
+            if (selftest)
+            {
+                // Isolate DPAPI config so CI never touches the user's key store
+                var dir = Path.Combine(Path.GetTempPath(), "LiaDesktop-selftest-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(dir);
+                SecretsStore.ConfigDirOverride = dir;
+                BootLog($"selftest config dir={dir}");
+                BootLog($"gemini base={GeminiEndpoints.Base}");
+            }
+
             // Self-contained WinAppSDK: do NOT call Bootstrap.Initialize — that prompts for
             // the framework MSIX. Local Microsoft.WindowsAppRuntime*.dll next to the exe is enough.
             using var job = JobObject.CreateKillOnClose($"LiaDesktopJob-{Environment.ProcessId}");

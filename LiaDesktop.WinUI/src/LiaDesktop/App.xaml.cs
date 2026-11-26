@@ -60,7 +60,7 @@ public partial class App : Application
             Program.BootLog($"hwnd=0x{hwnd.ToInt64():X}");
             var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
             var appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
-            var (w, h) = ParseSmokeSize();
+            var (w, h) = SelfTestRunner.IsSelfTest ? (1024, 720) : ParseSmokeSize();
             appWindow.Resize(new Windows.Graphics.SizeInt32(w, h));
             appWindow.Show();
             Program.BootLog($"AppWindow.Show done size={w}x{h}");

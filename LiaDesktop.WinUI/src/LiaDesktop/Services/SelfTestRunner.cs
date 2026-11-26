@@ -1,0 +1,267 @@
+using System.Diagnostics;
+using System.Text;
+
+namespace LiaDesktop.Services;
+
+/// <summary>
+/// Headless E2E gate (--selftest): mock Gemini scenarios + optional live call.
+/// Writes selftest.txt and exits the process with 0/1.
+/// </summary>
+public static class SelfTestRunner
+{
+    public static bool IsSelfTest { get; private set; }
+    public static string? OutPath { get; private set; }
+
+    public static bool Detect(string[] args)
+    {
+        IsSelfTest = args.Any(a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase)
+                                   || a.StartsWith("--selftest=", StringComparison.OrdinalIgnoreCase)
+                                   || a.Equals("--selftest-live", StringComparison.OrdinalIgnoreCase));
+        foreach (var a in args)
+        {
+            if (a.StartsWith("--selftest-out=", StringComparison.OrdinalIgnoreCase))
+                OutPath = a["--selftest-out=".Length..];
+        }
+        OutPath ??= Path.Combine(Environment.CurrentDirectory, "selftest.txt");
+        return IsSelfTest;
+    }
+
+    public static async Task RunAndExitAsync(AppServices services)
+    {
+        var log = new StringBuilder();
+        void L(string s)
+        {
+            log.AppendLine(s);
+            services.Log.Info("[selftest] " + s);
+            Program.BootLog("selftest: " + s);
+        }
+
+        var failed = 0;
+        var baseUrl = GeminiEndpoints.Base;
+        var liveKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY")
+                      ?? Environment.GetEnvironmentVariable("LIA_GEMINI_API_KEY");
+        // Never log the key — only whether present
+        L($"gemini_base={baseUrl}");
+        L($"live_key_present={!string.IsNullOrWhiteSpace(liveKey)}");
+
+        try
+        {
+            // Isolate config
+            var cfg = services.Secrets.Load();
+            cfg.Provider = "gemini";
+            cfg.ApiKey = "ci-mock-key";
+            cfg.Model = "gemini-3.8-flash"; // phantom → ListModels fallback
+            cfg.VisionModel = cfg.Model;
+            services.Secrets.Save(cfg);
+
+            if (!baseUrl.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
+            {
+                failed += await RunMockScenariosAsync(services, baseUrl, L);
+            }
+            else
+            {
+                L("SKIP mock scenarios (base is production — pass --gemini-base=mock)");
+            }
+
+            if (!string.IsNullOrWhiteSpace(liveKey))
+            {
+                failed += await RunLiveAsync(services, liveKey!, L);
+            }
+            else
+            {
+                L("SKIP live: GEMINI_API_KEY absent");
+            }
+        }
+        catch (Exception ex)
+        {
+            L("FAIL unhandled: " + ex.GetType().Name + ": " + ex.Message);
+            failed++;
+        }
+
+        L(failed == 0 ? "SELFTEST PASS" : $"SELFTEST FAIL count={failed}");
+        try
+        {
+            File.WriteAllText(OutPath!, log.ToString(), Encoding.UTF8);
+            L($"wrote {OutPath}");
+        }
+        catch (Exception ex)
+        {
+            Program.BootLog("selftest write failed: " + ex.Message);
+        }
+
+        await Task.Delay(400);
+        Environment.Exit(failed == 0 ? 0 : 1);
+    }
+
+    static async Task<int> RunMockScenariosAsync(AppServices s, string baseUrl, Action<string> L)
+    {
+        var fail = 0;
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+        async Task SetScenario(string name)
+        {
+            var idx = baseUrl.IndexOf("/v1beta", StringComparison.OrdinalIgnoreCase);
+            var root = idx > 0 ? baseUrl[..idx] : baseUrl.TrimEnd('/');
+            var url = $"{root}/_control/scenario/{name}";
+            using var res = await http.PostAsync(url, null);
+            res.EnsureSuccessStatusCode();
+            L($"scenario → {name} ({(int)res.StatusCode})");
+        }
+
+            // 1) phantom saved model → ListModels picks flash, then normal reply
+        await SetScenario("normal");
+        fail += await OneTurnAsync(s, "привет", "normal+listmodels", L, expectRu: true);
+
+        // 2) 503 x2 then 200
+        await SetScenario("overload503");
+        PersistModel(s, "gemini-2.5-flash");
+        fail += await OneTurnAsync(s, "привет", "overload503", L, expectRu: true);
+
+        // 3) 429 + Retry-After
+        await SetScenario("retry429");
+        PersistModel(s, "gemini-2.5-flash");
+        fail += await OneTurnAsync(s, "привет", "retry429", L, expectRu: true);
+
+        // 4) slow 20s (under 90s client timeout)
+        await SetScenario("slow20");
+        PersistModel(s, "gemini-2.5-flash");
+        fail += await OneTurnAsync(s, "привет", "slow20", L, expectRu: true, timeoutSec: 75);
+
+        // 5) generateContent 404 → suggested flash fallback
+        await SetScenario("badmodel");
+        PersistModel(s, "gemini-2.5-flash-lite");
+        fail += await OneTurnAsync(s, "привет", "badmodel404", L, expectRu: true);
+
+        return fail;
+    }
+
+    static void PersistModel(AppServices s, string model)
+    {
+        var cfg = s.Secrets.Load();
+        cfg.Model = model;
+        cfg.VisionModel = model;
+        s.Secrets.Save(cfg);
+    }
+
+    static async Task<int> RunLiveAsync(AppServices s, string key, Action<string> L)
+    {
+        L("LIVE begin (key redacted)");
+        var prev = GeminiEndpoints.Base;
+        try
+        {
+            GeminiEndpoints.Base = GeminiEndpoints.DefaultBase;
+            var cfg = s.Secrets.Load();
+            cfg.Provider = "gemini";
+            cfg.ApiKey = key;
+            cfg.Model = ""; // resolve via ListModels
+            cfg.VisionModel = "";
+            s.Secrets.Save(cfg);
+            return await OneTurnAsync(s, "привет", "live", L, expectRu: true, timeoutSec: 90);
+        }
+        finally
+        {
+            GeminiEndpoints.Base = prev;
+            // wipe key from temp config
+            var cfg = s.Secrets.Load();
+            cfg.ApiKey = "ci-mock-key";
+            s.Secrets.Save(cfg);
+        }
+    }
+
+    static async Task<int> OneTurnAsync(
+        AppServices s,
+        string prompt,
+        string name,
+        Action<string> L,
+        bool expectRu,
+        int timeoutSec = 60)
+    {
+        var marker = $"__selftest_{name}_{Guid.NewGuid():N}__";
+        s.Log.Info(marker);
+
+        string? narrated = null;
+        string? speakPath = null;
+        void OnNarrate(string t) => narrated = t;
+        void OnSpeak(string p) => speakPath = p;
+        s.Agent.Narrate += OnNarrate;
+        s.Agent.SpeakFile += OnSpeak;
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec));
+            // Agent.RunAsync has its own CTS — call gemini+tts path via RunAsync
+            var run = s.Agent.RunAsync(prompt);
+            var done = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(timeoutSec)));
+            if (done != run)
+            {
+                s.Agent.Abort();
+                L($"FAIL {name}: timeout {timeoutSec}s");
+                return 1;
+            }
+            await run;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL {name}: exception {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            s.Agent.Narrate -= OnNarrate;
+            s.Agent.SpeakFile -= OnSpeak;
+        }
+        sw.Stop();
+
+        var lines = s.Log.Lines.Select(x => x.Line + " " + (x.Detail ?? "")).ToList();
+        var after = lines.SkipWhile(l => !l.Contains(marker)).Skip(1).ToList();
+        var blob = string.Join("\n", after);
+
+        if (blob.Contains("operation was canceled", StringComparison.OrdinalIgnoreCase) ||
+            blob.Contains("The operation was canceled", StringComparison.OrdinalIgnoreCase))
+        {
+            L($"FAIL {name}: journal contains 'operation was canceled'");
+            return 1;
+        }
+
+        if (string.IsNullOrWhiteSpace(narrated))
+        {
+            L($"FAIL {name}: empty Narrate reply (journal): {Truncate(blob, 240)}");
+            return 1;
+        }
+        if (narrated.Contains("Ошибка Gemini", StringComparison.OrdinalIgnoreCase) ||
+            narrated.Contains("Нет связи", StringComparison.OrdinalIgnoreCase) ||
+            narrated.Contains("Ключ API", StringComparison.OrdinalIgnoreCase))
+        {
+            L($"FAIL {name}: error narrated: {narrated}");
+            return 1;
+        }
+        if (expectRu && name != "live" &&
+            !narrated.Contains("Привет", StringComparison.OrdinalIgnoreCase))
+        {
+            L($"FAIL {name}: expected mock 'Привет…' reply, got: {Truncate(narrated, 120)}");
+            return 1;
+        }
+
+        // TTS: wait briefly for SpeakFile
+        for (var i = 0; i < 40 && speakPath == null; i++)
+            await Task.Delay(100);
+
+        if (speakPath == null || !File.Exists(speakPath))
+        {
+            L($"FAIL {name}: TTS file missing (SpeakFile not raised / edge-tts failed)");
+            return 1;
+        }
+        var len = new FileInfo(speakPath).Length;
+        if (len <= 0)
+        {
+            L($"FAIL {name}: TTS mp3 empty");
+            return 1;
+        }
+
+        L($"PASS {name}: reply={(narrated ?? reply)!.Length}c tts={len}B {sw.ElapsedMilliseconds}ms");
+        return 0;
+    }
+
+    static string Truncate(string s, int n) => s.Length <= n ? s : s[..n] + "…";
+}

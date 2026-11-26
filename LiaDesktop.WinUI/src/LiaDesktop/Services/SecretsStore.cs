@@ -23,11 +23,14 @@ public sealed class SecretsStore
         "models/gemini-2.0-flash",
     };
 
+    /// <summary>Override config dir (selftest uses a temp folder so user DPAPI is untouched).</summary>
+    public static string? ConfigDirOverride { get; set; }
+
     readonly string _path;
 
     public SecretsStore()
     {
-        var dir = Path.Combine(
+        var dir = ConfigDirOverride ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "LiaDesktop");
         Directory.CreateDirectory(dir);

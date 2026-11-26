@@ -17,8 +17,6 @@ public sealed record ClassifiedGeminiError(
 
 public static class GeminiModels
 {
-    const string ListUrl = "https://generativelanguage.googleapis.com/v1beta/models";
-
     public static string StripPrefix(string name) =>
         name.StartsWith("models/", StringComparison.Ordinal) ? name["models/".Length..] : name.Trim();
 
@@ -91,7 +89,7 @@ public static class GeminiModels
             throw new HttpRequestException("Нет ключа Gemini", null, System.Net.HttpStatusCode.Unauthorized);
 
         http ??= new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
-        var url = $"{ListUrl}?pageSize=100&key={Uri.EscapeDataString(apiKey.Trim())}";
+        var url = $"{GeminiEndpoints.ListModels}?pageSize=100&key={Uri.EscapeDataString(apiKey.Trim())}";
         using var res = await http.GetAsync(url, ct);
         var body = await res.Content.ReadFromJsonAsync<ListModelsResponse>(cancellationToken: ct);
         if (!res.IsSuccessStatusCode)

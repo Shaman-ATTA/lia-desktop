@@ -126,6 +126,56 @@ jobs:
           $zip = Get-Item LiaDesktop-0.6.9-win-x64.zip
           Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
 
+      - name: E2E selftest (mock Gemini + optional live key)
+        shell: pwsh
+        env:
+          # Optional — absent secrets are empty; never echo the value
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'publish/LiaDesktop/LiaDesktop.exe'
+          if (-not (Test-Path $exe)) { throw "exe missing: $exe" }
+          pip install --quiet edge-tts pillow numpy
+          $port = 18765
+          $mock = Start-Process -FilePath python -ArgumentList @('tools/mock_gemini_server.py', "$port") -PassThru -NoNewWindow
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              try {
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/_control/health" -UseBasicParsing -TimeoutSec 2
+                if ($r.StatusCode -eq 200) { $ok = $true; break }
+              } catch { Start-Sleep -Milliseconds 200 }
+            }
+            if (-not $ok) { throw "mock Gemini did not become healthy on :$port" }
+            $out = Join-Path $PWD 'selftest.txt'
+            if (Test-Path $out) { Remove-Item $out -Force }
+            $hasLive = -not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)
+            Write-Host "selftest live_key_present=$hasLive"
+            $args = @(
+              '--selftest',
+              "--gemini-base=http://127.0.0.1:$port/v1beta",
+              "--selftest-out=$out",
+              '--smoke-size=1024x720'
+            )
+            $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
+            $deadline = (Get-Date).AddMinutes(6)
+            while (-not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2; $p.Refresh() }
+            if (-not $p.HasExited) {
+              try { $p.Kill($true) } catch {}
+              throw "selftest timed out (>6min)"
+            }
+            if (Test-Path $out) { Get-Content $out | Out-Host } else { Write-Warning "selftest.txt missing" }
+            if ($p.ExitCode -ne 0) { throw "selftest exit $($p.ExitCode)" }
+            if (-not (Test-Path $out)) { throw "selftest.txt not written" }
+            $txt = Get-Content $out -Raw
+            if ($txt -notmatch 'SELFTEST PASS') { throw "selftest.txt missing PASS marker" }
+            if ($txt -match 'operation was canceled') { throw "selftest reported canceled" }
+            Write-Host "selftest ok"
+          }
+          finally {
+            try { Stop-Process -Id $mock.Id -Force -ErrorAction SilentlyContinue } catch {}
+          }
+
       - name: Smoke launch + screenshots + clean exit proof
         shell: pwsh
         run: |
@@ -313,6 +363,7 @@ jobs:
             desktop_winui_hud.png
             desktop_winui_front_1080.png
             desktop_winui_front_4k.png
+            selftest.txt
             tasklist_before.txt
             tasklist_after.txt
           if-no-files-found: warn
@@ -329,7 +380,7 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "CI smoke PNGs (draft until HUD QA)"
           for f in desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
-                   desktop_winui_front_1080.png desktop_winui_front_4k.png; do
+                   desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
           done
 
@@ -346,6 +397,7 @@ jobs:
           - Gemini: 90s timeout, 503/429 retry+fallback via ListModels, RU errors, model dropdown
           - Mic fallback: WASAPI+VAD → Gemini audio STT when Windows Speech missing
           - Hologram centred in centre column; CI 1080p + 4K framing asserts
+          - E2E `--selftest` vs mock Gemini (503/429/slow/404) + optional live key; see selftest.txt
 
 
           EOF
@@ -358,7 +410,7 @@ jobs:
           for f in LiaDesktop-0.6.9-win-x64.zip LiaDesktop-0.6.9-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
-                   desktop_winui_front_1080.png desktop_winui_front_4k.png \
+                   desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt \
                    tasklist_before.txt tasklist_after.txt; do
             if [ -f "$f" ]; then
               gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber
@@ -378,6 +430,6 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "Cinematic HUD v0.6.9 (draft)"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft || true
-          for f in LiaDesktop-0.6.9-win-x64.zip LiaDesktop-0.6.9-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png tasklist_after.txt; do
+          for f in LiaDesktop-0.6.9-win-x64.zip LiaDesktop-0.6.9-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt tasklist_after.txt; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
           done

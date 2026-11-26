@@ -121,7 +121,17 @@ public sealed partial class MainWindow : Window
 
         var smoke = ApplySmokeOverrides();
         DispatcherQueue.TryEnqueue(() => InitTrayAndAutostart());
-        if (smoke)
+        if (SelfTestRunner.IsSelfTest)
+        {
+            BootOverlay.Visibility = Visibility.Collapsed;
+            // Let DX/swapchain settle, then run E2E and Environment.Exit
+            DispatcherQueue.TryEnqueue(async () =>
+            {
+                await Task.Delay(1500);
+                await SelfTestRunner.RunAndExitAsync(_s);
+            });
+        }
+        else if (smoke)
             BootOverlay.Visibility = Visibility.Collapsed;
         else
             DispatcherQueue.TryEnqueue(async () => await RunBootSequenceAsync());
