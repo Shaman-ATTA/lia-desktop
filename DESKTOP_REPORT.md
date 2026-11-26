@@ -4,7 +4,13 @@
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.2
 
-Head ~70–75% viewport · rings scaled to head · holo veil · eyes CU · lash/neck kept.
+| Asset | Size |
+|-------|------|
+| `LiaDesktop-0.5.2-setup.exe` | 71.4 MB |
+| `LiaDesktop-0.5.2-win-x64.zip` | 97.5 MB |
+| Screenshots | front / 3-4 / speaking / eyes / rings / profile |
+
+Self-check (smoke PNGs): front/3-4/speaking head_height ≈ **72.8–73.4%**; eyes CU both eyes ~60% width; rings fully on-screen (~0.65–0.8 half-height). Lash cull + neck fade kept.
 
 ## v0.5.1 — polish
 
