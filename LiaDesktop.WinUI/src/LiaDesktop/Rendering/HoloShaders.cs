@@ -69,17 +69,8 @@ float4 main(PSIn i) : SV_TARGET {
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
   float luma = dot(albedo, float3(0.299, 0.587, 0.114));
   float darkLash = saturate((0.18 - luma) * 10.0);
+  // Same skin shading everywhere (incl. chin/mouth) — no cavity darken/haze
   float3 color = diffuse + key * spec * (1.0 - darkLash);
-
-  // Mouth cavity: dark interior; keep upper teeth readable
-  float mouthZone = smoothstep(0.055, 0.030, abs(i.local.x))
-                  * smoothstep(0.26, 0.30, i.local.y) * smoothstep(0.40, 0.36, i.local.y)
-                  * smoothstep(0.00, 0.035, i.local.z);
-  float inward = saturate(0.35 - saturate(dot(N, V)));
-  float cavity = saturate(mouthZone * (0.55 + inward * 1.2));
-  float teeth = mouthZone * saturate(dot(N, V)) * smoothstep(0.34, 0.37, i.local.y);
-  color = lerp(color, color * float3(0.12, 0.06, 0.05), cavity * 0.92);
-  color = lerp(color, float3(0.78, 0.72, 0.62) * (0.45 + ndl * 0.4), teeth * 0.55);
 
   // Thin faint scrolling scanlines: ~4 px period, ~1 px dark line, ~7% dip
   float ndv = saturate(dot(N,V));
@@ -281,10 +272,7 @@ struct PSIn {
   float3 local:TEXCOORD3;
 };
 float4 main(PSIn i) : SV_TARGET {
-  // Safety: never draw over eyes/mouth/nose on the front of the head
-  if (i.world.z > 0.00 && abs(i.world.x) < 0.20 && i.world.y > -0.14 && i.world.y < 0.26)
-    clip(-1);
-
+  // Full continuous ring — occlusion is depth-test only (no discard hack)
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
   float fres = pow(1.0 - saturate(dot(N,V)), 2.2);

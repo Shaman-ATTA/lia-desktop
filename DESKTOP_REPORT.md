@@ -1,5 +1,11 @@
 # Lia Desktop — ship report
 
+## v0.5.5 — clean chin / continuous rings
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.5
+
+Uniform lower-face skin · continuous crown+neck halos · neck fade kept.
+
 ## v0.5.4 — polish
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.4

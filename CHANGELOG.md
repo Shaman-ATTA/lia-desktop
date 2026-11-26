@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.5 — Clean chin, continuous halo rings
+
+- Removed mouth/chin grey haze (cavity darken) — uniform skin
+- Continuous crown + below-chin halo rings; no face-front discard; fit viewport
+- Kept neck alpha fade, thin scanlines, lash sparkle kill
+
 ## v0.5.4 — Neck fade, thin scanlines, halo rings, mouth, lashes
 
 - Smooth premultiplied neck alpha fade (no hard cut)

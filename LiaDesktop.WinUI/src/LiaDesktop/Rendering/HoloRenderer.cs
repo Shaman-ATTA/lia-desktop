@@ -521,8 +521,7 @@ public sealed class HoloRenderer : IDisposable
         if (_mesh != null && _morphScratch != null)
         {
             var lid = BlinkLidAmount();
-            // Cap jaw — high jawOpen + cavity lighting looked like a vertical tongue spike
-            _mesh.Morph(Math.Min(0.58f, jaw * 0.85f), funnel * 0.45f, wide * 0.45f, smile, brow, lid, _morphScratch);
+            _mesh.Morph(Math.Min(0.62f, jaw * 0.88f), funnel * 0.50f, wide * 0.50f, smile, brow, lid, _morphScratch);
             UploadHead(_morphScratch);
         }
 
@@ -1085,12 +1084,12 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, 0f, spinY, transY, transZ));
         }
-        // World Y: eyes≈0.16, forehead≈0.28, chin≈-0.15 (after HeadScale/Trans).
-        // Tilt 15–25°; front arc above forehead OR below chin — never through eyes/mouth.
-        // Larger radius so side arcs stay outside the face; yaw-only spin; depth-tested.
-        Add(0.48f, 0.0010f, 22f, 0.02f, 0.04f, 0.30f, -0.06f, 0.09f, 0.24f);  // forehead
-        Add(0.52f, 0.0009f, -20f, 0.03f, -0.05f, -0.24f, -0.05f, 0.07f, 0.20f); // below chin
-        Add(0.50f, 0.00085f, 15f, -0.02f, 0.05f, 0.32f, -0.12f, 0.05f, 0.16f); // back halo
+        // Two continuous halos. Cam z≈2.45 fov24 → half-h≈0.52; keep radius ≤0.40 so fully on-screen.
+        // Crown: center above forehead; +15° pitch lifts front arc over the crown (not through face).
+        // Neck: center below chin; −15° drops front arc under the jaw.
+        // Depth-test hides the back half — no pixel discard.
+        Add(0.38f, 0.0010f, 15f, 0.00f, 0.03f, 0.34f, -0.08f, 0.08f, 0.26f);  // crown
+        Add(0.40f, 0.0009f, -15f, 0.02f, -0.03f, -0.28f, -0.06f, 0.06f, 0.22f); // below chin
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)
