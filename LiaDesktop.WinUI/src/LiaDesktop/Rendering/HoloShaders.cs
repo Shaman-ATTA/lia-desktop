@@ -127,7 +127,7 @@ float4 main(PSIn i) : SV_TARGET {
   float3 L = normalize(float3(0.3, 0.7, 0.6));
   float ndl = saturate(dot(N,L)*0.45+0.55);
   float3 color = hairCol * ndl;
-  // Match skin holo veil so hair doesn't look "unveiled"
+  // Match skin holo veil on hair cards too
   float ndv = saturate(dot(N,V));
   float fres = pow(1.0 - ndv, 2.2);
   float scanWave = 0.5 + 0.5 * sin((i.world.y + time * 0.10) * 110.0);
