@@ -69,24 +69,23 @@ float4 main(PSIn i) : SV_TARGET {
   diffuse += albedo * float3(0.85, 0.25, 0.18) * sss;
   float3 color = diffuse + key * spec;
 
-  // Amber hologram veil: uniform faint scanlines + soft fresnel rim (face stays readable)
+  // Amber hologram veil: uniform faint scanlines + soft fresnel rim (readable, but visible)
   float ndv = saturate(dot(N,V));
-  float fres = pow(1.0 - ndv, 2.5);
-  // Low-amplitude, mid-frequency — same strength on skin and hair albedo
-  float scan = 0.014 * sin((i.world.y + time * 0.12) * 95.0);
+  float fres = pow(1.0 - ndv, 2.2);
+  float scanWave = 0.5 + 0.5 * sin((i.world.y + time * 0.10) * 110.0);
   float3 amber = float3(1.0, 0.62, 0.28);
-  color = lerp(color, color * float3(1.10, 0.92, 0.72), 0.17);
-  color += amber * fres * 0.28 * glow;          // soft silhouette rim
-  color *= (1.0 + scan);                         // multiplicative scan (no hair striping)
-  float edgeKeep = lerp(0.72, 1.0, saturate(ndv * 1.2 + 0.1));
-  color *= edgeKeep;
-  // Neck stump → darkness
-  float neck = smoothstep(0.26, 0.40, i.local.y);
-  color *= neck;
+  color = lerp(color, color * float3(1.12, 0.94, 0.75), 0.22);
+  color += amber * fres * 0.55 * max(glow, 0.85); // soft silhouette rim
+  color += amber * 0.028 * scanWave;              // additive scanlines across whole head
+  color *= (1.0 + 0.045 * (scanWave * 2.0 - 1.0));
+
+  // Neck → full transparency (discard), not black color multiply
+  float neckA = smoothstep(0.20, 0.34, i.local.y);
+  float dither = frac(sin(dot(i.pos.xy, float2(12.9898, 78.233))) * 43758.5453);
+  clip(neckA - dither * 0.50);
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
-  // Opaque — neck already multiplied to black (matches clear color)
   return float4(color, 1.0);
 }";
 
@@ -124,9 +123,17 @@ float4 main(PSIn i) : SV_TARGET {
   hairCol = min(hairCol, float3(0.08, 0.05, 0.035));
 
   float3 N = normalize(i.nrm);
+  float3 V = normalize(camPos - i.world);
   float3 L = normalize(float3(0.3, 0.7, 0.6));
   float ndl = saturate(dot(N,L)*0.45+0.55);
   float3 color = hairCol * ndl;
+  // Match skin holo veil so hair doesn't look "unveiled"
+  float ndv = saturate(dot(N,V));
+  float fres = pow(1.0 - ndv, 2.2);
+  float scanWave = 0.5 + 0.5 * sin((i.world.y + time * 0.10) * 110.0);
+  float3 amber = float3(1.0, 0.62, 0.28);
+  color += amber * fres * 0.40;
+  color += amber * 0.022 * scanWave;
   color = pow(saturate(color), 1.0/2.2);
   return float4(color, 1.0);
 }";
@@ -269,11 +276,12 @@ struct PSIn {
 float4 main(PSIn i) : SV_TARGET {
   float3 N = normalize(i.nrm);
   float3 V = normalize(camPos - i.world);
-  float fres = pow(1.0 - saturate(dot(N,V)), 2.6);
-  float pulse = 0.92 + 0.08 * sin(time * 1.4 + i.local.x * 3.0);
-  // Full orbit visible; depth test occludes the back half behind the head
-  float3 c = color * (0.42 + fres * 0.45) * pulse;
-  float a = saturate(opacity * (0.45 + fres * 0.35));
+  float fres = pow(1.0 - saturate(dot(N,V)), 2.2);
+  float pulse = 0.90 + 0.10 * sin(time * 1.2 + i.local.x * 2.5);
+  // Soft amber glow tube — semi-transparent, not solid yellow
+  float3 amber = color * float3(1.0, 0.85, 0.55);
+  float3 c = amber * (0.22 + fres * 0.65) * pulse;
+  float a = saturate(opacity * (0.22 + fres * 0.55));
   return float4(c, a);
 }";
 

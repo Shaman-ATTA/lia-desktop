@@ -130,8 +130,60 @@ def main() -> int:
         if ew < 0.50:
             print(f"FAIL: eyes close-up too far ({ew:.1%}) — want eyes ~60% width", file=sys.stderr)
             return 1
+        er = amber_face_frac(eyes, y0=0.30, y1=0.62)
+        print(f"eyes amber_on_face_frac={er:.4f}")
+        if er > 0.012:
+            print(f"FAIL: rings visible in eyes close-up ({er:.2%})", file=sys.stderr)
+            return 1
+
+    for name in ("desktop_winui_front.png", "desktop_winui_speaking.png", "desktop_winui_threequarter.png"):
+        p = Path(name)
+        if not p.is_file():
+            continue
+        af = amber_face_frac(p, y0=0.28, y1=0.55)
+        print(f"{name}: amber_on_face_frac={af:.4f}")
+        if af > 0.035:
+            print(f"FAIL: {name} rings crossing face ({af:.2%})", file=sys.stderr)
+            return 1
+        nb = neck_black_blob_frac(p)
+        print(f"{name}: neck_black_blob_frac={nb:.4f}")
+        if nb > 0.08:
+            print(f"FAIL: {name} opaque black neck silhouette ({nb:.2%})", file=sys.stderr)
+            return 1
+
     print("framing check ok")
     return 0
+
+
+def amber_face_frac(path: Path, y0: float = 0.28, y1: float = 0.55) -> float:
+    """Fraction of face-band pixels that look like bright amber ring tubes."""
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    h, w, _ = vp.shape
+    band = vp[int(h * y0) : int(h * y1), int(w * 0.28) : int(w * 0.72)]
+    if band.size == 0:
+        return 0.0
+    r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
+    amber = (r > 150) & (g > 90) & (b < 110) & ((r + g) > (2.4 * b + 80)) & (r > g)
+    return float(amber.mean())
+
+
+def neck_black_blob_frac(path: Path) -> float:
+    """Near-black opaque mass in the lower viewport (bad neck silhouette vs clear bg)."""
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    h, w, _ = vp.shape
+    band = vp[int(h * 0.72) : int(h * 0.95), int(w * 0.35) : int(w * 0.65)]
+    if band.size == 0:
+        return 0.0
+    lum = band.mean(axis=2)
+    # Clear bg ≈ (4,3,8); black silhouette ≈ (0..3) across RGB — count very dark opaque stump
+    dark = (lum < 6.0) & (band[:, :, 2] < 12)
+    return float(dark.mean())
 
 
 if __name__ == "__main__":

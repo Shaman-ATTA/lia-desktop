@@ -48,7 +48,7 @@ struct Vertex
 
 public sealed class HoloRenderer : IDisposable
 {
-    static readonly Vector3 Amber = new(1f, 0.55f, 0.22f);
+    static readonly Vector3 Amber = new(1f, 0.62f, 0.32f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
     // Head local Y≈0.20..0.55 → world span ≈0.95; cam/fov tuned so head+neck ≈72% viewport height
@@ -565,7 +565,7 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 1) Skin — PBR + neck darken dissolve (no-cull: bake winding can flip)
+        // 1) Skin — PBR + dithered neck clip to transparency (no-cull: bake winding can flip)
         _ctx.OMSetDepthStencilState(_dssWrite);
         _ctx.OMSetBlendState(_blendOpaque, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
         _ctx.RSSetState(_rsNoCull);
@@ -598,29 +598,32 @@ public sealed class HoloRenderer : IDisposable
             _ctx.RSSetState(_rs);
         }
 
-        // 4) Rings — depth-tested so back half occluded by head; large orbit
-        _ctx.OMSetDepthStencilState(_dssRead);
-        _ctx.OMSetBlendState(_blendAlpha);
-        _ctx.RSSetState(_rsNoCull);
-        _ctx.PSSetShader(_psRing);
-        _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
-        for (var i = 0; i < _rings.Count; i++)
+        // 4) Rings — depth-tested halo/neck orbits; hidden in eyes close-up
+        if (!_eyesCloseup)
         {
-            var r = _rings[i];
-            var spinBoost = _ringsShowcase ? 2.2f : 1f;
-            var rot = Matrix4x4.CreateFromYawPitchRoll(
-                r.BaseYaw + _time * r.SpinY * spinBoost,
-                r.BasePitch,
-                r.BaseRoll + _time * r.SpinZ * spinBoost);
-            // Center on head; no forward bias that cuts across the face
-            var model = Matrix4x4.Transpose(rot * Matrix4x4.CreateTranslation(0, 0.06f, 0.0f));
-            WriteFrame(viewProj, model, cam, 0, 1f);
-            WriteRing(r.Color, _ringsShowcase ? Math.Min(0.55f, r.Opacity * 1.1f) : r.Opacity);
-            _ctx.IASetVertexBuffer(0, r.Vb, stride, 0);
-            _ctx.IASetIndexBuffer(r.Ib, Format.R32_UInt, 0);
-            _ctx.DrawIndexed(r.IndexCount, 0, 0);
+            _ctx.OMSetDepthStencilState(_dssRead);
+            _ctx.OMSetBlendState(_blendAlpha);
+            _ctx.RSSetState(_rsNoCull);
+            _ctx.PSSetShader(_psRing);
+            _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
+            for (var i = 0; i < _rings.Count; i++)
+            {
+                var r = _rings[i];
+                var spinBoost = _ringsShowcase ? 2.4f : 1f;
+                var rot = Matrix4x4.CreateFromYawPitchRoll(
+                    r.BaseYaw + _time * r.SpinY * spinBoost,
+                    r.BasePitch,
+                    r.BaseRoll + _time * r.SpinZ * spinBoost);
+                // Neck/chin height, slight Z back — front arc under chin, never through eyes/mouth
+                var model = Matrix4x4.Transpose(rot * Matrix4x4.CreateTranslation(0f, -0.20f, -0.04f));
+                WriteFrame(viewProj, model, cam, 0, 1f);
+                WriteRing(r.Color, _ringsShowcase ? Math.Min(0.40f, r.Opacity * 1.15f) : r.Opacity);
+                _ctx.IASetVertexBuffer(0, r.Vb, stride, 0);
+                _ctx.IASetIndexBuffer(r.Ib, Format.R32_UInt, 0);
+                _ctx.DrawIndexed(r.IndexCount, 0, 0);
+            }
+            _ctx.RSSetState(_rs);
         }
-        _ctx.RSSetState(_rs);
 
         _ctx.OMSetDepthStencilState(_dssWrite);
         _ctx.OMSetBlendState(_blendOpaque);
@@ -1062,12 +1065,12 @@ public sealed class HoloRenderer : IDisposable
             var (vb, ib, count) = CreateTorus(radius, tube, MathF.PI * 2);
             _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, spinZ, spinY));
         }
-        // At cam z≈2.50 fov 24: half-height ≈ tan(12°)*2.50 ≈ 0.53
-        // Ring radius ≈ 0.65–0.8 of that → ~0.34–0.42 world; fully on-screen
-        // Tube ≈2–3 px at 576p so the orbit reads continuous, not dotted sparkle
-        Add(0.35f, 0.0028f, 14f, 0.02f, 0.04f, 0.10f, 0.009f, 0.48f);
-        Add(0.39f, 0.0024f, -28f, 0.05f, -0.06f, -0.07f, 0.012f, 0.38f);
-        Add(0.42f, 0.0022f, 48f, -0.03f, 0.08f, 0.05f, 0.007f, 0.32f);
+        // Near-horizontal halo/neck orbits (default torus = XZ plane).
+        // Radius ≈ 1.2–1.4× head width (~0.50); small pitch keeps front arc under chin.
+        // Tube ~half of v0.5.2 — thin soft amber, depth-tested against head.
+        Add(0.50f, 0.0013f, 6f, 0.00f, 0.12f, 0.07f, 0.010f, 0.30f);
+        Add(0.56f, 0.0011f, -9f, 0.06f, -0.18f, -0.05f, 0.013f, 0.24f);
+        Add(0.62f, 0.0010f, 11f, -0.04f, 0.22f, 0.04f, 0.008f, 0.20f);
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc)

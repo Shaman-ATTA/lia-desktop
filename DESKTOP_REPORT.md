@@ -1,5 +1,11 @@
 # Lia Desktop — ship report
 
+## v0.5.3 — rings / neck / holo
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.3
+
+Halo neck orbits (depth-tested, no face crossings; hidden in eyes CU) · neck → transparency · visible scanlines + amber rim.
+
 ## v0.5.2 — framing fix
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.2

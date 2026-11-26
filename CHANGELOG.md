@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.3 — Rings depth/halo, neck alpha, holo veil
+
+- Rings: near-horizontal neck/halo orbits (no face crossings), depth-tested, thinner soft amber; hidden in eyes CU
+- Neck stump clips to transparency (no black silhouette)
+- Visible faint scanlines + soft amber fresnel rim on skin/hair
+- Framing from v0.5.2 kept (~70–75% head, eyes CU ~60%)
+
 ## v0.5.2 — Framing fix (head size), rings, holo, eyes CU
 
 - Head+neck ~70–75% of viewport (v0.5.1 was ~15% — over-zoomed-out)
