@@ -87,7 +87,7 @@ public sealed partial class MainWindow : Window
                 StatusCaption.Text = "ГОВОРЮ";
                 VoiceLine.Text = "ГОЛОС  ГОВОРЮ";
                 // file:/// URI — MediaPlayer needs an absolute path URI
-                var uri = new Uri(Path.GetFullPath(path));
+                var uri = new Uri(System.IO.Path.GetFullPath(path));
                 _player.Source = MediaSource.CreateFromUri(uri);
                 _player.Play();
                 _s.Log.Info("TTS: воспроизведение SvetlanaNeural");

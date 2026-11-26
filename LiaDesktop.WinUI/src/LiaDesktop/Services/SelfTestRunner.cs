@@ -264,7 +264,7 @@ public static class SelfTestRunner
             return 1;
         }
 
-        L($"PASS {name}: reply={(narrated ?? reply)!.Length}c tts={len}B {sw.ElapsedMilliseconds}ms");
+        L($"PASS {name}: reply={narrated!.Length}c tts={len}B {sw.ElapsedMilliseconds}ms");
         return 0;
     }
 
