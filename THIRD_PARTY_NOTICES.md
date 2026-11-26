@@ -40,11 +40,7 @@ modified fonts under a different name. **OK for a public repo** (bundled as-is).
 
 ## Voice samples
 
-| Field | Value |
-|-------|-------|
-| Paths | `assets/voice/lia_voice_sample.{wav,mp3}` |
-| Likely origin | Synthetic speech via Microsoft Edge TTS (`ru-RU-SvetlanaNeural`) |
-| License | Not a third-party redistributable asset with a clear OSS grant; treat as ATTA CORP demo media. Edge TTS / Microsoft Online Services terms govern generation — **flag**: if you need a hard redistribution guarantee, regenerate from a clearly licensed voice or remove before going public. |
+Removed from the repository (were Edge TTS demo WAVs/MP3s). Speech is synthesized at runtime via Edge TTS (`ru-RU-SvetlanaNeural`); no committed voice binaries.
 
 ## Icons
 
