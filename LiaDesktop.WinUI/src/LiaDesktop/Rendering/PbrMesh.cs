@@ -96,28 +96,7 @@ public sealed class PbrMesh
             eyeL = ReadVec(root, "eyeL", eyeL);
             eyeR = ReadVec(root, "eyeR", eyeR);
         }
-        // Drop tris fully below the cut (stump). Keep straddling tris so the pixel shader
-        // clip(i.local.y - cutY) can slice a clean horizontal plane (all-above-only made notches).
-        idx = TrimTrianglesBelow(pos, idx, cutY: 0.305f);
         return new PbrMesh(pos, nrm, uvs, idx, shapes, eyeL, eyeR);
-    }
-
-    /// <summary>Drop triangles with all verts below cutY. Straddlers stay for planar shader clip.</summary>
-    static int[] TrimTrianglesBelow(float[] pos, int[] idx, float cutY)
-    {
-        var kept = new List<int>(idx.Length);
-        for (var t = 0; t + 2 < idx.Length; t += 3)
-        {
-            var a = idx[t]; var b = idx[t + 1]; var c = idx[t + 2];
-            var ya = pos[a * 3 + 1];
-            var yb = pos[b * 3 + 1];
-            var yc = pos[c * 3 + 1];
-            if (ya >= cutY || yb >= cutY || yc >= cutY)
-            {
-                kept.Add(a); kept.Add(b); kept.Add(c);
-            }
-        }
-        return kept.ToArray();
     }
 
     public static PbrMesh LoadPart(string path)

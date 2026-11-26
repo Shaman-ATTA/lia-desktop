@@ -73,28 +73,23 @@ float4 main(PSIn i) : SV_TARGET {
   // Same skin shading everywhere (incl. chin/mouth) — no cavity darken/haze
   float3 color = diffuse + key * spec * (1.0 - darkLash);
 
-  // Geometric trim first — chin/jaw (Y≳0.34) never enter the fade band.
-  const float cutY = 0.305;
-  const float fadeTop = 0.328; // ~2cm soft band; opaque above → clean face like v0.6.2
-  clip(i.local.y - cutY);
-  float neckA = smoothstep(cutY, fadeTop, i.local.y);
-  if (neckA < 0.02) discard;
-  float onFace = step(fadeTop, i.local.y); // 1 on solid chin/face
-
-  // Subtle holo veil — kill scan on the fade band (scan×alpha looked blotchy on chin/neck)
+  // Subtle holo veil: faint scanlines + amber silhouette rim — no skin hue shift
   float ndv = saturate(dot(N,V));
   float fres = pow(1.0 - ndv, 2.4) * (1.0 - darkLash);
   float scanCell = frac(i.pos.y / 4.0 + time * 0.18);
   float scanWave = (scanCell < 0.22) ? -1.0 : 0.0;
   float3 amber = float3(1.0, 0.62, 0.28);
-  color += amber * fres * 0.48 * max(glow, 0.85) * onFace;
-  color *= (1.0 + 0.10 * scanWave * (1.0 - darkLash) * onFace);
+  color += amber * fres * 0.48 * max(glow, 0.85);           // rim only
+  color *= (1.0 + 0.10 * scanWave * (1.0 - darkLash));       // ~10% scan dip
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
+
+  // v0.6.5: v0.6.2 neck mesh intact + simple vertical alpha on lower neck only.
+  // No planar clip, no shelf/fresnel notch tricks, no dither/pow.
+  float neckA = smoothstep(0.18, 0.28, i.local.y);
+  if (neckA < 0.01) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
-  // Face/upper neck: force opaque so premul can't grey the chin
-  neckA = lerp(neckA, 1.0, onFace);
   return float4(color * neckA, neckA);
 }";
 
@@ -139,8 +134,8 @@ float4 main(PSIn i) : SV_TARGET {
   float scanWave = sin(i.pos.y * (6.2831853 / 3.5) + time * 1.35);
   color *= (1.0 + 0.04 * scanWave);
   color = pow(saturate(color), 1.0/2.2);
-  // Match skin geometric trim
-  clip(i.local.y - 0.305);
+  // Drop cards that hang into the neck stump (skin fade handles the rest)
+  clip(i.local.y - 0.20);
   return float4(color, 1.0);
 }";
 
@@ -312,7 +307,9 @@ cbuffer FxaaCB : register(b0) {
 };
 struct PSIn { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; };
 float4 main(PSIn i) : SV_TARGET {
-  float3 rgbM = sceneTex.SampleLevel(samp, i.uv, 0).rgb;
+  // Preserve alpha so transparent stage lets XAML arcs behind show through.
+  float4 cM = sceneTex.SampleLevel(samp, i.uv, 0);
+  float3 rgbM = cM.rgb;
   float3 rgbNW = sceneTex.SampleLevel(samp, i.uv + float2(-1,-1)*invSize, 0).rgb;
   float3 rgbNE = sceneTex.SampleLevel(samp, i.uv + float2( 1,-1)*invSize, 0).rgb;
   float3 rgbSW = sceneTex.SampleLevel(samp, i.uv + float2(-1, 1)*invSize, 0).rgb;
@@ -338,7 +335,7 @@ float4 main(PSIn i) : SV_TARGET {
     sceneTex.SampleLevel(samp, i.uv + dir * -0.5, 0).rgb +
     sceneTex.SampleLevel(samp, i.uv + dir *  0.5, 0).rgb);
   float lB = dot(rgbB, lumaW);
-  if (lB < lMin || lB > lMax) return float4(rgbA, 1);
-  return float4(rgbB, 1);
+  if (lB < lMin || lB > lMax) return float4(rgbA, cM.a);
+  return float4(rgbB, cM.a);
 }";
 }

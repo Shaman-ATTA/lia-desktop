@@ -51,7 +51,7 @@ public sealed class HoloRenderer : IDisposable
     static readonly Vector3 Amber = new(1f, 0.62f, 0.32f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
-    // Head local Y≈0.20..0.55; cam Z≈1.88 / fov 24° → ≈72–80% after neck trim at Y=0.305
+    // Head local Y≈0.20..0.55 → world span ≈0.95; cam Z≈2.82 / fov 24° → head+neck ≈75–80% height
     const float HeadScale = 2.70f;
     const float HeadTransY = -1.00f;
     const int MsaaCount = 2; // 4x was ~2× CPU on WARP; 2x still cleans edges
@@ -530,7 +530,9 @@ public sealed class HoloRenderer : IDisposable
         var drawDsv = _dsvMsaa!;
         _ctx.OMSetRenderTargets(drawRtv, drawDsv);
         _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
-        _ctx.ClearRenderTargetView(drawRtv, new Color4(0.015f, 0.012f, 0.03f, 1));
+        // Transparent clear so XAML HudCanvas arcs behind the SwapChainPanel show through
+        // (AlphaMode.Premultiplied). Head draws opaque/premul and occludes them.
+        _ctx.ClearRenderTargetView(drawRtv, new Color4(0, 0, 0, 0));
         _ctx.ClearDepthStencilView(drawDsv, DepthStencilClearFlags.Depth, 1, 0);
         _ctx.IASetInputLayout(_layout);
         _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
@@ -556,16 +558,17 @@ public sealed class HoloRenderer : IDisposable
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
-            cam = new Vector3(orbit, 0.04f, 1.88f);
-            lookAt = new Vector3(0, 0.06f, 0.02f);
+            // Exact v0.6.2 framing baseline
+            cam = new Vector3(orbit, 0.00f, 2.82f);
+            lookAt = new Vector3(0, 0.00f, 0.02f);
             fovDeg = 24f;
         }
         else
         {
-            // Head ≈72–80% (2.00→~69%; 1.88 targets ~74%)
+            // Exact v0.6.2 framing — head+neck ≈75–80% viewport height
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.04f, 1.88f);
-            lookAt = new Vector3(0, 0.06f, 0.02f);
+            cam = new Vector3(orbit, 0.00f, 2.82f);
+            lookAt = new Vector3(0, 0.00f, 0.02f);
             fovDeg = 24f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);

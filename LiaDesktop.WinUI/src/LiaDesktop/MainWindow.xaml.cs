@@ -184,15 +184,13 @@ public sealed partial class MainWindow : Window
         if (w < 40 || h < 40) return;
 
         var cx = w * 0.5;
-        var cy = h * 0.42; // higher center → more room above the bottom dock
+        var cy = h * 0.48; // stage center (matches TickHud); arcs drawn BEHIND HoloPanel
         var amber = Color.FromArgb(255, 255, 154, 60);
         var cyan = Color.FromArgb(255, 90, 214, 255);
 
-        // Concentric arcs OUTSIDE face+neck — keep fully inside HudCanvas (Margin bottom=120).
+        // Dense concentric arcs framing the head (behind 3D — head occludes overlaps).
         var m = Math.Min(w, h);
-        // cy + rMax must stay < h − pad so the lower arc isn't clipped by the dock.
-        var rMax = Math.Min(m * 0.48, Math.Min(Math.Min(cx, cy) - 10, h - cy - 18));
-        double[] radii = [rMax * 0.78, rMax * 0.86, rMax * 0.93, rMax];
+        double[] radii = [m * 0.50, m * 0.56, m * 0.62, m * 0.68];
         for (var i = 0; i < radii.Length; i++)
         {
             var r = radii[i];
@@ -221,7 +219,7 @@ public sealed partial class MainWindow : Window
         {
             var ang = t / 60.0 * Math.PI * 2;
             var len = t % 5 == 0 ? 12 : 6;
-            if (outer - len < rMax * 0.72) continue;
+            if (outer - len < m * 0.46) continue;
             var line = new Line
             {
                 X1 = cx + Math.Cos(ang) * (outer - len),

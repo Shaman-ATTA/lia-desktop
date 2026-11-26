@@ -7,7 +7,10 @@
     Title="Lia · ATTA CORP">
 
   <Grid x:Name="Root" Background="#FF05070C">
-    <!-- Full-bleed hologram stage (no boxed frame) -->
+    <!-- 2D arcs FIRST = behind the hologram. Holo clears transparent so head occludes arcs. -->
+    <Canvas x:Name="HudCanvas" IsHitTestVisible="False" Margin="0,36,0,120"/>
+
+    <!-- Full-bleed hologram stage (premul alpha; transparent clear) -->
     <render:HoloPanel x:Name="Holo" Margin="0,36,0,120"/>
 
     <!-- Soft vignette so glass cards read over the head -->
@@ -35,8 +38,6 @@
       </Border>
     </Grid>
 
-    <!-- 2D cinematic HUD arcs / ticks / scan (drawn in code) -->
-    <Canvas x:Name="HudCanvas" IsHitTestVisible="False" Margin="0,36,0,120"/>
 
     <!-- Custom title bar -->
     <Border x:Name="AppTitleBar" VerticalAlignment="Top" Height="36" Background="#9905070C"

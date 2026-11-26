@@ -1,6 +1,13 @@
 # Changelog
 
+## v0.6.5 — v0.6.2 head baseline, 2D arcs behind hologram
+
+- Restore exact v0.6.2 camera (Z=2.82) and full neck mesh; simple vertical alpha only
+- Dense 2D arcs drawn behind transparent SwapChainPanel — head always occludes them
+- No 3D rings
+
 ## v0.6.4 — Clean face, geometric neck trim, 2D arcs only
+
 
 - Fix chin/jaw blotches: drop two-pass/pow dissolve that ate the face
 - Geometric mesh trim below Y=0.30 (no stump/shoulder notch) + short clean alpha
