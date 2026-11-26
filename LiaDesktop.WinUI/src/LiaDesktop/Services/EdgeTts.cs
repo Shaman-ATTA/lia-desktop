@@ -76,12 +76,13 @@ public sealed class EdgeTts
         var script = Path.Combine(Path.GetTempPath(), $"lia-edge-tts-{Guid.NewGuid():N}.py");
         var textPath = Path.Combine(Path.GetTempPath(), $"lia-tts-in-{Guid.NewGuid():N}.txt");
         await File.WriteAllTextAsync(textPath, text, new UTF8Encoding(false), ct);
+        // C# $"…" — paths embedded into a Python runner (UTF-8 file, no argv Cyrillic)
         var py =
-            "import asyncio, edge_tts, pathlib, sys\n"
-            + f"text = pathlib.Path(r'''{textPath}''').read_text(encoding='utf-8')\n"
-            + f"out = r'''{outPath}'''\n"
-            + f"async def main():\n"
-            + f"    await edge_tts.Communicate(text, '{Voice}', rate='{Rate}').save(out)\n"
+            "import asyncio, edge_tts, pathlib\n"
+            + $"text = pathlib.Path(r'{textPath.Replace("'", "\\'")}').read_text(encoding='utf-8')\n"
+            + $"out = r'{outPath.Replace("'", "\\'")}'\n"
+            + "async def main():\n"
+            + $"    await edge_tts.Communicate(text, '{Voice}', rate='{Rate}').save(out)\n"
             + "asyncio.run(main())\n";
         await File.WriteAllTextAsync(script, py, new UTF8Encoding(false), ct);
         try
