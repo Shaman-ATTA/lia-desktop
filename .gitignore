@@ -14,6 +14,7 @@ obj/
 *.suo
 LiaDesktop-*.zip
 desktop_winui_*.png
+!tools/ref/**/desktop_winui_*.png
 tasklist_*.txt
 legacy/electron/node_modules/
 legacy/electron/dist/
