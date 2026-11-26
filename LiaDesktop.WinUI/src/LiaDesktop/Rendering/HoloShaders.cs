@@ -84,16 +84,16 @@ float4 main(PSIn i) : SV_TARGET {
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
   // Hologram-bust dissolve: lower ~40% of neck → transparent; side edges soft.
-  // Anchor at mesh cut so edge alpha≈0; bias curve keeps stump ghost-free.
+  // Anchor at mesh cut; square falloff + tight side kill so cut/step/notch ghost out.
   float neckBottomY = 0.195;
-  float neckHeight = 0.42; // cut → jaw/chin
-  float fadeTop = neckBottomY + 0.40 * neckHeight; // ≈ 0.363
+  float neckHeight = 0.48; // cut → jaw
+  float fadeTop = neckBottomY + 0.40 * neckHeight; // ≈ 0.387
   float t = smoothstep(neckBottomY, fadeTop, i.local.y);
-  float vertA = t * t; // bias: lower neck stays nearer transparent
+  float vertA = t * t * t; // strong bias — stump stays near-zero until mid-neck
   float ax = abs(i.local.x);
-  float sideA = smoothstep(0.088, 0.016, ax); // kill stepped silhouette / notch
+  float sideA = smoothstep(0.078, 0.012, ax);
   float neckA = vertA * lerp(sideA, 1.0, vertA * vertA);
-  if (neckA < 0.012) discard;
+  if (neckA < 0.015) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
@@ -142,7 +142,7 @@ float4 main(PSIn i) : SV_TARGET {
   color *= (1.0 + 0.04 * scanWave);
   color = pow(saturate(color), 1.0/2.2);
   // Keep hair out of the neck dissolve band (skin premul fade owns that region)
-  clip(i.local.y - 0.363);
+  clip(i.local.y - 0.387);
   return float4(color, 1.0);
 }";
 

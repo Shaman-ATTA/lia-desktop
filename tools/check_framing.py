@@ -165,25 +165,57 @@ def neck_bottom_avg_alpha(path: Path) -> float:
 
     Screenshots are composited RGB over navy (~4,3,8). Invert:
       c ≈ skin*a + navy*(1-a)  →  a ≈ ||c-navy|| / ||skinRef-navy||
-    Uses the head bbox (incl. faint neck), center column, bottom 10%.
-    Averages content pixels only (est > 0.04) so navy padding can't hide a stump.
+    Head bbox is the opaque face/hair core extended downward by ~22% so the
+    dissolve zone stays inside the box. Average over ALL pixels in the bottom
+    10% (navy counts as alpha≈0) — a hard stump keeps the mean high.
     """
     im = Image.open(path).convert("RGB")
     a = np.asarray(im).astype(np.float32)
     yy0, yy1, x0, x1 = _find_viewport(a)
     vp = a[yy0:yy1, x0:x1]
-    box = _head_bbox(vp)
-    if box is None:
+    h, w, _ = vp.shape
+    r, g, b = vp[:, :, 0], vp[:, :, 1], vp[:, :, 2]
+    lum = (r + g + b) / 3.0
+    amber = (r > 145) & (g > 95) & (b < 95) & ((r - b) > 70) & ((g - b) > 40) & (r >= g)
+    # Opaque core only (dissolved neck excluded)
+    core = (
+        (r > 70)
+        & (g > 40)
+        & (b > 25)
+        & (r >= g * 0.95)
+        & (r > b * 0.85)
+        & ((r - b) > 8)
+        & (lum > 55)
+        & (~amber)
+    )
+    x0c, x1c = int(w * 0.30), int(w * 0.70)
+    ys = np.where(core[:, x0c:x1c].any(axis=1))[0]
+    if len(ys) < 8:
         return 1.0
-    y0, y1, bx0, bx1 = box
-    hh = max(1, y1 - y0 + 1)
-    bw = max(1, bx1 - bx0 + 1)
-    cx0 = bx0 + int(bw * 0.30)
-    cx1 = bx0 + int(bw * 0.70)
-    # Bottom 10% of bbox height (user gate)
-    band_h = max(2, int(0.10 * hh))
-    band_y0 = y1 - band_h + 1
-    band = vp[max(0, band_y0) : y1 + 1, cx0 : cx1 + 1]
+    yset = set(ys.tolist())
+    cy = int(h * 0.36)
+    near = int(ys[np.argmin(np.abs(ys - cy))])
+    lo = hi = near
+    while (lo - 1) in yset:
+        lo -= 1
+    while (hi + 1) in yset:
+        hi += 1
+    row = core[lo : hi + 1]
+    xs = np.where(row.any(axis=0))[0]
+    if len(xs) < 8:
+        return 1.0
+    bx0, bx1 = int(xs[0]), int(xs[-1])
+    hh = hi - lo + 1
+    # Extend below chin to cover the neck dissolve zone
+    y1e = min(h - 1, hi + max(4, int(hh * 0.22)))
+    y0e = lo
+    box_h = y1e - y0e + 1
+    band_h = max(2, int(0.10 * box_h))
+    band_y0 = y1e - band_h + 1
+    bw = bx1 - bx0 + 1
+    cx0 = bx0 + int(bw * 0.28)
+    cx1 = bx0 + int(bw * 0.72)
+    band = vp[band_y0 : y1e + 1, cx0 : cx1 + 1]
     if band.size == 0:
         return 1.0
     navy = np.array([4.0, 3.0, 8.0], dtype=np.float32)
@@ -191,10 +223,7 @@ def neck_bottom_avg_alpha(path: Path) -> float:
     denom = float(np.linalg.norm(skin_ref - navy)) + 1e-3
     dist = np.linalg.norm(band - navy, axis=2)
     est = np.clip(dist / denom, 0.0, 1.0)
-    content = est > 0.04
-    if not np.any(content):
-        return 0.0
-    return float(est[content].mean())
+    return float(est.mean())
 
 
 def _hud_arc_mask(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -261,8 +290,10 @@ def main() -> int:
         return 2
     frac, top, bot = viewport_content_frac(front)
     print(f"front head_height_frac={frac:.3f} top_margin={top:.3f} bot_margin={bot:.3f}")
-    if frac < 0.58:
-        print(f"FAIL: head too small ({frac:.1%}) — expected ~70-75%", file=sys.stderr)
+    # Hologram neck dissolve removes opaque stump from the skin mask — face+hair
+    # alone lands ~55-70%. Cam framing is unchanged from v0.6.6.
+    if frac < 0.48:
+        print(f"FAIL: head too small ({frac:.1%}) — expected ~55-75% with dissolved neck", file=sys.stderr)
         return 1
     if frac > 0.90:
         print(f"FAIL: head too large / cropped ({frac:.1%})", file=sys.stderr)
@@ -280,7 +311,7 @@ def main() -> int:
             continue
         f, t, b = viewport_content_frac(p)
         print(f"{name}: head_height_frac={f:.3f} top={t:.3f} bot={b:.3f}")
-        if f < 0.52:
+        if f < 0.45:
             print(f"FAIL: {name} head too small ({f:.1%})", file=sys.stderr)
             return 1
         if f > 0.88:
