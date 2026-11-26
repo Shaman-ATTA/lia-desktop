@@ -620,8 +620,9 @@ public sealed class HoloRenderer : IDisposable
         _ctx.VSSetConstantBuffer(0, _frameCb);
         _ctx.PSSetConstantBuffer(0, _frameCb);
 
-        // 1) Skin — opaque depth prepass, then premul color with depth-equal.
-        //    Stops back-face neck triangles showing through as grey jaw blotches.
+        // 1) Skin — depth prepass then premul color. Mesh needs NoCull (Rocketbox
+        //    winding); CullBack drew skull interiors → black face. Prepass picks the
+        //    closest surface; color uses LessEqual/depth-write-off so inner faces lose.
         WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         BindSkinTextures();
         _ctx.PSSetShader(_psSkin);
@@ -629,17 +630,15 @@ public sealed class HoloRenderer : IDisposable
         {
             _ctx.IASetVertexBuffer(0, _headVb, stride, 0);
             _ctx.IASetIndexBuffer(_headIb, Format.R32_UInt, 0);
-            // 1a) Depth only (front faces) — establishes silhouette depth
+            // 1a) Depth only — closest surface wins (NoCull, same as v0.6.6 skin)
             _ctx.OMSetDepthStencilState(_dssWrite);
             _ctx.OMSetBlendState(_blendNoColor!);
-            _ctx.RSSetState(_rs); // cull back
+            _ctx.RSSetState(_rsNoCull);
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
-            // 1b) Color premul, depth test on / write off (LessEqual — MSAA-safe).
-            //    Equal fails under MSAA and blacked-out the face; LessEqual still
-            //    rejects farther back-faces so jaw blotches stay gone.
+            // 1b) Color premul; LessEqual (MSAA-safe vs Equal) + no depth write
             _ctx.OMSetDepthStencilState(_dssRead);
             _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
-            _ctx.RSSetState(_rs); // cull back — match prepass faces
+            _ctx.RSSetState(_rsNoCull);
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
         _ctx.RSSetState(_rs);
