@@ -79,9 +79,10 @@ float4 main(PSIn i) : SV_TARGET {
   color += amber * 0.055 * scanWave;               // additive scanlines
   color *= (1.0 + 0.07 * (scanWave * 2.0 - 1.0));
 
-  // Neck → discard geometry (true transparency). No dither stipple, no black multiply.
-  float neckA = smoothstep(0.30, 0.40, i.local.y);
-  clip(neckA - 0.08);
+  // Neck → discard geometry (true transparency). Keep enough neck for ~70% framing.
+  // No dither stipple, no black multiply — hard cut into clear bg.
+  float neckA = smoothstep(0.22, 0.32, i.local.y);
+  clip(neckA - 0.05);
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);

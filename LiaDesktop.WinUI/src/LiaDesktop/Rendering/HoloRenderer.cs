@@ -538,16 +538,16 @@ public sealed class HoloRenderer : IDisposable
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
-            cam = new Vector3(orbit, 0.02f, 2.50f);
-            lookAt = new Vector3(0, 0.02f, 0.02f);
+            cam = new Vector3(orbit, 0.00f, 2.45f);
+            lookAt = new Vector3(0, 0.00f, 0.02f);
             fovDeg = 24f;
         }
         else
         {
             // Head+neck ≈70-75% of viewport height (not the v0.5.1 tiny-head bug)
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.02f, 2.50f);
-            lookAt = new Vector3(0, 0.02f, 0.02f);
+            cam = new Vector3(orbit, 0.00f, 2.45f);
+            lookAt = new Vector3(0, 0.00f, 0.02f);
             fovDeg = 24f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
