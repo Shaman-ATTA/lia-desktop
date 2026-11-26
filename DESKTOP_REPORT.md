@@ -1,10 +1,14 @@
 # Lia Desktop — ship report
 
-## v0.6.5 — v0.6.2 head + arcs behind (published)
+## v0.6.6 — visible arcs + soft neck fade
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.6
+
+## v0.6.5 — v0.6.2 head + arcs behind (published, QA rejected)
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.5
 
-QA: cam Z=2.82; head≈72% / top≈0.12; amber_on_face≈0; neck soft fade (neck_black=0); dense DX arcs drawn before mesh.
+Arcs culled (CW FS triangle); neck still hard stump.
 
 ## v0.6.4 — clean face / geometric neck / 2D arcs
 

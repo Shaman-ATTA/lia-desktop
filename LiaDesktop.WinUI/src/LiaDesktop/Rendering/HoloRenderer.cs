@@ -702,9 +702,11 @@ public sealed class HoloRenderer : IDisposable
             _fsVb == null || _fsLayout == null)
             return;
 
+        // Depth OFF — arcs are a background plate. NoCull: FS triangle is CW and
+        // would be backface-culled by _rs (FrontCounterClockwise + CullBack).
         _ctx.OMSetDepthStencilState(_dssOff);
         _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
-        _ctx.RSSetState(_rs);
+        _ctx.RSSetState(_rsNoCull);
         _ctx.IASetInputLayout(_fsLayout);
         _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _ctx.IASetVertexBuffer(0, _fsVb, 16, 0);
@@ -739,7 +741,7 @@ public sealed class HoloRenderer : IDisposable
             _ctx.OMSetDepthStencilState(_dssOff);
             _ctx.OMSetBlendState(_blendOpaque);
             _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
-            _ctx.RSSetState(_rs);
+            _ctx.RSSetState(_rsNoCull); // FS triangle is CW — avoid backface cull
             _ctx.IASetInputLayout(_fsLayout);
             _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
             _ctx.IASetVertexBuffer(0, _fsVb, 16, 0);

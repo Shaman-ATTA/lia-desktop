@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.6 — Visible arcs behind head + soft neck fade
+
+- Fix CW fullscreen triangle backface-cull that wiped DX arcs
+- Dense amber/cyan arcs drawn before head (NoCull, premul); CI asserts ring pixels
+- Soft lower-neck smoothstep dissolve (stump/notch into navy)
+
 ## v0.6.5 — v0.6.2 head baseline, 2D arcs behind hologram
 
 - Restore exact v0.6.2 camera (Z=2.82) and full neck mesh; simple vertical alpha only

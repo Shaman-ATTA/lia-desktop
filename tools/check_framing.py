@@ -121,6 +121,63 @@ def neck_black_blob_frac(path: Path) -> float:
     return float(stump.mean())
 
 
+def _hud_arc_mask(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Bright amber OR cyan HUD strokes (not skin)."""
+    amber = (
+        (r > 180)
+        & (g > 100)
+        & (g < 190)
+        & (b < 110)
+        & ((r - b) > 90)
+        & ((r - g) > 25)
+        & (r >= g)
+    )
+    cyan = (b > 180) & (g > 150) & (r < 140) & ((b - r) > 60)
+    return amber | cyan
+
+
+def arc_ring_pixel_count(path: Path) -> tuple[int, int]:
+    """Count HUD arc pixels framing the head, and on the face band.
+
+    Returns (ring_count, face_count).
+    Ring = amber/cyan in left+right mid-stage bands (outside head), excluding
+    top chrome / bottom mic so UI accents can't fake a pass.
+    """
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    h, w, _ = vp.shape
+    r, g, b = vp[:, :, 0], vp[:, :, 1], vp[:, :, 2]
+    arcs = _hud_arc_mask(r, g, b)
+
+    lum = (r + g + b) / 3.0
+    skin = (r > 55) & (g > 30) & (b > 22) & (r >= g * 0.95) & (r > b * 0.85) & ((r - b) > 5)
+    hair = (lum > 16) & (lum < 95) & (r >= g) & (g >= b * 0.8) & (r < 110) & (b < 70)
+    head = skin | hair
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    aspect = w / max(1.0, float(h))
+    px = ((xx + 0.5) / w - 0.5) * aspect
+    py = (yy + 0.5) / h - 0.48
+    rad = np.sqrt(px * px + py * py)
+
+    # Mid-height; left/right of head but INSIDE stage (exclude far-right glass chrome)
+    mid_y = (yy >= int(h * 0.20)) & (yy <= int(h * 0.75))
+    left = (xx >= int(w * 0.04)) & (xx <= int(w * 0.26))
+    right = (xx >= int(w * 0.74)) & (xx <= int(w * 0.90))
+    ring = arcs & mid_y & (left | right) & (rad >= 0.30) & (rad <= 0.62) & (~head)
+    left_n = int((arcs & mid_y & left & (rad >= 0.30) & (rad <= 0.62) & (~head)).sum())
+    right_n = int((arcs & mid_y & right & (rad >= 0.30) & (rad <= 0.62) & (~head)).sum())
+
+    # Strict face arc check — bright HUD only (skin can trip the looser mask)
+    fr = r[int(h * 0.28) : int(h * 0.55), int(w * 0.30) : int(w * 0.70)]
+    fg = g[int(h * 0.28) : int(h * 0.55), int(w * 0.30) : int(w * 0.70)]
+    fb = b[int(h * 0.28) : int(h * 0.55), int(w * 0.30) : int(w * 0.70)]
+    face = _hud_arc_mask(fr, fg, fb) & (fr > 220)  # core stroke brightness
+    return int(ring.sum()), int(face.sum()), left_n, right_n
+
+
 def main() -> int:
     front = Path("desktop_winui_front.png")
     if not front.is_file():
@@ -181,6 +238,26 @@ def main() -> int:
         print(f"{name}: neck_black_blob_frac={nb:.4f}")
         if nb > 0.08:
             print(f"FAIL: {name} opaque black neck silhouette ({nb:.2%})", file=sys.stderr)
+            return 1
+
+        ring_n, face_n, left_n, right_n = arc_ring_pixel_count(p)
+        print(
+            f"{name}: arc_ring_pixels={ring_n} (L={left_n} R={right_n}) "
+            f"arc_on_face_pixels={face_n}"
+        )
+        # Dense arcs must frame the head on BOTH sides (not silently culled/cleared).
+        if ring_n < 300 or left_n < 80 or right_n < 80:
+            print(
+                f"FAIL: {name} arc ring too sparse "
+                f"(ring={ring_n} L={left_n} R={right_n}) — arcs missing around head",
+                file=sys.stderr,
+            )
+            return 1
+        if face_n > 80:
+            print(
+                f"FAIL: {name} arc pixels on face ({face_n} > 80)",
+                file=sys.stderr,
+            )
             return 1
 
     print("framing check ok")
