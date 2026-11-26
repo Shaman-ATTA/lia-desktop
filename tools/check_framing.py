@@ -37,8 +37,8 @@ def _head_rows(vp: np.ndarray) -> np.ndarray:
     band = vp[:, x0:x1]
     r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
     lum = (r + g + b) / 3.0
-    # Catch bright and soft amber orbit tubes
-    amber = (r > 100) & (g > 55) & (b < 120) & ((r + g) > (2.0 * b + 40)) & (r > g * 0.9)
+    # Orbit tubes: saturated amber/yellow, not peach skin (skin keeps more blue/red balance)
+    amber = (r > 145) & (g > 95) & (b < 95) & ((r - b) > 70) & ((g - b) > 40) & (r >= g)
     skin = (r > 55) & (g > 30) & (b > 22) & (r >= g * 0.95) & (r > b * 0.85) & ((r - b) > 5) & (~amber)
     hair = (lum > 16) & (lum < 95) & (r >= g) & (g >= b * 0.8) & (r < 110) & (b < 70) & (~amber)
     skin_rows = np.where(skin.sum(axis=1) > 5)[0]
@@ -177,7 +177,7 @@ def amber_face_frac(path: Path, y0: float = 0.28, y1: float = 0.55) -> float:
 
 
 def neck_black_blob_frac(path: Path) -> float:
-    """Near-black opaque mass in the lower viewport (bad neck silhouette vs clear bg)."""
+    """Opaque black neck stump (color multiplied to 0) vs navy clear (~4,3,8)."""
     im = Image.open(path).convert("RGB")
     a = np.asarray(im).astype(np.float32)
     yy0, yy1, x0, x1 = _find_viewport(a)
@@ -186,10 +186,10 @@ def neck_black_blob_frac(path: Path) -> float:
     band = vp[int(h * 0.72) : int(h * 0.95), int(w * 0.35) : int(w * 0.65)]
     if band.size == 0:
         return 0.0
-    lum = band.mean(axis=2)
-    # Clear bg ≈ (4,3,8); black silhouette ≈ (0..3) across RGB — count very dark opaque stump
-    dark = (lum < 6.0) & (band[:, :, 2] < 12)
-    return float(dark.mean())
+    r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
+    # Pure-black stump from color*=neck; clear keeps a little blue
+    stump = (r < 2.5) & (g < 2.5) & (b < 3.5)
+    return float(stump.mean())
 
 
 if __name__ == "__main__":
