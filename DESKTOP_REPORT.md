@@ -4,7 +4,12 @@
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.3
 
-Halo neck orbits (depth-tested, no face crossings; hidden in eyes CU) · neck → transparency · visible scanlines + amber rim.
+| Asset | Size |
+|-------|------|
+| `LiaDesktop-0.5.3-setup.exe` | 71.4 MB |
+| `LiaDesktop-0.5.3-win-x64.zip` | 97.5 MB |
+
+Self-check: amber_on_face ≈ 0 · neck_black = 0 · eyes CU rings hidden · scanlines + amber rim visible · head ~70–85% after neck restore.
 
 ## v0.5.2 — framing fix
 
