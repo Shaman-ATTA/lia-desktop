@@ -35,7 +35,8 @@ struct RingCB
 struct FxaaCB
 {
     public Vector2 InvSize;
-    public Vector2 Pad;
+    public float Time; // also drives PixelHudArcs spin
+    public float Pad;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -87,6 +88,7 @@ public sealed class HoloRenderer : IDisposable
     ID3D11PixelShader? _psCornea;
     ID3D11PixelShader? _psLid;
     ID3D11PixelShader? _psRing;
+    ID3D11PixelShader? _psHudArcs;
     ID3D11PixelShader? _psFxaa;
     ID3D11InputLayout? _layout;
     ID3D11DepthStencilState? _dssWrite;
@@ -183,6 +185,7 @@ public sealed class HoloRenderer : IDisposable
         _psCornea = CompilePS(HoloShaders.PixelCornea);
         _psLid = CompilePS(HoloShaders.PixelLid);
         _psRing = CompilePS(HoloShaders.PixelRing);
+        _psHudArcs = CompilePS(HoloShaders.PixelHudArcs);
         _psFxaa = CompilePS(HoloShaders.PixelFxaa);
         _layout = _device.CreateInputLayout(new[]
         {
@@ -530,9 +533,8 @@ public sealed class HoloRenderer : IDisposable
         var drawDsv = _dsvMsaa!;
         _ctx.OMSetRenderTargets(drawRtv, drawDsv);
         _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
-        // Transparent clear so XAML HudCanvas arcs behind the SwapChainPanel show through
-        // (AlphaMode.Premultiplied). Head draws opaque/premul and occludes them.
-        _ctx.ClearRenderTargetView(drawRtv, new Color4(0, 0, 0, 0));
+        // v0.6.2 opaque navy clear — stage composites reliably; arcs drawn in-pass behind head.
+        _ctx.ClearRenderTargetView(drawRtv, new Color4(0.015f, 0.012f, 0.03f, 1f));
         _ctx.ClearDepthStencilView(drawDsv, DepthStencilClearFlags.Depth, 1, 0);
         _ctx.IASetInputLayout(_layout);
         _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
@@ -586,7 +588,20 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 1) Skin — single premul pass (geometric trim + short clean alpha in shader)
+        // 0) Dense 2D arcs FIRST (screen-space) — head draws after and occludes them
+        if (!_eyesCloseup)
+            DrawBackgroundArcs();
+
+        // Restore mesh IA after fullscreen pass
+        _ctx.IASetInputLayout(_layout);
+        _ctx.VSSetShader(_vs);
+        _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+        if (_samplerLinearWrap != null)
+            _ctx.PSSetSamplers(0, new[] { _samplerLinearWrap });
+        _ctx.VSSetConstantBuffer(0, _frameCb);
+        _ctx.PSSetConstantBuffer(0, _frameCb);
+
+        // 1) Skin — single premul pass; soft lower-neck alpha only
         _ctx.OMSetDepthStencilState(_dssWrite);
         _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
         _ctx.RSSetState(_rsNoCull);
@@ -681,6 +696,37 @@ public sealed class HoloRenderer : IDisposable
         _swap.Present(2, PresentFlags.None);
     }
 
+    void DrawBackgroundArcs()
+    {
+        if (_ctx == null || _psHudArcs == null || _vsFxaa == null || _fxaaCb == null ||
+            _fsVb == null || _fsLayout == null)
+            return;
+
+        _ctx.OMSetDepthStencilState(_dssOff);
+        _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+        _ctx.RSSetState(_rs);
+        _ctx.IASetInputLayout(_fsLayout);
+        _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+        _ctx.IASetVertexBuffer(0, _fsVb, 16, 0);
+        _ctx.VSSetShader(_vsFxaa);
+        _ctx.PSSetShader(_psHudArcs);
+        _ctx.VSSetConstantBuffer(0, _fxaaCb);
+        _ctx.PSSetConstantBuffer(0, _fxaaCb);
+        _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
+
+        var mapped = _ctx.Map(_fxaaCb, MapMode.WriteDiscard, MapFlags.None);
+        unsafe
+        {
+            *(FxaaCB*)mapped.DataPointer = new FxaaCB
+            {
+                InvSize = new Vector2(1f / Math.Max(1, _width), 1f / Math.Max(1, _height)),
+                Time = _time,
+            };
+        }
+        _ctx.Unmap(_fxaaCb, 0);
+        _ctx.Draw(3, 0);
+    }
+
     bool ApplyFxaa()
     {
         if (_ctx == null || _rtvSwap == null || _srvScene == null || _psFxaa == null || _vsFxaa == null ||
@@ -711,6 +757,7 @@ public sealed class HoloRenderer : IDisposable
                 *(FxaaCB*)mapped.DataPointer = new FxaaCB
                 {
                     InvSize = new Vector2(1f / Math.Max(1, _width), 1f / Math.Max(1, _height)),
+                    Time = _time,
                 };
             }
             _ctx.Unmap(_fxaaCb, 0);
@@ -1187,6 +1234,7 @@ public sealed class HoloRenderer : IDisposable
         _psCornea?.Dispose();
         _psLid?.Dispose();
         _psRing?.Dispose();
+        _psHudArcs?.Dispose();
         _psFxaa?.Dispose();
         _layout?.Dispose();
         _fsLayout?.Dispose();

@@ -297,6 +297,73 @@ VSOut main(VSIn i) {
   return o;
 }";
 
+    /// <summary>Dense concentric HUD arcs in screen space — drawn BEFORE the head so depth occludes.</summary>
+    public const string PixelHudArcs = @"
+cbuffer ArcCB : register(b0) {
+  float2 invSize;
+  float time;
+  float _pad;
+};
+struct PSIn { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; };
+float4 main(PSIn i) : SV_TARGET {
+  float aspect = invSize.y / max(invSize.x, 1e-6); // w/h
+  // Stage center matches former XAML cy=0.48
+  float2 p = (i.uv - float2(0.5, 0.48)) * float2(aspect, 1.0);
+  float rad = length(p);
+  float ang = atan2(p.y, p.x); // -pi..pi
+  float deg = degrees(ang) + 180.0; // 0..360
+  float spin = time * 8.0;
+
+  float3 amber = float3(1.0, 0.604, 0.235);
+  float3 cyan  = float3(0.353, 0.839, 1.0);
+  float3 rgb = 0;
+  float a = 0;
+
+  // Four concentric radii framing the head (~0.40..0.58 in aspect-normalized space)
+  float r0 = 0.40, r1 = 0.46, r2 = 0.52, r3 = 0.58;
+  for (int ri = 0; ri < 4; ri++) {
+    float r = ri == 0 ? r0 : (ri == 1 ? r1 : (ri == 2 ? r2 : r3));
+    float thick = (ri == 0) ? 0.0075 : 0.0055;
+    float d = abs(rad - r);
+    float tube = saturate(1.0 - d / thick);
+    tube = tube * tube;
+    if (tube <= 0) continue;
+
+    int segs = 6 + ri;
+    float gap = 14.0;
+    float sweep = (360.0 - segs * gap) / segs;
+    float period = sweep + gap;
+    float local = fmod(deg + spin + ri * 9.0 + 360.0, period);
+    float inSeg = local < sweep ? 1.0 : 0.0;
+    float edge = saturate(min(local, sweep - local) / 3.0);
+    float segA = inSeg * lerp(0.35, 1.0, edge);
+    if (segA <= 0) continue;
+
+    float3 col = (ri % 2 == 0) ? amber : cyan;
+    float glow = tube * segA;
+    float core = saturate(1.0 - d / (thick * 0.45));
+    float aa = glow * (0.28 + ri * 0.04) + core * core * segA * (0.55 + ri * 0.06);
+    rgb += col * aa;
+    a = max(a, saturate(aa));
+  }
+
+  // Outer tick marks
+  float outer = r3;
+  if (rad > outer - 0.024 && rad < outer + 0.002) {
+    float tdeg = deg + spin * 0.25 + 360.0;
+    float t = fmod(tdeg, 6.0); // 60 ticks
+    float onTick = t < 0.55 ? 1.0 : 0.0;
+    float major = fmod(floor(tdeg / 6.0), 5.0) < 0.5 ? 1.0 : 0.0;
+    float lenOk = rad > (outer - (major > 0.5 ? 0.022 : 0.012));
+    float ta = onTick * lenOk * (0.35 + major * 0.25);
+    rgb += amber * ta;
+    a = max(a, ta);
+  }
+
+  if (a < 0.01) discard;
+  return float4(rgb * a, a); // premul
+}";
+
     /// <summary>Lightweight FXAA 3.11-ish quality preset.</summary>
     public const string PixelFxaa = @"
 Texture2D sceneTex : register(t0);
@@ -307,7 +374,6 @@ cbuffer FxaaCB : register(b0) {
 };
 struct PSIn { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; };
 float4 main(PSIn i) : SV_TARGET {
-  // Preserve alpha so transparent stage lets XAML arcs behind show through.
   float4 cM = sceneTex.SampleLevel(samp, i.uv, 0);
   float3 rgbM = cM.rgb;
   float3 rgbNW = sceneTex.SampleLevel(samp, i.uv + float2(-1,-1)*invSize, 0).rgb;

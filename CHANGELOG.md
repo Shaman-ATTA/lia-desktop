@@ -3,8 +3,8 @@
 ## v0.6.5 — v0.6.2 head baseline, 2D arcs behind hologram
 
 - Restore exact v0.6.2 camera (Z=2.82) and full neck mesh; simple vertical alpha only
-- Dense 2D arcs drawn behind transparent SwapChainPanel — head always occludes them
-- No 3D rings
+- Dense screen-space arcs drawn in DX *before* the head (head occludes; never on skin)
+- No 3D rings; opaque navy stage clear (v0.6.2)
 
 ## v0.6.4 — Clean face, geometric neck trim, 2D arcs only
 

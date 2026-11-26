@@ -325,7 +325,7 @@ jobs:
           Lia Desktop **v0.6.5** — v0.6.2 head baseline, arcs behind head
 
           - Camera/neck restored to v0.6.2 + simple lower-neck alpha
-          - Dense 2D arcs drawn behind transparent hologram stage
+          - Dense screen-space arcs drawn before the head (occluded by mesh)
           - No 3D rings — see THIRD_PARTY_NOTICES.md
 
 

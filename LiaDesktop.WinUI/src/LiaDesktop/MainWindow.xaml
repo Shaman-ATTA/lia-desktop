@@ -7,11 +7,11 @@
     Title="Lia · ATTA CORP">
 
   <Grid x:Name="Root" Background="#FF05070C">
-    <!-- 2D arcs FIRST = behind the hologram. Holo clears transparent so head occludes arcs. -->
-    <Canvas x:Name="HudCanvas" IsHitTestVisible="False" Margin="0,36,0,120"/>
-
-    <!-- Full-bleed hologram stage (premul alpha; transparent clear) -->
+    <!-- Full-bleed hologram (arcs drawn inside DX pass behind the head) -->
     <render:HoloPanel x:Name="Holo" Margin="0,36,0,120"/>
+
+    <!-- HudCanvas kept for wave/misc; arcs are NOT drawn here -->
+    <Canvas x:Name="HudCanvas" IsHitTestVisible="False" Margin="0,36,0,120"/>
 
     <!-- Soft vignette so glass cards read over the head -->
     <Grid IsHitTestVisible="False" Margin="0,36,0,120">
