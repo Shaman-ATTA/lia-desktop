@@ -83,17 +83,17 @@ float4 main(PSIn i) : SV_TARGET {
   color *= (1.0 + 0.10 * scanWave * (1.0 - darkLash));       // ~10% scan dip
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Hologram-bust dissolve: lower ~40% of neck → fully transparent; side edges soft.
-  // Do not touch face (above fadeTop). Premultiplied so cut/notch vanish into navy.
-  float neckBottomY = 0.12;
-  float neckHeight = 0.40; // cut → under-jaw / mid-neck span
-  float fadeTop = neckBottomY + 0.40 * neckHeight; // alpha 0 at bottom → 1 at fadeTop
+  // Hologram-bust dissolve: lower ~40% of neck → transparent; side edges soft.
+  // Anchor fade at the mesh cut (~0.20) so the silhouette edge is alpha≈0 (not ~0.5).
+  float neckBottomY = 0.195; // ≈ Rocketbox neck cut / prior hair clip
+  float neckHeight = 0.28;   // cut → under-jaw
+  float fadeTop = neckBottomY + 0.40 * neckHeight; // ≈ 0.307
   float vertA = smoothstep(neckBottomY, fadeTop, i.local.y);
-  // Side falloff kills stepped mesh silhouette inside the dissolve band
+  // Lateral falloff — kills stepped outline / shoulder notch inside dissolve band
   float ax = abs(i.local.x);
-  float sideA = smoothstep(0.092, 0.026, ax); // 1 at center, 0 at outer neck/shoulder
-  float neckA = vertA * lerp(sideA, 1.0, pow(saturate(vertA), 0.55));
-  if (neckA < 0.006) discard;
+  float sideA = smoothstep(0.100, 0.022, ax);
+  float neckA = vertA * lerp(sideA, 1.0, pow(saturate(vertA), 0.50));
+  if (neckA < 0.01) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
@@ -141,8 +141,8 @@ float4 main(PSIn i) : SV_TARGET {
   float scanWave = sin(i.pos.y * (6.2831853 / 3.5) + time * 1.35);
   color *= (1.0 + 0.04 * scanWave);
   color = pow(saturate(color), 1.0/2.2);
-  // Drop cards that hang into the neck stump (skin fade handles the rest)
-  clip(i.local.y - 0.20);
+  // Keep hair out of the neck dissolve band (skin premul fade owns that region)
+  clip(i.local.y - 0.307);
   return float4(color, 1.0);
 }";
 

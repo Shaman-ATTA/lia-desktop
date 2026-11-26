@@ -161,12 +161,12 @@ def _head_bbox(vp: np.ndarray) -> tuple[int, int, int, int] | None:
 
 
 def neck_bottom_avg_alpha(path: Path) -> float:
-    """Estimate mean premul alpha in the bottom 10% of the head bbox.
+    """Estimate mean premul alpha in the bottom 10% of the head bounding box.
 
     Screenshots are composited RGB over navy (~4,3,8). Invert:
       c ≈ skin*a + navy*(1-a)  →  a ≈ ||c-navy|| / ||skinRef-navy||
-    Navy padding around the silhouette is ignored — only content pixels
-    (est alpha > 0.04) are averaged, so a hard stump cannot hide in the mean.
+    Uses the head bbox (incl. faint neck), center column, bottom 10%.
+    Averages content pixels only (est > 0.04) so navy padding can't hide a stump.
     """
     im = Image.open(path).convert("RGB")
     a = np.asarray(im).astype(np.float32)
@@ -177,14 +177,13 @@ def neck_bottom_avg_alpha(path: Path) -> float:
         return 1.0
     y0, y1, bx0, bx1 = box
     hh = max(1, y1 - y0 + 1)
-    # Keep center third of the bbox width (neck column), bottom 10% of height
-    bw = bx1 - bx0 + 1
-    cx0 = bx0 + int(bw * 0.28)
-    cx1 = bx0 + int(bw * 0.72)
-    y1e = min(vp.shape[0] - 1, y1 + max(2, int(hh * 0.06)))
-    band_h = max(1, int(0.10 * (y1e - y0 + 1)))
-    band_y0 = y1e - band_h + 1
-    band = vp[band_y0 : y1e + 1, cx0 : cx1 + 1]
+    bw = max(1, bx1 - bx0 + 1)
+    cx0 = bx0 + int(bw * 0.30)
+    cx1 = bx0 + int(bw * 0.70)
+    # Bottom 10% of bbox height (user gate)
+    band_h = max(2, int(0.10 * hh))
+    band_y0 = y1 - band_h + 1
+    band = vp[max(0, band_y0) : y1 + 1, cx0 : cx1 + 1]
     if band.size == 0:
         return 1.0
     navy = np.array([4.0, 3.0, 8.0], dtype=np.float32)
@@ -194,7 +193,7 @@ def neck_bottom_avg_alpha(path: Path) -> float:
     est = np.clip(dist / denom, 0.0, 1.0)
     content = est > 0.04
     if not np.any(content):
-        return 0.0  # fully dissolved into navy
+        return 0.0
     return float(est[content].mean())
 
 
