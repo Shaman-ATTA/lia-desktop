@@ -4,7 +4,12 @@
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.5.4
 
-Neck alpha fade · thin scanlines · tilted halo rings · clean open mouth · no lash sparkle.
+| Asset | Notes |
+|-------|-------|
+| `LiaDesktop-0.5.4-setup.exe` / zip | WinUI unpackaged |
+| Screenshots | front / 3-4 / speaking / eyes / rings / profile |
+
+Self-check: neck fade rows → clear · face amber≈0 · gold lash sparkle=0 · framing ok.
 
 ## v0.5.3 — rings / neck / holo
 
