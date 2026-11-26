@@ -1,6 +1,14 @@
 # Changelog
 
+## v0.6.4 — Clean face, geometric neck trim, 2D arcs only
+
+- Fix chin/jaw blotches: drop two-pass/pow dissolve that ate the face
+- Geometric mesh trim below Y=0.30 (no stump/shoulder notch) + short clean alpha
+- Remove broken 3D crown/chin rings (diagonal bars / smears); keep dense 2D arcs
+- Framing ~72–80%
+
 ## v0.6.3 — Soft neck dissolve, crown halo, chin ring in-frame
+
 
 - Neck: pure vertical alpha over lower ~25% (no stepped stump / shoulder notch)
 - Crown halo: tilted ring above/behind head (never on skin)

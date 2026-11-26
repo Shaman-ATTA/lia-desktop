@@ -51,7 +51,7 @@ public sealed class HoloRenderer : IDisposable
     static readonly Vector3 Amber = new(1f, 0.62f, 0.32f);
     // Keep eyeballs inside Rocketbox lids (mesh already has eyelids + blink shapes)
     const float EyeRadius = 0.0115f;
-    // Head local Y≈0.20..0.55; cam Z≈2.20 / fov 24° → ≈75–80% with soft-neck dissolve
+    // Head local Y≈0.20..0.55; cam Z≈2.38 / fov 24° → ≈72–80% after neck trim at Y=0.30
     const float HeadScale = 2.70f;
     const float HeadTransY = -1.00f;
     const int MsaaCount = 2; // 4x was ~2× CPU on WARP; 2x still cleans edges
@@ -556,16 +556,16 @@ public sealed class HoloRenderer : IDisposable
         else if (_ringsShowcase)
         {
             var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
-            cam = new Vector3(orbit, 0.04f, 2.20f);
-            lookAt = new Vector3(0, 0.06f, 0.02f);
+            cam = new Vector3(orbit, 0.02f, 2.38f);
+            lookAt = new Vector3(0, 0.04f, 0.02f);
             fovDeg = 24f;
         }
         else
         {
-            // Head ≈75–80% with two-pass neck dissolve (opaque span starts ~Y 0.34)
+            // Head ≈72–80% after geometric neck trim (cutY=0.30)
             var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
-            cam = new Vector3(orbit, 0.04f, 2.20f);
-            lookAt = new Vector3(0, 0.06f, 0.02f);
+            cam = new Vector3(orbit, 0.02f, 2.38f);
+            lookAt = new Vector3(0, 0.04f, 0.02f);
             fovDeg = 24f;
         }
         var view = Matrix4x4.CreateLookAt(cam, lookAt, Vector3.UnitY);
@@ -583,23 +583,17 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 1) Skin — two-pass neck dissolve (solid depth-write, then premul fade depth-read)
+        // 1) Skin — single premul pass (geometric trim + short clean alpha in shader)
+        _ctx.OMSetDepthStencilState(_dssWrite);
+        _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
         _ctx.RSSetState(_rsNoCull);
+        WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         BindSkinTextures();
         _ctx.PSSetShader(_psSkin);
         if (_headVb != null && _headIb != null && _mesh != null)
         {
             _ctx.IASetVertexBuffer(0, _headVb, stride, 0);
             _ctx.IASetIndexBuffer(_headIb, Format.R32_UInt, 0);
-            // Pass A: opaque upper head (writes depth — clean occlusion)
-            _ctx.OMSetDepthStencilState(_dssWrite);
-            _ctx.OMSetBlendState(_blendOpaque);
-            WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f, neckPass: 0f);
-            _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
-            // Pass B: soft neck fade only (no depth write — no hard stump silhouette)
-            _ctx.OMSetDepthStencilState(_dssRead);
-            _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
-            WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f, neckPass: 1f);
             _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
         _ctx.RSSetState(_rs);
@@ -1089,30 +1083,9 @@ public sealed class HoloRenderer : IDisposable
 
     void BuildRings()
     {
-        // 2–3 clean evenly-segmented halos. Torus in XZ; maxZ ≈ tz + r·cos(pitch).
-        // Keep maxZ ≤ −0.05 (behind face plane in head space). Slow yaw spin.
-        void AddSeg(float radius, float tube, float pitchDeg, float yaw, float roll,
-            float transY, float transZ, float spinY, float opacity, int pieces, float gapFrac)
-        {
-            var pitch = pitchDeg * MathF.PI / 180f;
-            var total = MathF.PI * 2f;
-            var gap = total * gapFrac / Math.Max(1, pieces);
-            var span = (total - gap * pieces) / Math.Max(1, pieces);
-            for (var i = 0; i < pieces; i++)
-            {
-                var start = i * (span + gap);
-                var (vb, ib, count) = CreateTorus(radius, tube, span, start);
-                _rings.Add(new RingMesh(vb, ib, count, Amber, opacity, pitch, yaw, roll, 0f, spinY, transY, transZ));
-            }
-        }
-
-        // Rings use headOrient WITHOUT HeadScale — TransY world-ish (+ HeadTransY=-1).
-        // Crown: tilted halo above bun; keep maxZ well behind face (no forehead Z-fight).
-        AddSeg(0.26f, 0.0048f, 68f, 0.00f, 0.02f, 1.58f, -0.38f, 0.05f, 0.90f, 8, 0.10f); // crown core
-        AddSeg(0.26f, 0.0095f, 68f, 0.00f, 0.02f, 1.58f, -0.38f, 0.05f, 0.34f, 8, 0.10f); // crown glow
-        // Chin: below chin, deep behind neck so only side arcs show (never across skin).
-        AddSeg(0.30f, 0.0036f, -8f, 0.02f, -0.02f, 0.70f, -0.72f, -0.03f, 0.70f, 8, 0.12f); // chin core
-        AddSeg(0.30f, 0.0075f, -8f, 0.02f, -0.02f, 0.70f, -0.72f, -0.03f, 0.24f, 8, 0.12f); // chin glow
+        // v0.6.4: no 3D crown/chin rings — they read as diagonal bars / smeared streaks.
+        // Dense 2D HUD arcs (MainWindow) already provide the halo look; keep those as-is.
+        _rings.Clear();
     }
 
     (ID3D11Buffer vb, ID3D11Buffer ib, uint count) CreateTorus(float radius, float tube, float arc, float startU = 0f)

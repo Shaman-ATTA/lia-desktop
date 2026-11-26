@@ -83,18 +83,13 @@ float4 main(PSIn i) : SV_TARGET {
   color *= (1.0 + 0.10 * scanWave * (1.0 - darkLash));       // ~10% scan dip
   color = lerp(color, float3(0.02, 0.015, 0.01), darkLash * 0.85);
 
-  // Vertical neck dissolve (mesh Y≈0.20 stump → chin). pad.x selects pass:
-  // 0 = solid (depth-write), 1 = fade band only (depth-read, premul) — avoids hard Z silhouette.
-  float neckA = smoothstep(0.24, 0.38, i.local.y);
-  float neckPass = pad.x;
-  if (neckPass < 0.5) {
-    clip(neckA - 0.95); // solid face/upper neck only
-    neckA = 1.0;
-  } else {
-    clip(0.95 - neckA); // fade band only
-    clip(neckA - 0.015);
-    neckA = neckA * neckA * neckA; // very soft into void — no silhouette edge
-  }
+  // Geometric trim: drop stump + shoulder notch (mesh Y < cut). Chin/jaw stay fully opaque.
+  // Clean linear smoothstep only — no two-pass, no pow/dither (those blotched the chin in v0.6.3).
+  const float cutY = 0.300;
+  const float fadeTop = 0.335; // short soft band under chin; face above = solid skin
+  clip(i.local.y - cutY);
+  float neckA = smoothstep(cutY, fadeTop, i.local.y);
+  if (neckA < 0.02) discard;
 
   color = color / (1.0 + color * 0.65);
   color = pow(saturate(color), 1.0/2.2);
@@ -142,8 +137,8 @@ float4 main(PSIn i) : SV_TARGET {
   float scanWave = sin(i.pos.y * (6.2831853 / 3.5) + time * 1.35);
   color *= (1.0 + 0.04 * scanWave);
   color = pow(saturate(color), 1.0/2.2);
-  // Drop cards that hang into the dissolved neck band
-  clip(i.local.y - 0.30);
+  // Match skin geometric trim
+  clip(i.local.y - 0.300);
   return float4(color, 1.0);
 }";
 
