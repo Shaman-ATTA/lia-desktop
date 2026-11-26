@@ -27,7 +27,7 @@ Head asset: Microsoft Rocketbox `Female_Adult_07` (MIT) — see `THIRD_PARTY.md`
 
 ## Third-party
 
-Head / hair / lashes: **CC0-1.0** — see [`THIRD_PARTY.md`](THIRD_PARTY.md).
+Photoreal head: Microsoft Rocketbox `Female_Adult_07` (**MIT**) — notice in [`licenses/ROCKETBOX_MIT.txt`](licenses/ROCKETBOX_MIT.txt). Full inventory: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) / [`THIRD_PARTY.md`](THIRD_PARTY.md).
 
 ## Develop (Windows)
 
@@ -44,4 +44,6 @@ dotnet publish LiaDesktop.WinUI/src/LiaDesktop/LiaDesktop.csproj `
 
 ## License
 
-UNLICENSED — ATTA CORP personal build. Third-party mesh: CC0-1.0.
+**All Rights Reserved** — Copyright (c) 2026 ATTA CORP (Yaroslav Komorov). See [`LICENSE`](LICENSE) (EN + RU).
+
+Source is published for viewing only. No copying, modification, distribution, sublicensing, commercial use, or derivative works without prior written permission. Third-party components remain under their own licenses — see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

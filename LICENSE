@@ -1,0 +1,70 @@
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ
+
+Copyright (c) 2026 ATTA CORP (Yaroslav Komorov)
+
+================================================================
+ENGLISH
+================================================================
+
+This repository and its original contents (source code, documentation,
+configuration, and ATTA CORP original assets) are proprietary.
+
+Permission is granted solely to view the published source for personal
+inspection. Without prior written permission from ATTA CORP (Yaroslav
+Komorov), you may NOT:
+
+  - copy, reproduce, or mirror the contents;
+  - modify or create derivative works;
+  - distribute, publish, sublicense, or transfer the contents;
+  - use the contents for any commercial purpose;
+  - use the contents to build competing products or services.
+
+Source is published for viewing only.
+
+Third-party components included in this repository remain under their
+own licenses. See THIRD_PARTY_NOTICES.md (and licenses/) for details.
+Nothing in this LICENSE grants rights beyond those third-party licenses
+for those components, nor restricts rights granted by those licenses.
+
+THE SOFTWARE AND MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND. TO THE MAXIMUM EXTENT PERMITTED BY LAW, ATTA CORP AND YAROSLAV
+KOMOROV DISCLAIM ALL LIABILITY ARISING FROM ACCESS TO OR USE OF THIS
+REPOSITORY.
+
+For permission requests: contact ATTA CORP / Yaroslav Komorov.
+
+================================================================
+РУССКИЙ
+================================================================
+
+Данный репозиторий и его оригинальное содержимое (исходный код,
+документация, конфигурация и оригинальные материалы ATTA CORP)
+являются собственностью правообладателя.
+
+Разрешается исключительно просмотр опубликованного исходного кода для
+личного ознакомления. Без предварительного письменного разрешения
+ATTA CORP (Ярослав Коморов) ЗАПРЕЩАЕТСЯ:
+
+  - копировать, воспроизводить или зеркалировать содержимое;
+  - изменять или создавать производные произведения;
+  - распространять, публиковать, сублицензировать или передавать
+    содержимое;
+  - использовать содержимое в коммерческих целях;
+  - использовать содержимое для создания конкурирующих продуктов или
+    сервисов.
+
+Исходный код публикуется только для просмотра.
+
+Сторонние компоненты, включённые в этот репозиторий, остаются под
+действием своих собственных лицензий. См. THIRD_PARTY_NOTICES.md
+(и каталог licenses/). Настоящий LICENSE не расширяет права,
+предоставляемые лицензиями третьих сторон на соответствующие
+компоненты, и не ограничивает права, прямо предоставленные такими
+лицензиями.
+
+ПРОГРАММНОЕ ОБЕСПЕЧЕНИЕ И МАТЕРИАЛЫ ПРЕДОСТАВЛЯЮТСЯ «КАК ЕСТЬ», БЕЗ
+КАКИХ-ЛИБО ГАРАНТИЙ. В МАКСИМАЛЬНОЙ СТЕПЕНИ, ДОПУСКАЕМОЙ ЗАКОНОМ,
+ATTA CORP И ЯРОСЛАВ КОМОРОВ ОТКАЗЫВАЮТСЯ ОТ ОТВЕТСТВЕННОСТИ,
+ВОЗНИКАЮЩЕЙ В СВЯЗИ С ДОСТУПОМ К РЕПОЗИТОРИЮ ИЛИ ЕГО ИСПОЛЬЗОВАНИЕМ.
+
+По вопросам разрешений: обращайтесь в ATTA CORP / к Ярославу Коморову.
