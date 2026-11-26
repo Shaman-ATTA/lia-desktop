@@ -21,6 +21,9 @@ public sealed class SecretsStore
     {
         "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-2.0-flash-lite",
         "models/gemini-2.0-flash",
+        // Live 2026-11-26: 2.5 flash "no longer available to new users"
+        "gemini-2.5-flash", "gemini-2.5-flash-001", "gemini-2.5-flash-latest",
+        "models/gemini-2.5-flash",
     };
 
     /// <summary>Override config dir (selftest uses a temp folder so user DPAPI is untouched).</summary>
@@ -73,9 +76,11 @@ public sealed class SecretsStore
     static LiaConfig Scrub(LiaConfig cfg)
     {
         var m = (cfg.Model ?? "").Replace("models/", "");
-        if (string.IsNullOrWhiteSpace(m) || Retired.Contains(m) || (!string.IsNullOrEmpty(cfg.Model) && Retired.Contains(cfg.Model)))
+        if (string.IsNullOrWhiteSpace(m) || Retired.Contains(m) || GeminiModels.IsRetired(m)
+            || (!string.IsNullOrEmpty(cfg.Model) && Retired.Contains(cfg.Model)))
             cfg.Model = "";
-        if (string.IsNullOrWhiteSpace(cfg.VisionModel) || Retired.Contains(cfg.VisionModel!))
+        if (string.IsNullOrWhiteSpace(cfg.VisionModel) || Retired.Contains(cfg.VisionModel!)
+            || GeminiModels.IsRetired(cfg.VisionModel))
             cfg.VisionModel = cfg.Model;
         return cfg;
     }

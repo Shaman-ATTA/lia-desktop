@@ -752,7 +752,7 @@ public sealed partial class MainWindow : Window
             {
                 var models = await GeminiModels.ListAsync(cfg.ApiKey);
                 var ids = models.Select(m => m.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                if (string.IsNullOrEmpty(picked) || !ids.Contains(picked))
+                if (string.IsNullOrEmpty(picked) || !ids.Contains(picked) || GeminiModels.IsRetired(picked))
                 {
                     var best = GeminiModels.PickBestFlash(models);
                     if (best == null)
@@ -761,7 +761,7 @@ public sealed partial class MainWindow : Window
                         return;
                     }
                     if (!string.IsNullOrEmpty(picked))
-                        _s.Log.Info($"Модель «{picked}» нет в ListModels → {best}");
+                        _s.Log.Info($"Модель «{picked}» недоступна → {best}");
                     picked = best;
                 }
                 ModelBox.Items.Clear();

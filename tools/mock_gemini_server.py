@@ -9,7 +9,7 @@ Endpoints:
 
 Scenarios:
   normal       — 200 with Russian reply
-  overload503  — 503, 503, then 200
+  overload503  — 503 once, then 200 (matches client: retry once)
   retry429     — 429 + Retry-After: 1, then 200
   slow20       — sleep 20s, then 200
   badmodel     — first generateContent → 404 + suggested model; then 200
@@ -31,13 +31,28 @@ LOCK = threading.Lock()
 MODELS = {
     "models": [
         {
-            "name": "models/gemini-2.5-flash",
-            "displayName": "Gemini 2.5 Flash",
+            "name": "models/gemini-flash-lite-latest",
+            "displayName": "Gemini Flash Lite Latest",
             "supportedGenerationMethods": ["generateContent"],
         },
         {
-            "name": "models/gemini-2.5-flash-lite",
-            "displayName": "Gemini 2.5 Flash Lite",
+            "name": "models/gemini-3.1-flash-lite",
+            "displayName": "Gemini 3.1 Flash Lite",
+            "supportedGenerationMethods": ["generateContent"],
+        },
+        {
+            "name": "models/gemini-3.5-flash-lite",
+            "displayName": "Gemini 3.5 Flash Lite",
+            "supportedGenerationMethods": ["generateContent"],
+        },
+        {
+            "name": "models/gemini-3.8-flash",
+            "displayName": "Gemini 3.8 Flash",
+            "supportedGenerationMethods": ["generateContent"],
+        },
+        {
+            "name": "models/gemini-3.7-flash",
+            "displayName": "Gemini 3.7 Flash",
             "supportedGenerationMethods": ["generateContent"],
         },
         {
@@ -113,11 +128,12 @@ class Handler(BaseHTTPRequestHandler):
 
         model = gen.group(1)
         # Phantom / retired names → 404 with suggestion (ListModels fallback path)
-        if re.search(r"3\.8|gemini-bad|not-a-model|2\.0-flash$", model, re.I):
+        # Hard-404 only for names outside the preferred mock catalogue
+        if re.search(r"gemini-bad|not-a-model|2\.0-flash|2\.5-flash$", model, re.I):
             self._err(
                 404,
                 f"This model models/{model} is no longer available. "
-                f"Please update your code to use models/gemini-2.5-flash",
+                f"Please update your code to use models/gemini-flash-lite-latest",
             )
             return
 
@@ -127,7 +143,7 @@ class Handler(BaseHTTPRequestHandler):
             hit = STATE["hits"]
 
         if scenario == "overload503":
-            if hit <= 2:
+            if hit == 1:
                 self._err(503, "The model is overloaded. Please try again later.")
                 return
         elif scenario == "retry429":
@@ -145,7 +161,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._err(
                     404,
                     f"This model models/{model} is no longer available. "
-                    f"Please update your code to use models/gemini-2.5-flash",
+                    f"Please update your code to use models/gemini-flash-lite-latest",
                 )
                 return
 

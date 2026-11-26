@@ -17,6 +17,22 @@ public sealed record ClassifiedGeminiError(
 
 public static class GeminiModels
 {
+    /// <summary>Default when nothing saved / retired. Live-tested 2026-11-26: 200 in ~0.5s.</summary>
+    public const string DefaultModel = "gemini-flash-lite-latest";
+
+    /// <summary>
+    /// Preferred fallback order (intersected with ListModels).
+    /// User choice is prepended by <see cref="BuildFallbackChain"/> when present in the list.
+    /// </summary>
+    public static readonly string[] PreferredOrder =
+    [
+        "gemini-flash-lite-latest",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+    ];
+
     public static string StripPrefix(string name) =>
         name.StartsWith("models/", StringComparison.Ordinal) ? name["models/".Length..] : name.Trim();
 
@@ -43,44 +59,104 @@ public static class GeminiModels
 
     public static bool IsOverload(string message, int? status) =>
         status is 429 or 503 ||
-        // Do NOT match bare "unavailable" — overlaps with model-not-found 404 text.
         Regex.IsMatch(message, @"high demand|resource.?exhausted|rate.?limit|quota|overloaded|try again later|503|429",
             RegexOptions.IgnoreCase);
 
+    public static bool IsRetired(string? id)
+    {
+        var n = StripPrefix(id ?? "").ToLowerInvariant();
+        if (string.IsNullOrEmpty(n)) return true;
+        // 2.0 retired; 2.5 flash no longer available to new users (live 2026-11-26)
+        if (n.StartsWith("gemini-2.0-flash")) return true;
+        if (n is "gemini-2.5-flash" or "gemini-2.5-flash-001" or "gemini-2.5-flash-latest") return true;
+        return false;
+    }
+
+    /// <summary>Score for leftover flash models after preferred chain (higher = earlier).</summary>
     public static double ScoreFlash(string id)
     {
         var n = StripPrefix(id).ToLowerInvariant();
         if (!n.Contains("flash")) return double.NegativeInfinity;
         if (Regex.IsMatch(n, @"tts|embed|image-generation")) return double.NegativeInfinity;
+        if (IsRetired(n)) return double.NegativeInfinity;
+
+        // Preferred ids win hard
+        for (var i = 0; i < PreferredOrder.Length; i++)
+        {
+            if (n.Equals(PreferredOrder[i], StringComparison.OrdinalIgnoreCase))
+                return 100_000 - i * 100;
+        }
+
         double s = 0;
+        if (n.Contains("lite")) s += 40;
+        if (n.Contains("latest")) s += 30;
         var ver = Regex.Match(n, @"gemini-(\d+)\.(\d+)");
-        if (ver.Success) s += int.Parse(ver.Groups[1].Value) * 1000 + int.Parse(ver.Groups[2].Value) * 20;
-        if (Regex.IsMatch(n, @"preview|-exp|thinking")) s -= 200;
-        if (n.Contains("lite")) s -= 15;
-        if (Regex.IsMatch(n, @"^gemini-\d+\.\d+-flash$")) s += 80;
+        if (ver.Success) s += int.Parse(ver.Groups[1].Value) * 10 + int.Parse(ver.Groups[2].Value);
+        if (Regex.IsMatch(n, @"preview|-exp|thinking")) s -= 50;
         return s;
     }
 
     public static string? PickBestFlash(IEnumerable<GeminiModelInfo> models)
     {
-        var list = models.Where(m => m.SupportsGenerateContent).ToList();
-        var flash = list.Where(m => m.Id.Contains("flash", StringComparison.OrdinalIgnoreCase)).ToList();
-        var pool = flash.Count > 0 ? flash : list;
-        return pool.OrderByDescending(m => ScoreFlash(m.Id)).Select(m => m.Id).FirstOrDefault();
+        var ids = models
+            .Where(m => m.SupportsGenerateContent)
+            .Select(m => StripPrefix(m.Id))
+            .Where(id => !IsRetired(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var p in PreferredOrder)
+        {
+            if (ids.Contains(p)) return p;
+        }
+
+        return models
+            .Where(m => m.SupportsGenerateContent && !IsRetired(m.Id))
+            .OrderByDescending(m => ScoreFlash(m.Id))
+            .Select(m => StripPrefix(m.Id))
+            .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Fallback chain: [user choice if listed] + PreferredOrder ∩ ListModels + other flash leftovers.
+    /// </summary>
+    public static IReadOnlyList<string> BuildFallbackChain(
+        IEnumerable<GeminiModelInfo> models,
+        string? userChoice)
+    {
+        var listed = models
+            .Where(m => m.SupportsGenerateContent)
+            .Select(m => StripPrefix(m.Id))
+            .Where(id => !string.IsNullOrEmpty(id) && !IsRetired(id))
+            .ToList();
+        var set = listed.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var chain = new List<string>();
+
+        var cur = StripPrefix(userChoice ?? "");
+        if (!string.IsNullOrEmpty(cur) && set.Contains(cur) && !IsRetired(cur))
+            chain.Add(listed.First(id => id.Equals(cur, StringComparison.OrdinalIgnoreCase)));
+
+        foreach (var p in PreferredOrder)
+        {
+            if (!set.Contains(p)) continue;
+            if (chain.Any(c => c.Equals(p, StringComparison.OrdinalIgnoreCase))) continue;
+            chain.Add(listed.First(id => id.Equals(p, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        foreach (var id in listed.OrderByDescending(ScoreFlash))
+        {
+            if (chain.Any(c => c.Equals(id, StringComparison.OrdinalIgnoreCase))) continue;
+            chain.Add(id);
+        }
+
+        return chain;
     }
 
     public static IReadOnlyList<string> NextFlashFallbacks(IEnumerable<GeminiModelInfo> models, string current)
     {
         var cur = StripPrefix(current);
-        var ranked = models
-            .Where(m => m.SupportsGenerateContent && m.Id.Contains("flash", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(m => ScoreFlash(m.Id))
-            .Select(m => m.Id)
-            .Where(id => id != cur)
+        return BuildFallbackChain(models, null)
+            .Where(id => !id.Equals(cur, StringComparison.OrdinalIgnoreCase))
             .ToList();
-        var stable = ranked.Where(id => !Regex.IsMatch(id, @"preview|-exp|thinking", RegexOptions.IgnoreCase)).ToList();
-        var preview = ranked.Except(stable).ToList();
-        return stable.Concat(preview).ToList();
     }
 
     public static async Task<IReadOnlyList<GeminiModelInfo>> ListAsync(string apiKey, HttpClient? http = null, CancellationToken ct = default)
@@ -116,11 +192,10 @@ public static class GeminiModels
         var models = await ListAsync(apiKey, http, ct);
         var ids = models.Select(m => m.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var cur = StripPrefix(current ?? "");
-        var retired = string.IsNullOrEmpty(cur) || cur.StartsWith("gemini-2.0-flash", StringComparison.OrdinalIgnoreCase);
-        if (!retired && ids.Contains(cur))
+        if (!IsRetired(cur) && !string.IsNullOrEmpty(cur) && ids.Contains(cur))
             return (cur, models, false);
         var picked = PickBestFlash(models) ?? throw new InvalidOperationException("Нет доступных моделей Gemini");
-        return (picked, models, cur != picked);
+        return (picked, models, !cur.Equals(picked, StringComparison.OrdinalIgnoreCase));
     }
 
     public static ClassifiedGeminiError Classify(Exception err, int? status = null)

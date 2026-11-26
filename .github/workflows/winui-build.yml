@@ -394,10 +394,9 @@ jobs:
           NOTES=$(cat <<'EOF'
           Lia Desktop **v0.6.9** — Gemini resilience, mic STT, HiDPI centre stage
 
-          - Gemini: 90s timeout, 503/429 retry+fallback via ListModels, RU errors, model dropdown
-          - Mic fallback: WASAPI+VAD → Gemini audio STT when Windows Speech missing
-          - Hologram centred in centre column; CI 1080p + 4K framing asserts
-          - E2E `--selftest` vs mock Gemini (503/429/slow/404) + optional live key; see selftest.txt
+          - Default `gemini-flash-lite-latest`; 25s/attempt; retry once then next in ListModels chain
+          - Mic STT shares the same fallback chain; HiDPI centre-column framing
+          - E2E `--selftest` mock + live GEMINI_API_KEY; see selftest.txt
 
 
           EOF

@@ -9,7 +9,10 @@ namespace LiaDesktop.Services;
 /// <summary>Gemini generateContent + tool loop helpers (v1beta REST).</summary>
 public sealed class GeminiClient
 {
-    public static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(90);
+    /// <summary>HttpClient ceiling — per-attempt uses <see cref="AttemptTimeout"/>.</summary>
+    public static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(120);
+    /// <summary>Per generateContent attempt (~25s). 503/429/timeout → retry once, then next model.</summary>
+    public static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(25);
 
     readonly HttpClient _http = new() { Timeout = HttpTimeout };
     readonly SecretsStore _secrets;
@@ -65,115 +68,104 @@ public sealed class GeminiClient
         if (string.IsNullOrWhiteSpace(cfg.ApiKey))
             throw new HttpRequestException("Нет ключа Gemini. Введите ключ в Настройках.", null, System.Net.HttpStatusCode.Unauthorized);
 
-        // Always validate against ListModels — never keep a phantom name like gemini-3.8-flash.
+        IReadOnlyList<GeminiModelInfo> listed;
         try
         {
-            var (resolved, _, migrated) = await GeminiModels.ResolveAsync(cfg.ApiKey, cfg.Model, _http, ct);
-            if (migrated || !string.Equals(cfg.Model, resolved, StringComparison.OrdinalIgnoreCase))
-            {
-                _log.Info(string.IsNullOrWhiteSpace(cfg.Model)
-                    ? $"Модель: {resolved}"
-                    : $"Модель «{cfg.Model}» недоступна → {resolved}");
-                SwitchPersist(resolved);
-                cfg = _secrets.Load();
-            }
-            else SetModel(resolved);
+            listed = await GeminiModels.ListAsync(cfg.ApiKey, _http, ct);
         }
         catch (OperationCanceledException) { throw; }
 
-        cfg = _secrets.Load();
-        var model = string.IsNullOrWhiteSpace(cfg.Model) ? ActiveModel : cfg.Model;
-        if (string.IsNullOrWhiteSpace(model))
-            throw new InvalidOperationException("Модель не выбрана.");
+        var userChoice = cfg.Model;
+        var chain = GeminiModels.BuildFallbackChain(listed, userChoice);
+        if (chain.Count == 0)
+            throw new InvalidOperationException("Нет доступных моделей Gemini (ListModels пуст).");
 
-        var tried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var overloadRetries = 0;
-        const int maxOverloadTries = 5;
+        // Persist default if saved model was retired / missing
+        var head = chain[0];
+        if (!string.Equals(cfg.Model, head, StringComparison.OrdinalIgnoreCase))
+        {
+            _log.Info(string.IsNullOrWhiteSpace(cfg.Model) || GeminiModels.IsRetired(cfg.Model)
+                ? $"Модель: {head}"
+                : $"Модель «{cfg.Model}» недоступна → {head}");
+            SwitchPersist(head);
+        }
+        else SetModel(head);
 
-        while (true)
+        Exception? last = null;
+        foreach (var model in chain)
         {
             ct.ThrowIfCancellationRequested();
-            tried.Add(model);
             SetModel(model);
-            try
+            // Per model: attempt + one retry on 503/429/timeout, then next model
+            for (var attempt = 0; attempt < 2; attempt++)
             {
-                return await GenerateOnceAsync(cfg.ApiKey, model, system, contents, tools, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                var status = ex is GeminiHttpException ghe ? ghe.Status
-                    : (ex as HttpRequestException)?.StatusCode is { } sc ? (int)sc : (int?)null;
-                var msg = ex.Message;
-                // HttpClient timeout surfaces as TaskCanceledException without abort
-                if (ex is TaskCanceledException or TimeoutException && !ct.IsCancellationRequested)
+                try
                 {
-                    status ??= 408;
-                    msg = "Таймаут запроса к Gemini (>90с)";
+                    _log.Info(attempt == 0
+                        ? $"Запрос → {model} (лимит {AttemptTimeout.TotalSeconds:0}с)"
+                        : $"Повтор → {model}");
+                    var turn = await GenerateOnceAsync(cfg.ApiKey, model, system, contents, tools, ct);
+                    _log.Info($"Ответ от {model}");
+                    SwitchPersist(model); // remember what worked
+                    return turn;
                 }
-
-                if (GeminiModels.IsModelUnavailable(msg, status))
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    var suggested = GeminiModels.ParseSuggestedModel(msg);
-                    if (suggested != null && tried.Add(suggested))
-                    {
-                        _log.Info($"Модель недоступна → {suggested}");
-                        SwitchPersist(suggested);
-                        model = suggested;
-                        overloadRetries = 0;
-                        continue;
-                    }
-                    var models = await GeminiModels.ListAsync(cfg.ApiKey, _http, ct);
-                    var next = GeminiModels.NextFlashFallbacks(models, model).FirstOrDefault(id => tried.Add(id));
-                    if (next != null)
-                    {
-                        _log.Info($"Модель недоступна → {next}");
-                        SwitchPersist(next);
-                        model = next;
-                        overloadRetries = 0;
-                        continue;
-                    }
+                    throw;
                 }
-
-                if (GeminiModels.IsOverload(msg, status))
+                catch (Exception ex)
                 {
-                    if (overloadRetries < maxOverloadTries)
+                    last = ex;
+                    var status = ex is GeminiHttpException ghe ? ghe.Status
+                        : (ex as HttpRequestException)?.StatusCode is { } sc ? (int)sc : (int?)null;
+                    var msg = ex.Message;
+                    var timedOut = ex is TaskCanceledException or TimeoutException && !ct.IsCancellationRequested;
+                    if (timedOut)
                     {
-                        var waitSec = RetryWaitSeconds(ex, overloadRetries);
-                        _log.Info($"Модель перегружена (HTTP {status?.ToString() ?? "?"}), жду {waitSec:0.#}с…");
-                        // Delay uses abort token only — no short linked timeout
-                        await Task.Delay(TimeSpan.FromSeconds(waitSec), ct);
-                        overloadRetries++;
-                        continue;
+                        status ??= 408;
+                        msg = $"Таймаут {AttemptTimeout.TotalSeconds:0}с";
                     }
-                    var models = await GeminiModels.ListAsync(cfg.ApiKey, _http, ct);
-                    var next = GeminiModels.NextFlashFallbacks(models, model)
-                        .FirstOrDefault(id => tried.Add(id));
-                    if (next != null)
-                    {
-                        _log.Info($"Модель перегружена, переключаюсь на {next}");
-                        SwitchPersist(next);
-                        model = next;
-                        overloadRetries = 0;
-                        continue;
-                    }
-                }
 
-                var classified = GeminiModels.Classify(ex, status);
-                throw new GeminiUserException(classified);
+                    if (GeminiModels.IsModelUnavailable(msg, status))
+                    {
+                        var suggested = GeminiModels.ParseSuggestedModel(msg);
+                        _log.Info($"Модель {model} недоступна (HTTP {status?.ToString() ?? "?"})");
+                        if (suggested != null &&
+                            chain.Any(c => c.Equals(suggested, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            // Jump: next loop iterations will hit suggested if still ahead; otherwise continue chain
+                        }
+                        break; // next model — no second attempt on hard 404
+                    }
+
+                    if (GeminiModels.IsOverload(msg, status) || timedOut || status is 408)
+                    {
+                        _log.Info($"{model}: {(timedOut ? "таймаут" : $"HTTP {status}")} — {(attempt == 0 ? "повтор" : "следующая модель")}");
+                        if (attempt == 0)
+                        {
+                            var wait = RetryWaitSeconds(ex);
+                            await Task.Delay(TimeSpan.FromSeconds(wait), ct);
+                            continue;
+                        }
+                        break; // next model
+                    }
+
+                    // Auth / other — don't burn the whole chain
+                    throw new GeminiUserException(GeminiModels.Classify(ex, status));
+                }
             }
         }
+
+        var classified = GeminiModels.Classify(last ?? new Exception("Все модели недоступны"), 503);
+        throw new GeminiUserException(classified);
     }
 
-    /// <summary>1s,2s,4s,8s,16s — honor Retry-After when present.</summary>
-    static double RetryWaitSeconds(Exception ex, int attemptZeroBased)
+    /// <summary>Short pause before same-model retry; honor Retry-After (clamped 1–5s).</summary>
+    static double RetryWaitSeconds(Exception ex)
     {
         if (ex is GeminiHttpException { RetryAfterSeconds: > 0 } g)
-            return Math.Clamp(g.RetryAfterSeconds.Value, 1, 60);
-        return Math.Min(16, 1 << attemptZeroBased); // 1,2,4,8,16
+            return Math.Clamp(g.RetryAfterSeconds.Value, 1, 5);
+        return 1;
     }
 
     /// <summary>Simple text-only helper used by settings smoke / short chats.</summary>
@@ -299,9 +291,9 @@ public sealed class GeminiClient
             Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
         };
 
-        // Per-request abort+timeout: never shorter than HttpTimeout; abort still works.
+        // Per-attempt ~25s (abort CT still cancels immediately).
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(HttpTimeout);
+        timeoutCts.CancelAfter(AttemptTimeout);
         using var res = await _http.SendAsync(req, timeoutCts.Token);
         var json = await res.Content.ReadAsStringAsync(ct);
         if (!res.IsSuccessStatusCode)

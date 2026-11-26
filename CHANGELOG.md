@@ -2,10 +2,10 @@
 
 ## v0.6.9 — Gemini resilience, mic STT fallback, HiDPI centre stage
 
-- Gemini: 90s HttpClient, retry 503/429 with 1/2/4/8/16s + Retry-After (max 5), ListModels fallback, RU HTTP errors; settings dropdown validates models
-- Mic: when Windows ru-RU Speech missing → WASAPI + VAD → Gemini inline audio STT; TTS playback hardened (SvetlanaNeural)
-- Layout: hologram only in centre 0.56 column; swapchain uses max(CompositionScale, RasterizationScale); CI 1080p/4K framing asserts
-- CI E2E `--selftest` against mock Gemini (normal / 503×2 / 429 Retry-After / slow 20s / 404→ListModels) + optional live `GEMINI_API_KEY`; gates release via `selftest.txt`
+- Gemini default `gemini-flash-lite-latest`; fallback chain [user, flash-lite-latest, 3.1/3.5-flash-lite, 3.8/3.7-flash] ∩ ListModels; 25s/attempt, retry once on 503/429/timeout then next model; journal logs which model answered
+- Mic STT uses the same generateContent fallback chain; Windows Speech → WaveIn+Gemini when missing
+- Layout: hologram only in centre 0.56 column; physical swapchain scale; CI 1080p/4K framing asserts
+- CI E2E `--selftest` mock (normal/503/429/slow/404) + live `GEMINI_API_KEY` must pass; `selftest.txt` gates release
 
 
 ## v0.6.8 — neck fade below jaw; clean chin

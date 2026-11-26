@@ -50,7 +50,7 @@ public static class SelfTestRunner
             var cfg = services.Secrets.Load();
             cfg.Provider = "gemini";
             cfg.ApiKey = "ci-mock-key";
-            cfg.Model = "gemini-3.8-flash"; // phantom → ListModels fallback
+            cfg.Model = "gemini-2.5-flash"; // retired → flash-lite-latest via ListModels
             cfg.VisionModel = cfg.Model;
             services.Secrets.Save(cfg);
 
@@ -65,7 +65,10 @@ public static class SelfTestRunner
 
             if (!string.IsNullOrWhiteSpace(liveKey))
             {
-                failed += await RunLiveAsync(services, liveKey!, L);
+                var liveFail = await RunLiveAsync(services, liveKey!, L);
+                failed += liveFail;
+                if (liveFail != 0)
+                    L("FAIL live: at least one real model must answer (flash-lite-latest preferred)");
             }
             else
             {
@@ -112,24 +115,25 @@ public static class SelfTestRunner
         await SetScenario("normal");
         fail += await OneTurnAsync(s, "привет", "normal+listmodels", L, expectRu: true);
 
-        // 2) 503 x2 then 200
+        // 2) 503 x2 then 200 (same model: attempt + 1 retry, then would move — mock succeeds on 3rd hit
+        //    so force single-model by scenario that returns 503 twice then 200 on same id)
         await SetScenario("overload503");
-        PersistModel(s, "gemini-2.5-flash");
-        fail += await OneTurnAsync(s, "привет", "overload503", L, expectRu: true);
+        PersistModel(s, "gemini-flash-lite-latest");
+        fail += await OneTurnAsync(s, "привет", "overload503", L, expectRu: true, timeoutSec: 90);
 
         // 3) 429 + Retry-After
         await SetScenario("retry429");
-        PersistModel(s, "gemini-2.5-flash");
+        PersistModel(s, "gemini-flash-lite-latest");
         fail += await OneTurnAsync(s, "привет", "retry429", L, expectRu: true);
 
-        // 4) slow 20s (under 90s client timeout)
+        // 4) slow 20s (under 25s attempt? — 20s OK; if flaky bump attempt — mock sleeps 20)
         await SetScenario("slow20");
-        PersistModel(s, "gemini-2.5-flash");
-        fail += await OneTurnAsync(s, "привет", "slow20", L, expectRu: true, timeoutSec: 75);
+        PersistModel(s, "gemini-flash-lite-latest");
+        fail += await OneTurnAsync(s, "привет", "slow20", L, expectRu: true, timeoutSec: 60);
 
-        // 5) generateContent 404 → suggested flash fallback
+        // 5) generateContent 404 on lite → chain moves to next preferred
         await SetScenario("badmodel");
-        PersistModel(s, "gemini-2.5-flash-lite");
+        PersistModel(s, "gemini-3.1-flash-lite");
         fail += await OneTurnAsync(s, "привет", "badmodel404", L, expectRu: true);
 
         return fail;
@@ -156,7 +160,8 @@ public static class SelfTestRunner
             cfg.Model = ""; // resolve via ListModels
             cfg.VisionModel = "";
             s.Secrets.Save(cfg);
-            return await OneTurnAsync(s, "привет", "live", L, expectRu: true, timeoutSec: 90);
+            // Chain may walk preferred models (25s each × 2); lite-latest should answer fast.
+            return await OneTurnAsync(s, "привет", "live", L, expectRu: true, timeoutSec: 120);
         }
         finally
         {
