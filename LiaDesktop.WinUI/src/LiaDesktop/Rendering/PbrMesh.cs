@@ -98,11 +98,11 @@ public sealed class PbrMesh
         }
         // Geometric neck trim: drop triangles entirely below the cut (stump + shoulder notch).
         // Shader still clips + fades for a smooth edge; this removes the jagged silhouette verts.
-        idx = TrimTrianglesBelow(pos, idx, cutY: 0.300f);
+        idx = TrimTrianglesBelow(pos, idx, cutY: 0.305f);
         return new PbrMesh(pos, nrm, uvs, idx, shapes, eyeL, eyeR);
     }
 
-    /// <summary>Keep a triangle if any vertex is at/above cutY (straddling tris stay for the fade band).</summary>
+    /// <summary>Keep a triangle only if ALL verts are at/above cutY — clean horizontal-ish trim, no stump/notch flaps.</summary>
     static int[] TrimTrianglesBelow(float[] pos, int[] idx, float cutY)
     {
         var kept = new List<int>(idx.Length);
@@ -112,7 +112,7 @@ public sealed class PbrMesh
             var ya = pos[a * 3 + 1];
             var yb = pos[b * 3 + 1];
             var yc = pos[c * 3 + 1];
-            if (ya >= cutY || yb >= cutY || yc >= cutY)
+            if (ya >= cutY && yb >= cutY && yc >= cutY)
             {
                 kept.Add(a); kept.Add(b); kept.Add(c);
             }
