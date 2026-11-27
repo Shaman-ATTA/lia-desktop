@@ -30,7 +30,7 @@
     <AssemblyName>LiaDesktop</AssemblyName>
     <Product>Lia Assistant</Product>
     <Company>ATTA CORP</Company>
-    <Version>0.7.0</Version>
+    <Version>0.7.1</Version>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <!-- Shrink satellite assemblies — keep en only -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -51,6 +51,7 @@
     <PackageReference Include="System.Drawing.Common" Version="8.0.11" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="NAudio.WinMM" Version="2.2.1" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.1 — Barge-in / natural interruption
+
+- **Mic open while speaking:** WASAPI communications capture (OS AEC) + software echo-cancel VAD; ≥300ms user speech barges in.
+- **Interrupt policy:** backchannels (`угу`/`ага`/`да`/`продолжай`/`дальше`/`так`) resume remainder; `стоп`/`хватит`/`замолчи`/`тихо` stop silent; else new request with spoken-so-far context.
+- **HUD:** `СЛУШАЮ` on barge-in; Edge TTS SvetlanaNeural unchanged (no Gemini TTS).
+- **Selftest:** `barge_loopback` / `barge_backchannel` / `barge_stop` / `barge_new` gates in `selftest.txt`.
+
 ## v0.7.0 — Edge TTS Sec-MS-GEC, SAPI fallback, HiDPI MatrixTransform
 
 - **TTS:** C# WebSocket path ports edge-tts 7.3.1 Sec-MS-GEC v2 DRM (clock-skew adjust on 403). Python fallback removed.

@@ -20,25 +20,44 @@ public sealed class AgentService
     readonly AppLog _log;
     readonly ToolHost _tools;
     readonly EdgeTts _tts;
+    readonly BargeInService _barge;
     CancellationTokenSource? _cts;
+    string? _activeReply;
 
     public event Action<string>? Narrate;
     public event Action<float, float, float>? Mouth; // jaw, funnel, wide
     public event Action<string>? SpeakFile;
+    public event Action? BargeInListening; // HUD → СЛУШАЮ
+    public event Action? BargeInEnded;
 
-    public AgentService(GeminiClient gemini, SecretsStore secrets, AppLog log, ToolHost tools, EdgeTts tts)
+    public string? ActiveReply => _activeReply;
+
+    public AgentService(
+        GeminiClient gemini,
+        SecretsStore secrets,
+        AppLog log,
+        ToolHost tools,
+        EdgeTts tts,
+        BargeInService barge)
     {
         _gemini = gemini;
         _secrets = secrets;
         _log = log;
         _tools = tools;
         _tts = tts;
+        _barge = barge;
+
+        _barge.MouthStop += () => Mouth?.Invoke(0, 0, 0);
+        _barge.Listening += () => BargeInListening?.Invoke();
+        _barge.Decision += OnBargeDecision;
     }
 
     public void Abort()
     {
         _cts?.Cancel();
         _tts.Stop();
+        _barge.AbortPlayback();
+        _activeReply = null;
         _log.Info("Остановлено.");
     }
 
@@ -67,13 +86,7 @@ public sealed class AgentService
                 reply = await GeminiAgentLoopAsync(userText, ct);
 
             if (ct.IsCancellationRequested) return;
-            Narrate?.Invoke(reply);
-            _log.Info(reply.Length > 160 ? reply[..160] + "…" : reply);
-
-            _ = DriveMouthWhileSpeakAsync(reply, ct);
-            var path = await _tts.SpeakToFileAsync(reply, ct);
-            if (path != null && File.Exists(path))
-                SpeakFile?.Invoke(path);
+            await SpeakReplyAsync(reply, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -81,7 +94,6 @@ public sealed class AgentService
         }
         catch (OperationCanceledException ex)
         {
-            // HttpClient timeout (not user abort)
             var c = GeminiModels.Classify(ex, 408);
             _log.Error(c.UserMessage, c.Detail);
             Narrate?.Invoke(c.UserMessage);
@@ -96,6 +108,95 @@ public sealed class AgentService
             var c = GeminiModels.Classify(ex);
             _log.Error(c.UserMessage, c.Detail);
             Narrate?.Invoke(c.UserMessage);
+        }
+    }
+
+    async Task SpeakReplyAsync(string reply, CancellationToken ct)
+    {
+        _activeReply = reply;
+        Narrate?.Invoke(reply);
+        _log.Info(reply.Length > 160 ? reply[..160] + "…" : reply);
+
+        _ = DriveMouthWhileSpeakAsync(reply, ct);
+        var path = await _tts.SpeakToFileAsync(reply, ct);
+        if (path == null || !File.Exists(path)) return;
+
+        SpeakFile?.Invoke(path);
+        // Playback + barge-in run async so RunAsync can return after TTS file is ready
+        // (selftest / UI). Decision handler owns resume/stop/new-request.
+        _ = MonitorPlaybackAsync(path, reply, ct);
+    }
+
+    async Task MonitorPlaybackAsync(string path, string reply, CancellationToken ct)
+    {
+        try
+        {
+            var end = await _barge.PlayFileAsync(path, reply, ct);
+            if (end == BargeInService.PlayEnd.Completed)
+            {
+                if (_activeReply == reply) _activeReply = null;
+                BargeInEnded?.Invoke();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Info("playback monitor: " + ex.Message);
+            BargeInEnded?.Invoke();
+        }
+    }
+
+    void OnBargeDecision(InterruptKind kind, string userText, string spoken, string remaining)
+    {
+        _ = HandleBargeDecisionAsync(kind, userText, spoken, remaining);
+    }
+
+    async Task HandleBargeDecisionAsync(
+        InterruptKind kind, string userText, string spoken, string remaining)
+    {
+        try
+        {
+            switch (kind)
+            {
+                case InterruptKind.Stop:
+                    _log.Info("Barge-in: стоп — молчу.");
+                    _activeReply = null;
+                    _cts?.Cancel();
+                    BargeInEnded?.Invoke();
+                    break;
+
+                case InterruptKind.Backchannel:
+                    _log.Info("Barge-in: backchannel — продолжаю.");
+                    if (string.IsNullOrWhiteSpace(remaining))
+                    {
+                        BargeInEnded?.Invoke();
+                        break;
+                    }
+                    // Resume remainder without a new Gemini turn
+                    _cts ??= new CancellationTokenSource();
+                    var ctResume = _cts.Token;
+                    await SpeakReplyAsync(remaining, ctResume);
+                    break;
+
+                case InterruptKind.NewRequest:
+                default:
+                    _log.Info("Barge-in: новый запрос.");
+                    _activeReply = null;
+                    _cts?.Cancel();
+                    var ctx =
+                        "Пользователь прервал ответ. " +
+                        (string.IsNullOrWhiteSpace(spoken)
+                            ? "Ты ещё почти ничего не сказала. "
+                            : $"Ты уже сказала: «{spoken}». ") +
+                        "Остаток прежнего ответа отменён. " +
+                        $"Новый запрос пользователя: {userText}";
+                    await RunAsync(ctx);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Barge-in handle", ex.Message);
+            BargeInEnded?.Invoke();
         }
     }
 

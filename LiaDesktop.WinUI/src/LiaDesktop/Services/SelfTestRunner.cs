@@ -66,6 +66,9 @@ public static class SelfTestRunner
             // TTS gates — must prove C# WebSocket alone (no Python) + SAPI offline
             failed += await RunTtsGatesAsync(services, L);
 
+            // Barge-in: backchannel / stop / new-request + TTS loopback must not trigger
+            failed += await RunBargeInGatesAsync(services, L);
+
             if (!string.IsNullOrWhiteSpace(liveKey))
             {
                 var liveFail = await RunLiveAsync(services, liveKey!, L);
@@ -336,6 +339,135 @@ public static class SelfTestRunner
         }
 
         return fail;
+    }
+
+    /// <summary>
+    /// Mock barge-in: TTS loopback must not trigger; user WAV over TTS → classify
+    /// backchannel / stop / new-request.
+    /// </summary>
+    static async Task<int> RunBargeInGatesAsync(AppServices s, Action<string> L)
+    {
+        var fail = 0;
+        try
+        {
+            // --- loopback: TTS alone into mic must NOT barge ---
+            var vad = new EchoCancelVad();
+            var tts = MakeTone(EchoCancelVad.SampleRate * 2, 220f, 0.4f);
+            const int frame = 320;
+            for (var off = 0; off + frame <= tts.Length; off += frame)
+            {
+                var slice = tts.AsSpan(off, frame);
+                vad.PushPlayback(slice);
+                var mic = new float[frame];
+                for (var i = 0; i < frame; i++) mic[i] = slice[i] * 0.7f;
+                if (vad.PushMic(mic))
+                {
+                    L("FAIL barge_loopback: TTS loopback triggered barge-in");
+                    fail++;
+                    break;
+                }
+            }
+            if (!vad.Triggered) L("barge_loopback: PASS (own TTS did not trigger)");
+
+            fail += await OneBargeScenarioAsync(s, L, "barge_backchannel", "угу", InterruptKind.Backchannel);
+            fail += await OneBargeScenarioAsync(s, L, "barge_stop", "стоп", InterruptKind.Stop);
+            fail += await OneBargeScenarioAsync(s, L, "barge_new", "открой блокнот", InterruptKind.NewRequest);
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL barge_in: {ex.GetType().Name}: {ex.Message}");
+            fail++;
+        }
+        return fail;
+    }
+
+    static async Task<int> OneBargeScenarioAsync(
+        AppServices s, Action<string> L, string name, string sttText, InterruptKind expect)
+    {
+        var barge = s.BargeIn;
+        var tts = MakeTone(EchoCancelVad.SampleRate * 2, 180f, 0.35f);
+        var user = MakeTone(EchoCancelVad.SampleRate, 880f, 0.55f);
+        var userStart = EchoCancelVad.SampleRate / 5;
+        var micOff = 0;
+
+        barge.MockPlaybackPcm = tts;
+        barge.MockMicPull = () =>
+        {
+            const int frame = 320;
+            if (micOff + frame > tts.Length) return Array.Empty<float>();
+            var mic = new float[frame];
+            for (var i = 0; i < frame; i++)
+            {
+                var idx = micOff + i;
+                float u = 0;
+                if (idx >= userStart)
+                {
+                    var ui = idx - userStart;
+                    if (ui < user.Length) u = user[ui];
+                }
+                mic[i] = tts[idx] * 0.45f + u;
+            }
+            micOff += frame;
+            return mic;
+        };
+        barge.MockStt = (_, _) => Task.FromResult(sttText);
+
+        InterruptKind? got = null;
+        string? gotText = null;
+        void OnDec(InterruptKind k, string t, string _, string __)
+        {
+            got = k;
+            gotText = t;
+        }
+        barge.Decision += OnDec;
+        var listening = false;
+        void OnListen() => listening = true;
+        barge.Listening += OnListen;
+
+        try
+        {
+            var dummy = Path.Combine(Path.GetTempPath(), $"lia-barge-dummy-{Guid.NewGuid():N}.wav");
+            await File.WriteAllBytesAsync(dummy, new byte[] { 0 }); // path unused in mock mode
+            var end = await barge.PlayFileAsync(
+                dummy,
+                "Первое предложение. Второе предложение. Третье.",
+                CancellationToken.None);
+            try { File.Delete(dummy); } catch { /* */ }
+
+            if (end != BargeInService.PlayEnd.Barged)
+            {
+                L($"FAIL {name}: expected Barged, got {end}");
+                return 1;
+            }
+            if (!listening)
+            {
+                L($"FAIL {name}: Listening (СЛУШАЮ) event not raised");
+                return 1;
+            }
+            if (got != expect)
+            {
+                L($"FAIL {name}: kind={got} expected={expect} text={gotText}");
+                return 1;
+            }
+            L($"PASS {name}: kind={got} text={gotText}");
+            return 0;
+        }
+        finally
+        {
+            barge.Decision -= OnDec;
+            barge.Listening -= OnListen;
+            barge.MockPlaybackPcm = null;
+            barge.MockMicPull = null;
+            barge.MockStt = null;
+        }
+    }
+
+    static float[] MakeTone(int samples, float freq, float amp)
+    {
+        var a = new float[samples];
+        for (var i = 0; i < samples; i++)
+            a[i] = amp * MathF.Sin(2 * MathF.PI * freq * i / EchoCancelVad.SampleRate);
+        return a;
     }
 
     static string Truncate(string s, int n) => s.Length <= n ? s : s[..n] + "…";

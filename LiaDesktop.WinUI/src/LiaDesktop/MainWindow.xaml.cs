@@ -68,36 +68,34 @@ public sealed partial class MainWindow : Window
         });
         _player.Volume = 1.0;
         _player.AudioCategory = MediaPlayerAudioCategory.Speech;
-        _player.MediaEnded += (_, _) => DispatcherQueue.TryEnqueue(OnSpeakEnded);
-        _player.MediaFailed += (_, e) => DispatcherQueue.TryEnqueue(() =>
-        {
-            _s.Log.Error("TTS playback failed", e.ErrorMessage ?? "MediaFailed");
-            OnSpeakEnded();
-        });
+        // Playback is owned by BargeInService (WASAPI communications + AEC/VAD).
+        // SpeakFile only updates HUD chrome; MediaPlayer kept as emergency fallback.
         _s.Agent.SpeakFile += path => DispatcherQueue.TryEnqueue(() =>
         {
-            try
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             {
-                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                {
-                    _s.Log.Error("TTS: файл не найден", path ?? "");
-                    return;
-                }
-                _speaking = true;
-                StatusCaption.Text = "ГОВОРЮ";
-                VoiceLine.Text = "ГОЛОС  ГОВОРЮ";
-                // file:/// URI — MediaPlayer needs an absolute path URI
-                var uri = new Uri(System.IO.Path.GetFullPath(path));
-                _player.Source = MediaSource.CreateFromUri(uri);
-                _player.Play();
-                _s.Log.Info("TTS: воспроизведение SvetlanaNeural");
+                _s.Log.Error("TTS: файл не найден", path ?? "");
+                return;
             }
-            catch (Exception ex)
-            {
-                _s.Log.Error("TTS playback", ex.Message);
-                OnSpeakEnded();
-            }
+            _speaking = true;
+            StatusCaption.Text = "ГОВОРЮ";
+            VoiceLine.Text = "ГОЛОС  ГОВОРЮ";
+            _s.Log.Info("TTS: воспроизведение SvetlanaNeural (barge-in)");
         });
+        _s.Agent.BargeInListening += () => DispatcherQueue.TryEnqueue(() =>
+        {
+            _speaking = false;
+            _listening = true;
+            Holo.Renderer.SetListening(true);
+            Holo.Renderer.Jaw = 0;
+            Holo.Renderer.Funnel = 0;
+            Holo.Renderer.Wide = 0;
+            StatusCaption.Text = "СЛУШАЮ";
+            VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
+            MicGlyph.Text = "■";
+            Subtitle.Text = "Перебивание · слушаю вас";
+        });
+        _s.Agent.BargeInEnded += () => DispatcherQueue.TryEnqueue(OnSpeakEnded);
 
         _s.Speech.FinalResult += OnSpeechFinal;
         _s.MicGemini.FinalResult += text => DispatcherQueue.TryEnqueue(() =>
@@ -810,6 +808,13 @@ public sealed partial class MainWindow : Window
     void OnSpeakEnded()
     {
         _speaking = false;
+        // Barge-in listening chrome ends with playback; dedicated mic session keeps _listening
+        if (!_s.BargeIn.IsPlaying)
+        {
+            _listening = false;
+            Holo.Renderer.SetListening(false);
+            MicGlyph.Text = "◉";
+        }
         StatusCaption.Text = "ОЖИДАНИЕ";
         VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
         Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";

@@ -103,11 +103,11 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command 7z -ErrorAction SilentlyContinue) {
-            7z a -tzip -mx=9 LiaDesktop-0.7.0-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
+            7z a -tzip -mx=9 LiaDesktop-0.7.1-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
           } else {
-            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.0-win-x64.zip -CompressionLevel Optimal -Force
+            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.1-win-x64.zip -CompressionLevel Optimal -Force
           }
-          Get-Item LiaDesktop-0.7.0-win-x64.zip | Format-List Name,Length
+          Get-Item LiaDesktop-0.7.1-win-x64.zip | Format-List Name,Length
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -120,10 +120,10 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found" }
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           & $iscc /Q installer\LiaDesktop.iss
-          $setup = Get-Item artifacts\LiaDesktop-0.7.0-setup.exe
-          Copy-Item $setup.FullName .\LiaDesktop-0.7.0-setup.exe -Force
+          $setup = Get-Item artifacts\LiaDesktop-0.7.1-setup.exe
+          Copy-Item $setup.FullName .\LiaDesktop-0.7.1-setup.exe -Force
           $setup | Format-List Name,Length
-          $zip = Get-Item LiaDesktop-0.7.0-win-x64.zip
+          $zip = Get-Item LiaDesktop-0.7.1-win-x64.zip
           Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
 
       - name: E2E selftest (mock Gemini + optional live key)
@@ -537,7 +537,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $PWD 'LiaDesktop-0.7.0-setup.exe'
+          $setup = Join-Path $PWD 'LiaDesktop-0.7.1-setup.exe'
           if (-not (Test-Path $setup)) { throw "setup missing" }
           $dir = Join-Path $env:LOCALAPPDATA 'LiaDesktop-smoke'
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
@@ -563,8 +563,8 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.7.0-win-x64.zip
-            LiaDesktop-0.7.0-setup.exe
+            LiaDesktop-0.7.1-win-x64.zip
+            LiaDesktop-0.7.1-setup.exe
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_profile.png
@@ -606,12 +606,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.0** — Edge TTS Sec-MS-GEC, SAPI fallback, HiDPI MatrixTransform
+          Lia Desktop **v0.7.1** — Barge-in interruption + Edge TTS SvetlanaNeural
 
-          - C# Edge TTS WebSocket with Sec-MS-GEC v2 (edge-tts 7.3.1 DRM) + clock-skew retry; no Python
-          - Offline SAPI/OneCore voice fallback; journal errors collapsed to one line (full log under %LOCALAPPDATA%)
-          - Maximize/HiDPI: physical buffers + MatrixTransform + settle; exact 1920/4K offscreen dumps (virtual swapchain)
-          - E2E `--selftest` requires `tts_ws_only` + `tts_sapi` + live Gemini; see selftest.txt
+          - Mic stays open while speaking: WASAPI communications AEC + echo-cancel VAD (≥300ms)
+          - Backchannel resume / stop / new-request with spoken-so-far context; HUD СЛУШАЮ
+          - Edge TTS ru-RU-SvetlanaNeural unchanged (no Gemini TTS)
+          - E2E `--selftest` gates: tts_ws_only, tts_sapi, barge_loopback/backchannel/stop/new; see selftest.txt
 
 
           EOF
@@ -621,7 +621,7 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "$NOTES"
           fi
-          for f in LiaDesktop-0.7.0-win-x64.zip LiaDesktop-0.7.0-setup.exe \
+          for f in LiaDesktop-0.7.1-win-x64.zip LiaDesktop-0.7.1-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
                    desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt \
@@ -636,17 +636,17 @@ jobs:
           done
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG} (draft)"
 
-      - name: Mirror assets to draft v0.7.0 on main pushes
+      - name: Mirror assets to draft v0.7.1 on main pushes
         if: success() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.7.0
+          TAG=v0.7.1
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "v0.7.0 TTS+HiDPI (draft)"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "v0.7.1 barge-in (draft)"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft || true
-          for f in LiaDesktop-0.7.0-win-x64.zip LiaDesktop-0.7.0-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt tasklist_after.txt layout_*.png; do
+          for f in LiaDesktop-0.7.1-win-x64.zip LiaDesktop-0.7.1-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt tasklist_after.txt layout_*.png; do
             for m in $f; do
               [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
             done
