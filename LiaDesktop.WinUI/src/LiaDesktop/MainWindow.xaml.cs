@@ -619,27 +619,28 @@ public sealed partial class MainWindow : Window
         var finalW = rw > 0 ? rw : vw;
         var finalH = rh > 0 ? rh : vh;
 
+        var big = finalW >= 3000 || finalH >= 2000;
         DispatcherQueue.TryEnqueue(async () =>
         {
             try
             {
-                await Task.Delay(1200);
+                await Task.Delay(big ? 2000 : 1200);
                 ApplyVirtualWindowSize(startW, startH);
-                await Task.Delay(1800);
+                await Task.Delay(big ? 3500 : 1800);
                 if (rw > 0)
                 {
                     Program.BootLog($"smoke-virtual-resize-after → {finalW}x{finalH}");
                     ApplyVirtualWindowSize(finalW, finalH);
-                    await Task.Delay(2500);
+                    await Task.Delay(big ? 4500 : 2500);
                 }
                 else
-                    await Task.Delay(800);
+                    await Task.Delay(big ? 2000 : 800);
 
                 // A few frames so scene color is current
-                for (var i = 0; i < 4; i++)
+                for (var i = 0; i < (big ? 8 : 4); i++)
                 {
                     Holo.Renderer.Tick(0.016f);
-                    await Task.Delay(40);
+                    await Task.Delay(big ? 80 : 40);
                 }
 
                 DumpVirtualComposite(dumpPath!, finalW, finalH);
