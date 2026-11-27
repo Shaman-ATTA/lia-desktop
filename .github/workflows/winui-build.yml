@@ -306,12 +306,16 @@ jobs:
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_1080.png') @('--smoke-yaw=5') 10 1920 1080
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_4k.png') @('--smoke-yaw=5') 12 3840 2160
 
-          # DPI × windowed/max matrix (force-scale simulates CompositionScale; MatrixTransform must compensate)
+          # Layout matrix: 100% MUST reproduce small→maximize (field bug) + already-maximized.
+          # Higher scales keep force-scale + windowed/max. Assert via check_framing assert_layout_shot.
           function Invoke-LayoutShot([string]$shotPath, [int]$forceW, [int]$forceH, [double]$scale, [string]$mode) {
             $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
             if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
             $scaleArg = "--force-scale=$($scale.ToString([System.Globalization.CultureInfo]::InvariantCulture))"
-            $args = @('--smoke-yaw=5', $scaleArg, "--smoke-size=${forceW}x${forceH}")
+            # max / maxlaunch: start SMALL so swapchain must resize after maximize (the real TV bug)
+            $launchW = if ($mode -eq 'windowed') { $forceW } else { 1024 }
+            $launchH = if ($mode -eq 'windowed') { $forceH } else { 720 }
+            $args = @('--smoke-yaw=5', $scaleArg, "--smoke-size=${launchW}x${launchH}")
             $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
             for ($i = 0; $i -lt 28; $i++) {
               Start-Sleep -Seconds 1
@@ -323,24 +327,33 @@ jobs:
               $hwnd = Find-Hwnd ([uint32]$p.Id)
               if ($hwnd -ne [IntPtr]::Zero -and $i -ge 8) { break }
             }
-            Start-Sleep -Seconds 3
+            Start-Sleep -Seconds 2
             $hwnd = Find-Hwnd ([uint32]$p.Id)
             if ($hwnd -eq [IntPtr]::Zero) { throw "no hwnd for $shotPath" }
             if ($mode -eq 'max') {
-              # Start windowed small, then maximize (resize-after-launch)
+              # Windowed small first (settle swapchain at 1024x720), then maximize
               [void][Win]::ShowWindow($hwnd, 1)
-              [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 40, 40, [Math]::Min(1100,$forceW), [Math]::Min(700,$forceH), 0x0040)
-              Start-Sleep -Seconds 2
-              [void][Win]::ShowWindow($hwnd, 3) # SW_MAXIMIZE
+              [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 40, 40, 1024, 720, 0x0040)
               Start-Sleep -Seconds 3
+              [void][Win]::ShowWindow($hwnd, 3) # SW_MAXIMIZE
+              # Wait for AppWindow.Changed + settle timers (120/400ms) + tick sync
+              Start-Sleep -Seconds 5
+            } elseif ($mode -eq 'maxlaunch') {
+              # Already maximized path (no small intermediate frame in the capture)
+              [void][Win]::ShowWindow($hwnd, 3)
+              Start-Sleep -Seconds 5
             } else {
               [void][Win]::ShowWindow($hwnd, 1)
               [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $forceW, $forceH, 0x0040)
-              Start-Sleep -Seconds 2
+              Start-Sleep -Seconds 3
             }
             [void][Win]::SetForegroundWindow($hwnd)
-            Start-Sleep -Seconds 3
+            Start-Sleep -Seconds 2
             Capture-Window $hwnd $shotPath
+            if (Test-Path $bootLog) {
+              Write-Host "=== BOOT $shotPath ==="
+              Get-Content $bootLog | Select-String -Pattern 'SwapChain' | Select-Object -Last 8 | Out-Host
+            }
             [void][Win]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
             Start-Sleep -Seconds 5
             if (-not $p.HasExited) { try { $p.Kill($true) } catch {} }
@@ -350,11 +363,18 @@ jobs:
             Write-Host "layout ok $shotPath ($len bytes)"
           }
 
-          $scales = @(1.0, 1.5, 2.0, 2.5, 3.0)
+          # 100% scale first — the field-test failure mode
           foreach ($res in @(@(1920,1080,'1080'), @(3840,2160,'4k'))) {
             $rw = [int]$res[0]; $rh = [int]$res[1]; $rname = [string]$res[2]
-            foreach ($sc in $scales) {
-              $tag = ([int]($sc * 100)).ToString()
+            Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_100_windowed.png") $rw $rh 1.0 'windowed'
+            Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_100_max.png") $rw $rh 1.0 'max'
+            Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_100_maxlaunch.png") $rw $rh 1.0 'maxlaunch'
+          }
+          # Remaining DPI scales (windowed + small→max)
+          foreach ($sc in @(1.5, 2.0, 2.5, 3.0)) {
+            $tag = ([int]($sc * 100)).ToString()
+            foreach ($res in @(@(1920,1080,'1080'), @(3840,2160,'4k'))) {
+              $rw = [int]$res[0]; $rh = [int]$res[1]; $rname = [string]$res[2]
               Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_${tag}_windowed.png") $rw $rh $sc 'windowed'
               Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_${tag}_max.png") $rw $rh $sc 'max'
             }
@@ -375,10 +395,14 @@ jobs:
           $hr = (Get-FileHash desktop_winui_rings.png).Hash
           if ($h3 -eq $hr) { throw "threequarter and rings screenshots are identical — need distinct views" }
           pip install --quiet pillow numpy
-          python tools/check_framing.py desktop_winui_front_1080.png desktop_winui_front_4k.png
-          if ($LASTEXITCODE -ne 0) { throw "framing self-check failed" }
+          # Gate 100% maximize shots first (field bug)
+          python tools/check_framing.py `
+            layout_1080_100_max.png layout_1080_100_maxlaunch.png `
+            layout_4k_100_max.png layout_4k_100_maxlaunch.png `
+            desktop_winui_front_1080.png desktop_winui_front_4k.png
+          if ($LASTEXITCODE -ne 0) { throw "framing self-check failed (100% maximize)" }
           $layoutCount = (Get-ChildItem layout_*.png -ErrorAction SilentlyContinue | Measure-Object).Count
-          if ($layoutCount -lt 20) { throw "expected >=20 layout_*.png, got $layoutCount" }
+          if ($layoutCount -lt 22) { throw "expected >=22 layout_*.png, got $layoutCount" }
           Write-Host "smoke ok (layout shots=$layoutCount)"
 
       - name: Installer silent install / uninstall smoke

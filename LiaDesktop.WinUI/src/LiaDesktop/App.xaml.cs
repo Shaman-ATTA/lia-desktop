@@ -62,14 +62,15 @@ public partial class App : Application
             var appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
             var (w, h) = SelfTestRunner.IsSelfTest ? (1024, 720) : ParseSmokeSize();
             appWindow.Resize(new Windows.Graphics.SizeInt32(w, h));
-            // Maximize / DPI changes must recreate the DX swapchain with MatrixTransform
+            // Maximize / DPI: recreate DX buffers after XAML layout catches up (100% scale TVs)
             appWindow.Changed += (_, e) =>
             {
-                if (e.DidSizeChange || e.DidPresenterChange)
-                {
-                    if (MainWindowInstance is MainWindow mw)
-                        mw.DispatcherQueue.TryEnqueue(() => mw.NotifyStageResized());
-                }
+                if (!(e.DidSizeChange || e.DidPresenterChange)) return;
+                if (MainWindowInstance is not MainWindow mw) return;
+                mw.DispatcherQueue.TryEnqueue(() => mw.NotifyStageResized());
+                // ActualWidth often still stale on the first callback at 100% DPI
+                ScheduleNotify(mw, 120);
+                ScheduleNotify(mw, 400);
             };
             appWindow.Show();
             Program.BootLog($"AppWindow.Show done size={w}x{h}");
@@ -79,5 +80,18 @@ public partial class App : Application
             Program.BootLog("OnLaunched FATAL: " + ex);
             throw;
         }
+    }
+
+    static void ScheduleNotify(MainWindow mw, int delayMs)
+    {
+        var t = mw.DispatcherQueue.CreateTimer();
+        t.IsRepeating = false;
+        t.Interval = TimeSpan.FromMilliseconds(delayMs);
+        t.Tick += (_, _) =>
+        {
+            try { mw.NotifyStageResized(); }
+            finally { t.Stop(); }
+        };
+        t.Start();
     }
 }

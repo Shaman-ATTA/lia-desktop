@@ -140,7 +140,14 @@ public sealed partial class MainWindow : Window
     /// <summary>Called when AppWindow size/presenter changes (maximize, DPI move).</summary>
     public void NotifyStageResized()
     {
-        try { Holo.ForceRecreateSwapChain(); }
+        try
+        {
+            // Invalidate stage layout so HoloPanel ActualWidth catches up before buffer resize
+            StageGrid.InvalidateMeasure();
+            StageGrid.InvalidateArrange();
+            Holo.InvalidateMeasure();
+            Holo.ForceRecreateSwapChain();
+        }
         catch (Exception ex) { Program.BootLog("NotifyStageResized: " + ex.Message); }
         RebuildHudGeometry();
     }

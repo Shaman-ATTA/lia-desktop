@@ -430,19 +430,25 @@ public sealed class HoloRenderer : IDisposable
         }
     }
 
+    /// <summary>Drop size-dependent RTVs/DSVs before DXGI ResizeBuffers.</summary>
+    public void ReleaseSizeDependent()
+    {
+        _rtvMsaa?.Dispose(); _rtvMsaa = null;
+        _dsvMsaa?.Dispose(); _dsvMsaa = null;
+        _msaaColor?.Dispose(); _msaaColor = null;
+        _msaaDepth?.Dispose(); _msaaDepth = null;
+        _rtvScene?.Dispose(); _rtvScene = null;
+        _srvScene?.Dispose(); _srvScene = null;
+        _sceneColor?.Dispose(); _sceneColor = null;
+        _rtvSwap?.Dispose(); _rtvSwap = null;
+    }
+
     public void Resize(int w, int h, IDXGISwapChain1 swap)
     {
         if (_device == null) return;
         _width = Math.Max(1, w);
         _height = Math.Max(1, h);
-        _rtvMsaa?.Dispose();
-        _dsvMsaa?.Dispose();
-        _msaaColor?.Dispose();
-        _msaaDepth?.Dispose();
-        _rtvScene?.Dispose();
-        _srvScene?.Dispose();
-        _sceneColor?.Dispose();
-        _rtvSwap?.Dispose();
+        ReleaseSizeDependent();
         _swap = swap;
 
         using var bb = swap.GetBuffer<ID3D11Texture2D>(0);
