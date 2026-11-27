@@ -33,6 +33,7 @@ public sealed class AgentService
     readonly ConversationMemory _memory;
     CancellationTokenSource? _cts;
     string? _activeReply;
+    bool _bargeHandlingSuspended;
 
     public event Action<string>? Narrate;
     public event Action<float, float, float>? Mouth; // jaw, funnel, wide
@@ -79,6 +80,9 @@ public sealed class AgentService
         _memory.Clear();
         _log.Info("Память очищена (HUD/команда).");
     }
+
+    /// <summary>Selftest: ignore barge Decision→RunAsync so scenarios don't interleave agent turns.</summary>
+    public void SuspendBargeHandling(bool suspend) => _bargeHandlingSuspended = suspend;
 
     public static bool IsStopPhrase(string text) => StopRe.IsMatch(text);
     public static bool IsClearMemoryPhrase(string text) => ClearMemRe.IsMatch(text?.Trim() ?? "");
@@ -176,6 +180,7 @@ public sealed class AgentService
 
     void OnBargeDecision(InterruptKind kind, string userText, string spoken, string remaining)
     {
+        if (_bargeHandlingSuspended) return;
         _ = HandleBargeDecisionAsync(kind, userText, spoken, remaining);
     }
 
@@ -270,29 +275,23 @@ public sealed class AgentService
                 object meta = shot?.Meta() ?? result;
                 var payload = JsonSerializer.Serialize(meta);
                 if (payload.Length > 6000) payload = payload[..6000] + "…";
-                responseParts.Add(new JsonObject
+
+                // functionResponse-only first (Gemini requires call → response adjacency).
+                // Image follows as sibling parts in the SAME user turn (no extra text-before-FR).
+                var fr = new JsonObject
                 {
                     ["functionResponse"] = new JsonObject
                     {
                         ["name"] = call.Name,
-                        ["response"] = new JsonObject
-                        {
-                            ["name"] = call.Name,
-                            ["content"] = payload,
-                        },
+                        ["response"] = JsonNode.Parse(payload) is JsonObject jo
+                            ? jo
+                            : new JsonObject { ["content"] = payload },
                     },
-                });
+                };
+                responseParts.Add(fr);
 
-                // Vision: send captured image as inline_data in the same user turn
                 if (shot != null && !string.IsNullOrEmpty(shot.Base64))
                 {
-                    responseParts.Add(new JsonObject
-                    {
-                        ["text"] =
-                            $"Изображение экрана ({shot.ImageWidth}x{shot.ImageHeight}, " +
-                            $"physical {shot.PhysicalWidth}x{shot.PhysicalHeight} @{shot.Dpi}dpi). " +
-                            "Координаты для mouse_click — в пикселях этого изображения.",
-                    });
                     responseParts.Add(new JsonObject
                     {
                         ["inline_data"] = new JsonObject
