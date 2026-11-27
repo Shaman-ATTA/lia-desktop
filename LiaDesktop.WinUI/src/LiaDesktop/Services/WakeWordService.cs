@@ -67,8 +67,8 @@ public sealed class WakeWordService : IDisposable
         set => _chimeEnabled = value;
     }
 
-    /// <summary>Fired on wake. Command may be empty (then UI starts STT) or inline text.</summary>
-    public event Action<string Full, string Command, float Confidence>? Woken;
+    /// <summary>Fired on wake. Args: full text, command after wake (may be empty), confidence.</summary>
+    public event Action<string, string, float>? Woken;
 
     public WakeWordService(AppLog log) => _log = log;
 
