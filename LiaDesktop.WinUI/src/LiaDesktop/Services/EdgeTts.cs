@@ -17,7 +17,14 @@ namespace LiaDesktop.Services;
 public sealed class EdgeTts
 {
     public const string Voice = "ru-RU-SvetlanaNeural";
+    public const string VoiceAlt = "ru-RU-DmitryNeural";
     public const string Rate = "-4%";
+
+    /// <summary>Selftest: override Edge neural voice (null = <see cref="Voice"/>).</summary>
+    public static string? VoiceOverride { get; set; }
+
+    /// <summary>Last synth voice name (Edge neural id or SAPI voice display name).</summary>
+    public string LastVoiceName { get; private set; } = "";
 
     /// <summary>When true, skip Edge WebSocket (selftest SAPI path / forced offline).</summary>
     public static bool DisableWebSocket { get; set; }
@@ -101,7 +108,8 @@ public sealed class EdgeTts
                     if (TtsAudioGate.TryValidate(outPath, out _, out _, out _))
                     {
                         LastPathChosen = "edge-ws";
-                        _log.Info($"tts_path_chosen=edge-ws file={Path.GetFileName(outPath)}");
+                        LastVoiceName = VoiceOverride ?? Voice;
+                        _log.Info($"tts_path_chosen=edge-ws voice={LastVoiceName} file={Path.GetFileName(outPath)}");
                         return outPath;
                     }
                     try { if (File.Exists(outPath)) File.Delete(outPath); } catch { /* */ }
@@ -135,7 +143,7 @@ public sealed class EdgeTts
                     if (TtsAudioGate.TryValidate(wav, out _, out _, out var sapiOk))
                     {
                         LastPathChosen = "sapi";
-                        _log.Info($"tts_path_chosen=sapi ({sapiOk})");
+                        _log.Info($"tts_path_chosen=sapi voice={LastVoiceName} ({sapiOk})");
                         return wav;
                     }
                 }
@@ -188,6 +196,7 @@ public sealed class EdgeTts
         }
         if (!TtsAudioGate.TryValidate(path, out _, out _, out var detail))
             throw new InvalidOperationException("SAPI-only produced no audible audio: " + detail);
+        LastPathChosen = "sapi";
         return path!;
     }
 
@@ -247,10 +256,11 @@ public sealed class EdgeTts
 
         try
         {
+            var edgeVoice = VoiceOverride ?? Voice;
             var ssml =
                 $"Content-Type:application/ssml+xml\r\nX-RequestId:{Guid.NewGuid():N}\r\nPath:ssml\r\n\r\n" +
                 $"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ru-RU'>" +
-                $"<voice name='{Voice}'><prosody rate='{Rate}'>{System.Security.SecurityElement.Escape(text)}</prosody></voice></speak>";
+                $"<voice name='{edgeVoice}'><prosody rate='{Rate}'>{System.Security.SecurityElement.Escape(text)}</prosody></voice></speak>";
             await ws.SendAsync(Encoding.UTF8.GetBytes(ssml), WebSocketMessageType.Text, true, link.Token);
 
             await using var fs = new FileStream(
@@ -391,10 +401,17 @@ public sealed class EdgeTts
 
         try
         {
-            var path = await RunStaAsync(() => SpeakSystemSpeechToWav(text), ct);
+            string? voiceName = null;
+            var path = await RunStaAsync(() =>
+            {
+                var p = SpeakSystemSpeechToWav(text, out var v);
+                voiceName = v;
+                return p;
+            }, ct);
             if (TtsAudioGate.TryValidate(path, out _, out _, out var ok))
             {
-                _log.Info($"TTS: System.Speech ({ok})");
+                LastVoiceName = voiceName ?? "System.Speech";
+                _log.Info($"TTS: System.Speech voice={LastVoiceName} ({ok})");
                 return path;
             }
             errors.Add("System.Speech: " + ok);
@@ -408,10 +425,17 @@ public sealed class EdgeTts
 
         try
         {
-            var path = await RunStaAsync(() => SpeakComSapiToWav(text), ct);
+            string? voiceName = null;
+            var path = await RunStaAsync(() =>
+            {
+                var p = SpeakComSapiToWav(text, out var v);
+                voiceName = v;
+                return p;
+            }, ct);
             if (TtsAudioGate.TryValidate(path, out _, out _, out var ok))
             {
-                _log.Info($"TTS: COM SAPI.SpVoice ({ok})");
+                LastVoiceName = voiceName ?? "SAPI.SpVoice";
+                _log.Info($"TTS: COM SAPI.SpVoice voice={LastVoiceName} ({ok})");
                 return path;
             }
             errors.Add("COM SAPI: " + ok);
@@ -426,7 +450,10 @@ public sealed class EdgeTts
         try
         {
             ct.ThrowIfCancellationRequested();
-            return await SpeakWinRtToWavAsync(text, ct);
+            var path = await SpeakWinRtToWavAsync(text, ct);
+            if (path != null && string.IsNullOrEmpty(LastVoiceName))
+                LastVoiceName = "WinRT.SpeechSynthesizer";
+            return path;
         }
         catch (Exception ex)
         {
@@ -476,7 +503,7 @@ public sealed class EdgeTts
         return tcs.Task.WaitAsync(ct);
     }
 
-    static string SpeakSystemSpeechToWav(string text)
+    static string SpeakSystemSpeechToWav(string text, out string? voiceName)
     {
         using var synth = new SysSpeech();
         var installed = synth.GetInstalledVoices().Where(v => v.Enabled).ToList();
@@ -497,6 +524,7 @@ public sealed class EdgeTts
             ?? installed.FirstOrDefault(v => v.VoiceInfo.Gender == System.Speech.Synthesis.VoiceGender.Female)
             ?? installed[0];
 
+        voiceName = pick.VoiceInfo.Name;
         synth.SelectVoice(pick.VoiceInfo.Name);
         try { synth.Rate = -1; } catch { /* */ }
 
@@ -515,8 +543,9 @@ public sealed class EdgeTts
         return outPath;
     }
 
-    static string SpeakComSapiToWav(string text)
+    static string SpeakComSapiToWav(string text, out string? voiceName)
     {
+        voiceName = null;
         var voiceType = Type.GetTypeFromProgID("SAPI.SpVoice")
             ?? throw new InvalidOperationException("SAPI.SpVoice ProgID missing");
         var fileType = Type.GetTypeFromProgID("SAPI.SpFileStream")
@@ -546,12 +575,14 @@ public sealed class EdgeTts
                         || desc.Contains("ru-", StringComparison.OrdinalIgnoreCase))
                     {
                         voice.Voice = tok;
+                        voiceName = desc;
                         break;
                     }
                 }
             }
             catch { /* default voice */ }
 
+            voiceName ??= "SAPI.SpVoice";
             voice.Speak(text, 0); // SVSFDefault = sync
         }
         finally

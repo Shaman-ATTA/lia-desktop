@@ -1332,34 +1332,41 @@ public static class SelfTestRunner
 
     static async Task<int> GateWakePositiveAsync(AppServices s, Action<string> L)
     {
-        // Several voices: SAPI first (offline), then Edge — both must yield audible samples.
+        // ≥2 distinct voices required (SAPI + Edge Svetlana; Dmitry if SAPI missing).
         var phrases = new[] { "Лиа", "Лиа.", "Лия", "Лиа, привет", "Эй, Лиа" };
         var hits = 0;
         var total = 0;
+        var voices = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        async Task TryBackend(string name, Func<string, Task<string?>> synth, IEnumerable<string> set)
+        async Task TryBackend(string backend, string voiceLabel, Func<string, Task<string?>> synth, IEnumerable<string> set)
         {
             foreach (var phrase in set)
             {
                 string? path = null;
-                try { path = await synth(phrase); } catch (Exception ex) { L($"wake_positive synth fail backend={name} phrase=\"{phrase}\": {ex.Message}"); }
+                try { path = await synth(phrase); }
+                catch (Exception ex)
+                {
+                    L($"wake_positive synth fail backend={backend} voice={voiceLabel} phrase=\"{phrase}\": {ex.Message}");
+                }
                 if (path == null || !File.Exists(path)) continue;
+                var voice = string.IsNullOrWhiteSpace(s.Tts.LastVoiceName) ? voiceLabel : s.Tts.LastVoiceName;
                 byte[] pcm;
                 try { pcm = LoadPcm16kMono(path); }
                 catch { continue; }
                 finally { try { File.Delete(path); } catch { /* */ } }
                 total++;
+                voices.Add(voice);
                 if (s.Wake.ProcessUtterance(pcm, out var full, out _, out var conf))
                 {
                     hits++;
-                    L($"wake_positive sample ok backend={name} phrase=\"{phrase}\" conf={conf:F2} text=\"{full}\"");
+                    L($"wake_positive sample ok backend={backend} voice={voice} phrase=\"{phrase}\" conf={conf:F2} text=\"{full}\"");
                 }
                 else
-                    L($"wake_positive MISS backend={name} phrase=\"{phrase}\" text=\"{full}\"");
+                    L($"wake_positive MISS backend={backend} voice={voice} phrase=\"{phrase}\" text=\"{full}\"");
             }
         }
 
-        await TryBackend("sapi", async t =>
+        await TryBackend("sapi", "sapi", async t =>
         {
             try
             {
@@ -1369,8 +1376,8 @@ public static class SelfTestRunner
             catch { return null; }
         }, phrases);
 
-        // Edge: all 5 phrases (multi-voice + recovery if SAPI wedged)
-        await TryBackend("edge", async t =>
+        EdgeTts.VoiceOverride = null;
+        await TryBackend("edge", EdgeTts.Voice, async t =>
         {
             try
             {
@@ -1380,18 +1387,42 @@ public static class SelfTestRunner
             catch { return null; }
         }, phrases);
 
+        // If still <2 voices (SAPI wedged), add Dmitry neural samples
+        if (voices.Count < 2)
+        {
+            EdgeTts.VoiceOverride = EdgeTts.VoiceAlt;
+            try
+            {
+                await TryBackend("edge", EdgeTts.VoiceAlt, async t =>
+                {
+                    try
+                    {
+                        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                        return await s.Tts.SpeakWebSocketOnlyAsync(t, cts.Token);
+                    }
+                    catch { return null; }
+                }, phrases.Take(3));
+            }
+            finally { EdgeTts.VoiceOverride = null; }
+        }
+
         if (total < 5)
         {
             L($"FAIL wake_positive: only {total} synth samples (need ≥5)");
             return 1;
         }
+        if (voices.Count < 2)
+        {
+            L($"FAIL wake_positive: voices={voices.Count} [{string.Join(", ", voices)}] (need ≥2 distinct)");
+            return 1;
+        }
         var rate = hits / (double)total;
         if (rate < 0.90)
         {
-            L($"FAIL wake_positive: detect={hits}/{total} ({rate:P0}) need ≥90%");
+            L($"FAIL wake_positive: detect={hits}/{total} ({rate:P0}) need ≥90% voices=[{string.Join(", ", voices)}]");
             return 1;
         }
-        L($"wake_positive: PASS detect={hits}/{total} ({rate:P0})");
+        L($"wake_positive: PASS detect={hits}/{total} ({rate:P0}) voices={voices.Count}[{string.Join(", ", voices)}]");
         return 0;
     }
 
@@ -1534,6 +1565,11 @@ public static class SelfTestRunner
             "Или а может просто подождём ответа.",
             "Лиана вьётся по стене оранжереи.",
             "Милия прислала письмо про проект.",
+            // Mid-sentence «ли я» — must NOT collapse to wake
+            "могу ли я это сделать",
+            "правильно ли я понял",
+            "не знаю, смогу ли я прийти",
+            "должен ли я звонить",
         };
         if (phrases.Length < 8)
         {
@@ -1547,7 +1583,7 @@ public static class SelfTestRunner
         var sw = Stopwatch.StartNew();
         const int chunk = WakeWordService.SampleRate * 2 / 10; // 100ms
         const int gapBytes = WakeWordService.SampleRate * 2 / 5; // 200ms noise between phrases
-        var cached = new List<byte[]>();
+        var cached = new List<(string Phrase, byte[] Pcm)>();
         var synthFail = 0;
 
         // Synth once, cache PCM (SAPI→Edge) — fail hard if any phrase missing
@@ -1564,7 +1600,7 @@ public static class SelfTestRunner
                     L($"FAIL wake_negative: synth missing for \"{phrase}\"");
                     continue;
                 }
-                cached.Add(LoadPcm16kMono(path));
+                cached.Add((phrase, LoadPcm16kMono(path)));
             }
             catch (Exception ex)
             {
@@ -1576,6 +1612,30 @@ public static class SelfTestRunner
         if (synthFail > 0 || cached.Count < phrases.Length)
         {
             L($"FAIL wake_negative: synth_fail={synthFail} cached={cached.Count}/{phrases.Length}");
+            return 1;
+        }
+
+        // Free-form ProcessUtterance on mid-sentence «ли я» (grammar PushPcm alone is not enough)
+        var liYaNegatives = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "могу ли я это сделать",
+            "правильно ли я понял",
+            "не знаю, смогу ли я прийти",
+            "должен ли я звонить",
+        };
+        var freeformFalse = 0;
+        foreach (var (phrase, pcm) in cached)
+        {
+            if (!liYaNegatives.Contains(phrase)) continue;
+            if (s.Wake.ProcessUtterance(pcm, out var full, out _, out _))
+            {
+                freeformFalse++;
+                L($"FAIL wake_negative: freeform false wake on \"{phrase}\" text=\"{full}\"");
+            }
+        }
+        if (freeformFalse > 0)
+        {
+            L($"FAIL wake_negative: freeform_false_wakes={freeformFalse}");
             return 1;
         }
 
@@ -1601,7 +1661,7 @@ public static class SelfTestRunner
         while (speechBytes < needSpeechBytes)
         {
             round++;
-            foreach (var pcm in cached)
+            foreach (var (_, pcm) in cached)
             {
                 PushBytes(pcm, ref speechBytes);
                 var gap = MakeNoisePcm(gapBytes);

@@ -1,7 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using NAudio.Wave;
 using Vosk;
 
@@ -17,15 +16,6 @@ public sealed class WakeWordService : IDisposable
     public const int SampleRate = 16000;
     const int RingSeconds = 4;
     const int PostWakeMs = 2200;
-
-    // Also match ASR-split «ли я» (vosk freeform often inserts a space).
-    static readonly Regex WakeRe = new(
-        @"(^|[\s,.:;!?])(лиа|лия|ли\s+я)($|[\s,.:;!?])",
-        RegexOptions.CultureInvariant | RegexOptions.Compiled);
-
-    static readonly Regex AsrSplitWake = new(
-        @"\bли\s+я\b",
-        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     readonly AppLog _log;
     readonly object _gate = new();
@@ -232,21 +222,21 @@ public sealed class WakeWordService : IDisposable
 
         // Grammar first — matches production DETECT for short «Лиа»
         var (gText, gConf) = GrammarDecodeUtterance(pcm16le);
-        gText = NormalizeAsrWake(gText);
+        gText = WakeText.NormalizeAsrWake(gText);
         var (fText, fConf) = FreeFormDecode(pcm16le);
-        fText = NormalizeAsrWake(fText);
+        fText = WakeText.NormalizeAsrWake(fText);
 
         string text;
         float c;
-        if (ContainsWake(fText))
+        if (WakeText.ContainsWake(fText))
         {
             text = fText;
             c = fConf;
         }
-        else if (ContainsWake(gText))
+        else if (WakeText.ContainsWake(gText))
         {
             // Grammar heard wake; keep free-form tail as command when present
-            var tail = StripWake(fText);
+            var tail = WakeText.StripWake(fText);
             text = string.IsNullOrWhiteSpace(tail) ? gText : (gText + " " + tail).Trim();
             c = gConf;
         }
@@ -267,7 +257,7 @@ public sealed class WakeWordService : IDisposable
             _log.Info($"wake: reject (utterance) conf={c:F2} text={text}");
             return false;
         }
-        command = StripWake(text);
+        command = WakeText.StripWake(text);
         DetectCount++;
         _log.Info($"wake: DETECT conf={c:F2} text=\"{text}\" cmd=\"{command}\"");
         RaiseWoken(text, command, c);
@@ -295,7 +285,7 @@ public sealed class WakeWordService : IDisposable
             RejectCount++;
             return;
         }
-        if (!ContainsWake(text))
+        if (!WakeText.ContainsWake(text))
         {
             RejectCount++;
             return;
@@ -337,10 +327,10 @@ public sealed class WakeWordService : IDisposable
     void ConfirmWakeFromPcm(byte[] pcm)
     {
         var (text, conf) = FreeFormDecode(pcm);
-        text = NormalizeAsrWake(text);
+        text = WakeText.NormalizeAsrWake(text);
         lock (_gate)
         {
-            if (!ContainsWake(text))
+            if (!WakeText.ContainsWake(text))
             {
                 RejectCount++;
                 FalseWakeCount++;
@@ -356,7 +346,7 @@ public sealed class WakeWordService : IDisposable
                 _log.Info($"wake: post reject conf={conf:F2} text={text}");
                 return;
             }
-            var cmd = StripWake(text);
+            var cmd = WakeText.StripWake(text);
             DetectCount++;
             _log.Info($"wake: DETECT conf={conf:F2} text=\"{text}\" cmd=\"{cmd}\"");
             RaiseWoken(text, cmd, conf);
@@ -467,28 +457,10 @@ public sealed class WakeWordService : IDisposable
 
     float ConfidenceFloor() => 0.15f + _sensitivity * 0.7f;
 
-    /// <summary>Collapse vosk freeform «ли я» → «лиа» before wake match.</summary>
-    public static string NormalizeAsrWake(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return "";
-        return AsrSplitWake.Replace(text.Trim().ToLowerInvariant(), "лиа");
-    }
+    /// <inheritdoc cref="WakeText.NormalizeAsrWake"/>
+    public static string NormalizeAsrWake(string text) => WakeText.NormalizeAsrWake(text);
 
-    static bool ContainsWake(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return false;
-        text = NormalizeAsrWake(text);
-        if (text is "лиа" or "лия") return true;
-        return WakeRe.IsMatch(text);
-    }
-
-    public static string StripWake(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return "";
-        var s = NormalizeAsrWake(text);
-        s = Regex.Replace(s, @"^\s*(лиа|лия)\s*[,.:;!]?\s*", "", RegexOptions.CultureInvariant);
-        return s.Trim();
-    }
+    public static string StripWake(string text) => WakeText.StripWake(text);
 
     void RaiseWoken(string full, string cmd, float conf)
     {

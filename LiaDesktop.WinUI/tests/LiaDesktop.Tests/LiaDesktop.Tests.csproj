@@ -19,5 +19,6 @@
     <Compile Include="..\..\src\LiaDesktop\Services\EdgeMsDrm.cs" Link="EdgeMsDrm.cs" />
     <Compile Include="..\..\src\LiaDesktop\Services\InterruptClassifier.cs" Link="InterruptClassifier.cs" />
     <Compile Include="..\..\src\LiaDesktop\Services\EchoCancelVad.cs" Link="EchoCancelVad.cs" />
+    <Compile Include="..\..\src\LiaDesktop\Services\WakeText.cs" Link="WakeText.cs" />
   </ItemGroup>
 </Project>

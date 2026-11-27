@@ -304,6 +304,7 @@ jobs:
             if ($txt -notmatch 'tts_order: PASS') { throw "selftest missing tts_order PASS" }
             if ($txt -notmatch 'barge_queue_cancel: PASS') { throw "selftest missing barge_queue_cancel PASS" }
             if ($txt -notmatch 'wake_positive: PASS') { throw "selftest missing wake_positive PASS" }
+            if ($txt -notmatch 'wake_positive: PASS.*voices=') { throw "selftest wake_positive missing voices=" }
             if ($txt -notmatch 'wake_negative: PASS') { throw "selftest missing wake_negative PASS" }
             if ($txt -notmatch 'wake_negative: PASS.*speech_s=') { throw "selftest wake_negative missing speech_s" }
             if ($txt -notmatch 'wake_negative: PASS.*noise_s=') { throw "selftest wake_negative missing noise_s" }
