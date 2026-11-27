@@ -7,7 +7,7 @@
 - **Edge TTS:** abrupt WebSocket close without handshake is SUCCESS if audio bytes (or turn.end) already received.
 - **Vision:** `look_at_screen` / `screenshot` → Gemini `inline_data`; DPI click map.
 - **Dialog memory:** session persist, «забудь» / НОВЫЙ РАЗГОВОР, barge truncated spoken.
-- **Selftest:** `log_file`, `render_role`, `render_nondefault_comm`, `playback_rms`, `ws_close_handshake`, `vision_live`, `click_map`, `memory_*` + prior gates. Release asset `sample_log.txt`.
+- **Selftest:** `log_file`, `render_role`, `render_nondefault_comm`, `playback_rms` (hard loopback on VB-CABLE), `ws_close_handshake`, `vision_live`, `click_map`, `memory_live` (hard Слава+58) + prior gates. Release asset `sample_log.txt`.
 
 ## v0.7.1 — Barge-in / natural interruption + real SAPI
 

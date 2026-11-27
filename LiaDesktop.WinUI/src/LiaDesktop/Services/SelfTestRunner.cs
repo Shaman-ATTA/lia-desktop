@@ -441,8 +441,7 @@ public static class SelfTestRunner
                 await http.PostAsync($"{root}/_control/scenario/normal", null);
             }
 
-            // Soft: mock/live may paraphrase ("Хорошо", "Запомнила", echo facts) —
-            // require a non-error reply; fact recall is asserted on memory_live.
+            // turn1: soft (any non-error ack). turn2 memory_live: HARD — must contain Слава + 58.
             fail += await OneTurnAsync(
                 s, "меня зовут Слава, запомни число 58", "memory_turn1", L,
                 expectRu: false, timeoutSec: 90);
@@ -767,6 +766,7 @@ public static class SelfTestRunner
 
     static async Task<int> RunPlaybackRmsGateAsync(AppServices s, Action<string> L, string? ttsPath)
     {
+        string? prevPreferred = null;
         try
         {
             ttsPath ??= await s.Tts.SpeakToFileAsync("Раз два три проверка звука.", CancellationToken.None);
@@ -775,51 +775,65 @@ public static class SelfTestRunner
                 L("FAIL playback_rms: no TTS file");
                 return 1;
             }
-
             if (!TtsAudioGate.TryValidate(ttsPath, out var fileBytes, out var fileRms, out var fileDetail))
             {
                 L($"FAIL playback_rms: TTS file inaudible ({fileDetail})");
                 return 1;
             }
 
+            // Pick a real active render endpoint (prefer VB-CABLE / virtual cable installed by CI).
+            var devices = AudioOutput.ListRenderDevices()
+                .Where(d => !string.IsNullOrEmpty(d.Id))
+                .ToList();
+            if (devices.Count == 0)
+            {
+                L("FAIL playback_rms: no active render endpoints (install VB-CABLE / virtual audio in CI)");
+                return 1;
+            }
+            var pick = devices.FirstOrDefault(d =>
+                d.Name.Contains("CABLE", StringComparison.OrdinalIgnoreCase) ||
+                d.Name.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase) ||
+                d.Name.Contains("Scream", StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrEmpty(pick.Id))
+                pick = devices[0];
+
+            prevPreferred = s.Secrets.Load().AudioOutputDeviceId;
+            s.BargeIn.SetPreferredOutputDevice(pick.Id);
+
             var peak = 0f;
-            NAudio.Wave.WasapiLoopbackCapture? capture = null;
-            var loopbackOk = false;
-            try
+            using var en = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+            var mm = en.GetDevice(pick.Id); // WasapiLoopbackCapture takes ownership / Dispose
+            if (mm.State != NAudio.CoreAudioApi.DeviceState.Active)
             {
-                capture = new NAudio.Wave.WasapiLoopbackCapture();
-                capture.DataAvailable += (_, e) =>
+                L($"FAIL playback_rms: render '{pick.Name}' state={mm.State}");
+                try { mm.Dispose(); } catch { /* */ }
+                return 1;
+            }
+
+            using var capture = new NAudio.Wave.WasapiLoopbackCapture(mm);
+            capture.DataAvailable += (_, e) =>
+            {
+                if (e.BytesRecorded <= 0) return;
+                var fmt = capture.WaveFormat;
+                if (fmt.Encoding == NAudio.Wave.WaveFormatEncoding.IeeeFloat)
                 {
-                    if (e.BytesRecorded <= 0) return;
-                    var fmt = capture.WaveFormat;
-                    if (fmt.Encoding == NAudio.Wave.WaveFormatEncoding.IeeeFloat)
+                    for (var i = 0; i + 4 <= e.BytesRecorded; i += 4)
                     {
-                        for (var i = 0; i + 4 <= e.BytesRecorded; i += 4)
-                        {
-                            var v = Math.Abs(BitConverter.ToSingle(e.Buffer, i));
-                            if (v > peak) peak = v;
-                        }
+                        var v = Math.Abs(BitConverter.ToSingle(e.Buffer, i));
+                        if (v > peak) peak = v;
                     }
-                    else if (fmt.BitsPerSample == 16)
+                }
+                else if (fmt.BitsPerSample == 16)
+                {
+                    for (var i = 0; i + 2 <= e.BytesRecorded; i += 2)
                     {
-                        for (var i = 0; i + 2 <= e.BytesRecorded; i += 2)
-                        {
-                            var s16 = (short)(e.Buffer[i] | (e.Buffer[i + 1] << 8));
-                            var v = Math.Abs(s16 / 32768f);
-                            if (v > peak) peak = v;
-                        }
+                        var s16 = (short)(e.Buffer[i] | (e.Buffer[i + 1] << 8));
+                        var v = Math.Abs(s16 / 32768f);
+                        if (v > peak) peak = v;
                     }
-                };
-                capture.StartRecording();
-                loopbackOk = true;
-            }
-            catch (Exception ex)
-            {
-                // CI runners often have no active render endpoint → Element not found (0x80070490).
-                L("playback_rms: loopback unavailable — " + ex.Message + "; falling back to file RMS + play");
-                try { capture?.Dispose(); } catch { /* */ }
-                capture = null;
-            }
+                }
+            };
+            capture.StartRecording();
 
             s.Agent.SuspendBargeHandling(true);
             try
@@ -828,38 +842,31 @@ public static class SelfTestRunner
                 await Task.WhenAny(play, Task.Delay(8000));
                 if (!play.IsCompleted) s.BargeIn.AbortPlayback();
                 await play;
+                // Drain a bit more loopback after Underrun
+                await Task.Delay(400);
             }
             finally
             {
                 s.Agent.SuspendBargeHandling(false);
-                try { capture?.StopRecording(); } catch { /* */ }
-                try { capture?.Dispose(); } catch { /* */ }
+                try { capture.StopRecording(); } catch { /* */ }
             }
 
-            if (loopbackOk)
+            if (peak < 0.0008f)
             {
-                if (peak < 0.0008f)
-                {
-                    L($"FAIL playback_rms: loopback peak={peak:F5} (silent — sound did not reach render endpoint?)");
-                    return 1;
-                }
-                L($"playback_rms: PASS peak={peak:F4} device={s.BargeIn.LastRenderDevice}");
-                return 0;
-            }
-
-            // No loopback device: still require audible TTS bytes + successful Multimedia play path.
-            if (fileRms < 0.01f)
-            {
-                L($"FAIL playback_rms: file rms={fileRms:F4} too low without loopback");
+                L($"FAIL playback_rms: loopback peak={peak:F5} on '{pick.Name}' (file rms={fileRms:F4} bytes={fileBytes}; silent at render)");
                 return 1;
             }
-            L($"playback_rms: PASS (no loopback; file bytes={fileBytes} rms={fileRms:F4} role={s.BargeIn.LastRenderRole} device={s.BargeIn.LastRenderDevice})");
+            L($"playback_rms: PASS peak={peak:F4} device={s.BargeIn.LastRenderDevice} role={s.BargeIn.LastRenderRole} file_rms={fileRms:F4} bytes={fileBytes}");
             return 0;
         }
         catch (Exception ex)
         {
             L($"FAIL playback_rms: {ex.GetType().Name}: {ex.Message}");
             return 1;
+        }
+        finally
+        {
+            try { s.BargeIn.SetPreferredOutputDevice(prevPreferred); } catch { /* */ }
         }
     }
 
