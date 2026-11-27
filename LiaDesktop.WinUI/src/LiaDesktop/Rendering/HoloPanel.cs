@@ -305,9 +305,9 @@ public sealed class HoloPanel : SwapChainPanel
         if (_swap == null) return;
         using var swap2 = _swap.QueryInterface<IDXGISwapChain2>();
         swap2.MatrixTransform = new Matrix3x2(
-            (float)(1.0 / sx), 0,
-            0, (float)(1.0 / sy),
-            0, 0);
+            1f / (float)sx, 0f,
+            0f, 1f / (float)sy,
+            0f, 0f);
     }
 
     void AttachSwapChainNative(IDXGISwapChain1 swap)
