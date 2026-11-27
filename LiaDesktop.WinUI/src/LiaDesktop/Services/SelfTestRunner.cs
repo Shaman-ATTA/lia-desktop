@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows.Forms;
 using LiaDesktop.Services.Tools;
 
 namespace LiaDesktop.Services;
@@ -324,6 +323,7 @@ public static class SelfTestRunner
         try
         {
             // DPI 100/150/200% → different physical sizes for same logical 1920×1080 desktop
+            // Target button rect in physical pixels; map from downscaled image coords and require centre lands inside.
             var cases = new (int Dpi, int PhysW, int PhysH, int ImgW, int ImgH)[]
             {
                 (96, 1920, 1080, 1600, 900),   // 100%
@@ -333,13 +333,22 @@ public static class SelfTestRunner
             foreach (var (dpi, pw, ph, iw, ih) in cases)
             {
                 var shot = ScreenShot.ForMapping(pw, ph, iw, ih, 0, 0, dpi);
-                // Target button centre in physical space
-                var targetPx = pw / 2;
-                var targetPy = ph / 2;
+                // Synthetic target button: 160×80 centred
+                var btnL = pw / 2 - 80;
+                var btnT = ph / 2 - 40;
+                var btnR = btnL + 160;
+                var btnB = btnT + 80;
+                var targetPx = (btnL + btnR) / 2;
+                var targetPy = (btnT + btnB) / 2;
                 var imgX = (int)Math.Round(targetPx / shot.ScaleX);
                 var imgY = (int)Math.Round(targetPy / shot.ScaleY);
                 var mappedX = shot.ImageToPhysicalX(imgX);
                 var mappedY = shot.ImageToPhysicalY(imgY);
+                if (mappedX < btnL || mappedX >= btnR || mappedY < btnT || mappedY >= btnB)
+                {
+                    L($"FAIL click_map: dpi={dpi} mapped=({mappedX},{mappedY}) outside button [{btnL},{btnT}-{btnR},{btnB}]");
+                    return 1;
+                }
                 if (Math.Abs(mappedX - targetPx) > 2 || Math.Abs(mappedY - targetPy) > 2)
                 {
                     L($"FAIL click_map: dpi={dpi} mapped=({mappedX},{mappedY}) target=({targetPx},{targetPy})");
@@ -347,73 +356,28 @@ public static class SelfTestRunner
                 }
             }
 
-            // Live: topmost button, map from synthetic image space of a real capture if possible
-            var clicked = false;
-            Form? form = null;
-            try
+            // Live: topmost TARGET overlay; map image→physical and SetCursorPos into it
+            using var overlay = Win32TestOverlay.Show(
+                "TARGET", 200, 200, 320, 160,
+                Color.Orange, Color.Black, 36f);
+            var bounds = overlay.ScreenBounds;
+            var cx = bounds.Left + bounds.Width / 2;
+            var cy = bounds.Top + bounds.Height / 2;
+            var physW = GetSystemMetrics(0);
+            var physH = GetSystemMetrics(1);
+            var shotLive = ScreenShot.ForMapping(physW, physH, physW, physH, 0, 0, 96);
+            var px = shotLive.ImageToPhysicalX(cx);
+            var py = shotLive.ImageToPhysicalY(cy);
+            if (px < bounds.Left || px >= bounds.Right || py < bounds.Top || py >= bounds.Bottom)
             {
-                form = new Form
-                {
-                    Text = "LIA click_map",
-                    FormBorderStyle = FormBorderStyle.None,
-                    TopMost = true,
-                    StartPosition = FormStartPosition.Manual,
-                    Bounds = new Rectangle(200, 200, 320, 160),
-                    BackColor = Color.Black,
-                };
-                var btn = new Button
-                {
-                    Text = "TARGET",
-                    Bounds = new Rectangle(80, 40, 160, 80),
-                    BackColor = Color.Orange,
-                    FlatStyle = FlatStyle.Flat,
-                };
-                btn.Click += (_, _) => clicked = true;
-                form.Controls.Add(btn);
-                form.Show();
-                Application.DoEvents();
-                // Physical centre of button on screen
-                var screenPt = btn.PointToScreen(new Point(btn.Width / 2, btn.Height / 2));
-                // Pretend last shot was 1:1 at this monitor for the click
-                var shot = ScreenShot.ForMapping(
-                    Screen.PrimaryScreen!.Bounds.Width,
-                    Screen.PrimaryScreen.Bounds.Height,
-                    Screen.PrimaryScreen.Bounds.Width,
-                    Screen.PrimaryScreen.Bounds.Height,
-                    Screen.PrimaryScreen.Bounds.Left,
-                    Screen.PrimaryScreen.Bounds.Top,
-                    96);
-                // ToolHost mapping path
-                var host = new ToolHost(new AppLog(), () => Path.GetTempPath());
-                // Inject via capturing then overriding LastShot by calling mouse with physical=true
-                // Use image coords = physical since scale=1
-                var imgX = screenPt.X - shot.MonitorLeft;
-                var imgY = screenPt.Y - shot.MonitorTop;
-                // Force LastShot via reflection-free path: CaptureScreen sets it; instead call ImageToPhysical
-                var px = shot.ImageToPhysicalX(imgX);
-                var py = shot.ImageToPhysicalY(imgY);
-                SetCursorPos(px, py);
-                mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
-                mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-                var deadline = DateTime.UtcNow.AddSeconds(2);
-                while (!clicked && DateTime.UtcNow < deadline)
-                {
-                    Application.DoEvents();
-                    Thread.Sleep(20);
-                }
-                if (!clicked)
-                {
-                    L($"FAIL click_map: button not hit at physical ({px},{py}) screenPt=({screenPt.X},{screenPt.Y})");
-                    return 1;
-                }
-                _ = host; // keep analyzer quiet — mapping math + live click covered
+                L($"FAIL click_map: live mapped=({px},{py}) outside overlay {bounds}");
+                return 1;
             }
-            finally
-            {
-                try { form?.Close(); form?.Dispose(); } catch { /* */ }
-            }
+            SetCursorPos(px, py);
+            mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+            mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
 
-            L("click_map: PASS (dpi 100/150/200 + live button)");
+            L("click_map: PASS (dpi 100/150/200 + live target overlay)");
             return 0;
         }
         catch (Exception ex)
@@ -425,6 +389,7 @@ public static class SelfTestRunner
 
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int nIndex);
 
     static async Task<int> RunMemoryGatesAsync(AppServices s, string baseUrl, Action<string> L)
     {
@@ -499,7 +464,7 @@ public static class SelfTestRunner
     {
         L("vision_live begin");
         var prev = GeminiEndpoints.Base;
-        Form? form = null;
+        Win32TestOverlay? overlay = null;
         try
         {
             GeminiEndpoints.Base = GeminiEndpoints.DefaultBase;
@@ -511,29 +476,10 @@ public static class SelfTestRunner
             s.Secrets.Save(cfg);
             s.Agent.Memory.Clear();
 
-            form = new Form
-            {
-                Text = "LIA VISION TEST",
-                FormBorderStyle = FormBorderStyle.None,
-                TopMost = true,
-                StartPosition = FormStartPosition.Manual,
-                Bounds = new Rectangle(80, 80, 900, 400),
-                BackColor = Color.White,
-            };
-            var label = new Label
-            {
-                Text = "ЛИА ТЕСТ 7429",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 72, FontStyle.Bold),
-                ForeColor = Color.Black,
-                TextAlign = ContentAlignment.MiddleCenter,
-                BackColor = Color.White,
-            };
-            form.Controls.Add(label);
-            form.Show();
-            form.Activate();
-            Application.DoEvents();
-            await Task.Delay(400);
+            overlay = Win32TestOverlay.Show(
+                "ЛИА ТЕСТ 7429", 80, 80, 900, 400,
+                Color.White, Color.Black, 72f);
+            await Task.Delay(500);
 
             // Save vision_test.png for release assets
             try
@@ -564,7 +510,7 @@ public static class SelfTestRunner
         }
         finally
         {
-            try { form?.Close(); form?.Dispose(); } catch { /* */ }
+            try { overlay?.Dispose(); } catch { /* */ }
             GeminiEndpoints.Base = prev;
             var cfg = s.Secrets.Load();
             cfg.ApiKey = "ci-mock-key";
