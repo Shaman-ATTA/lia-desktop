@@ -68,16 +68,17 @@ public sealed class StreamingTtsService
         try { await _tts.WarmAsync(ct); } catch (Exception ex) { _log.Info("tts warm: " + ex.Message); }
 
         var synthSw = Stopwatch.StartNew();
-        var synthTasks = new Task<(int Idx, string Text, string? Path, int FirstAudioMs)?>[sentences.Count];
+        var synthTasks = new Task<(int Idx, string Text, string? Path, int FirstAudioMs)>[sentences.Count];
         var synthGate = new object();
 
         Task<(int Idx, string Text, string? Path, int FirstAudioMs)> EnsureSynth(int idx)
         {
             lock (synthGate)
             {
-                if (synthTasks[idx] != null) return synthTasks[idx]!;
-                synthTasks[idx] = SynthOneAsync(idx, sentences[idx], ElapsedMs, ct);
-                return synthTasks[idx]!;
+                if (synthTasks[idx] != null) return synthTasks[idx];
+                var t = SynthOneAsync(idx, sentences[idx], ElapsedMs, ct);
+                synthTasks[idx] = t;
+                return t;
             }
         }
 
