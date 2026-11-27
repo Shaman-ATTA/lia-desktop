@@ -186,6 +186,28 @@ jobs:
           if (-not (Get-CimInstance Win32_SoundDevice | Where-Object { $_.Name -match 'VB-Audio|CABLE' })) {
             throw 'VB-CABLE driver did not install (no VB-Audio sound device present)'
           }
+
+          # Prefer stereo CABLE Input as default Multimedia playback (skip 16ch)
+          try {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
+            Install-Module -Name AudioDeviceCmdlets -Force -Scope CurrentUser -AllowClobber -ErrorAction Stop
+            $play = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' }
+            $play | Format-Table Index, Name, Type, Default
+            $cable = $play |
+              Where-Object { $_.Name -match 'CABLE Input' -and $_.Name -notmatch '16ch' } |
+              Select-Object -First 1
+            if (-not $cable) {
+              $cable = $play | Where-Object { $_.Name -match 'CABLE' -and $_.Name -notmatch '16ch' } | Select-Object -First 1
+            }
+            if ($cable) {
+              Set-AudioDevice -Id $cable.ID
+              Write-Host "Default playback → $($cable.Name)"
+            } else {
+              Write-Host '::warning::No stereo CABLE Input playback device to set as default'
+            }
+          } catch {
+            Write-Host "::warning::AudioDeviceCmdlets default-set skipped: $_"
+          }
           Write-Host 'VB-CABLE ready for playback_rms loopback'
 
       - name: E2E selftest (mock Gemini + optional live key)

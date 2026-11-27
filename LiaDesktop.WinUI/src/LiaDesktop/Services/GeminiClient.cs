@@ -269,13 +269,17 @@ public sealed class GeminiClient
         IReadOnlyList<object>? tools,
         CancellationToken ct)
     {
+        var clonedContents = contents.DeepClone() as JsonArray ?? new JsonArray();
+        if (clonedContents.Count == 0)
+            throw new InvalidOperationException("Gemini contents empty — refusing generateContent");
+
         var body = new JsonObject
         {
             ["system_instruction"] = new JsonObject
             {
                 ["parts"] = new JsonArray(new JsonObject { ["text"] = system }),
             },
-            ["contents"] = contents.DeepClone(),
+            ["contents"] = clonedContents,
         };
         if (tools is { Count: > 0 })
         {

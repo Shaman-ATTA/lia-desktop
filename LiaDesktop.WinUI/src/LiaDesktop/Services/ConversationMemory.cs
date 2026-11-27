@@ -127,21 +127,23 @@ public sealed class ConversationMemory
     {
         StripOldImagesUnlocked();
 
-        while (_contents.Count > MaxTurns * 2) // user+model pairs roughly
-            DropOldestSafeUnlocked();
-
-        // Soft char budget — drop oldest until under budget
-        while (EstimateCharsUnlocked() > SoftCharBudget && _contents.Count > 2)
+        var protect = ProtectedTailCount();
+        while (_contents.Count > Math.Max(MaxTurns * 2, protect))
         {
-            if (!DropOldestSafeUnlocked()) break;
+            if (!DropOldestSafeUnlocked(protect)) break;
         }
 
-        // If still huge, summarize head into one user note (never mid tool-exchange)
-        if (EstimateCharsUnlocked() > SoftCharBudget && _contents.Count > 4)
+        // Soft char budget — ignore inline image payloads (they dominate and must stay on the latest turn)
+        while (EstimateCharsUnlocked(stripImages: true) > SoftCharBudget && _contents.Count > protect)
+        {
+            if (!DropOldestSafeUnlocked(protect)) break;
+        }
+
+        // If still huge (text-only), summarize head into one user note (never mid tool-exchange)
+        if (EstimateCharsUnlocked(stripImages: true) > SoftCharBudget && _contents.Count > protect + 2)
         {
             var summary = new StringBuilder("Краткое резюме более раннего разговора: ");
-            var take = Math.Min(6, _contents.Count - 2);
-            // Don't cut inside functionCall → functionResponse adjacency
+            var take = Math.Min(6, _contents.Count - protect);
             while (take > 0 && WouldOrphanToolExchange(take)) take--;
             if (take <= 0) return;
             for (var i = 0; i < take; i++)
@@ -160,37 +162,66 @@ public sealed class ConversationMemory
         }
     }
 
-    /// <summary>
-    /// Drop the oldest content without leaving a model functionCall without its preceding user
-    /// or following functionResponse (Gemini 400: function call turn ordering).
-    /// </summary>
-    bool DropOldestSafeUnlocked()
+    /// <summary>How many trailing contents must never be trimmed (active user / tool exchange).</summary>
+    int ProtectedTailCount()
     {
+        if (_contents.Count == 0) return 0;
+        var last = _contents.Count - 1;
+        if (HasFunctionResponse(_contents[last]))
+        {
+            // user(prompt) + model(FC) + user(FR[+image]) — keep all three when present
+            var n = 1;
+            if (last - 1 >= 0 && HasFunctionCall(_contents[last - 1])) n++;
+            if (last - 2 >= 0) n++;
+            return n;
+        }
+        if (HasFunctionCall(_contents[last]))
+        {
+            // user + model(FC) awaiting FR
+            return last - 1 >= 0 ? 2 : 1;
+        }
+        return 1; // at least the latest turn
+    }
+
+    /// <summary>
+    /// Drop the oldest content without splitting a functionCall ↔ functionResponse pair
+    /// and without touching the protected tail (avoids empty contents → Gemini 400).
+    /// </summary>
+    bool DropOldestSafeUnlocked(int protectTail)
+    {
+        if (_contents.Count <= protectTail) return false;
         if (_contents.Count == 0) return false;
+
+        // Drop a complete orphaned FC+FR pair at head
         if (_contents.Count >= 2 && HasFunctionCall(_contents[0]) && HasFunctionResponse(_contents[1]))
         {
-            // Drop FC + FR together (and the user that preceded FC if present at 0 — rare)
+            if (_contents.Count - 2 < protectTail) return false;
             _contents.RemoveAt(0);
-            if (_contents.Count > 0 && HasFunctionResponse(_contents[0]))
-                _contents.RemoveAt(0);
+            _contents.RemoveAt(0);
             return true;
         }
         if (HasFunctionCall(_contents[0]))
         {
-            // Orphan FC at head — drop it (broken history)
-            _contents.RemoveAt(0);
-            if (_contents.Count > 0 && HasFunctionResponse(_contents[0]))
-                _contents.RemoveAt(0);
+            // Orphan FC at head — drop FC and its FR if present
+            var remove = 1;
+            if (_contents.Count > 1 && HasFunctionResponse(_contents[1])) remove = 2;
+            if (_contents.Count - remove < protectTail) return false;
+            for (var i = 0; i < remove; i++) _contents.RemoveAt(0);
             return true;
         }
-        _contents.RemoveAt(0);
-        // If next is model FC, keep dropping until after its FR so we don't start with FC
-        while (_contents.Count > 0 && HasFunctionCall(_contents[0]))
+
+        // Drop oldest user/model text. If that would leave FC at head, drop the whole exchange
+        // only when the protected tail still leaves enough room.
+        if (_contents.Count > 1 && HasFunctionCall(_contents[1]))
         {
-            _contents.RemoveAt(0);
-            if (_contents.Count > 0 && HasFunctionResponse(_contents[0]))
-                _contents.RemoveAt(0);
+            var remove = 2; // user + FC
+            if (_contents.Count > 2 && HasFunctionResponse(_contents[2])) remove = 3;
+            if (_contents.Count - remove < protectTail) return false;
+            for (var i = 0; i < remove; i++) _contents.RemoveAt(0);
+            return true;
         }
+
+        _contents.RemoveAt(0);
         return true;
     }
 
@@ -283,9 +314,15 @@ public sealed class ConversationMemory
         return sb.ToString().Trim();
     }
 
-    int EstimateCharsUnlocked()
+    int EstimateCharsUnlocked(bool stripImages = false)
     {
-        try { return _contents.ToJsonString().Length; }
+        try
+        {
+            if (!stripImages) return _contents.ToJsonString().Length;
+            var clone = (JsonArray)(_contents.DeepClone() ?? new JsonArray());
+            foreach (var n in clone) StripInlineImages(n);
+            return clone.ToJsonString().Length;
+        }
         catch { return SoftCharBudget; }
     }
 

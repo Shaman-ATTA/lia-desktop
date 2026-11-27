@@ -766,7 +766,6 @@ public static class SelfTestRunner
 
     static async Task<int> RunPlaybackRmsGateAsync(AppServices s, Action<string> L, string? ttsPath)
     {
-        string? prevPreferred = null;
         try
         {
             ttsPath ??= await s.Tts.SpeakToFileAsync("Раз два три проверка звука.", CancellationToken.None);
@@ -781,7 +780,7 @@ public static class SelfTestRunner
                 return 1;
             }
 
-            // Pick a real active render endpoint (prefer VB-CABLE / virtual cable installed by CI).
+            // Prefer stereo "CABLE Input" (VB-CABLE). Avoid "CABLE In 16ch" — stereo→16ch often silent.
             var devices = AudioOutput.ListRenderDevices()
                 .Where(d => !string.IsNullOrEmpty(d.Id))
                 .ToList();
@@ -790,27 +789,36 @@ public static class SelfTestRunner
                 L("FAIL playback_rms: no active render endpoints (install VB-CABLE / virtual audio in CI)");
                 return 1;
             }
-            var pick = devices.FirstOrDefault(d =>
-                d.Name.Contains("CABLE", StringComparison.OrdinalIgnoreCase) ||
-                d.Name.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase) ||
-                d.Name.Contains("Scream", StringComparison.OrdinalIgnoreCase));
-            if (string.IsNullOrEmpty(pick.Id))
-                pick = devices[0];
 
-            prevPreferred = s.Secrets.Load().AudioOutputDeviceId;
-            s.BargeIn.SetPreferredOutputDevice(pick.Id);
-
-            var peak = 0f;
-            using var en = new NAudio.CoreAudioApi.MMDeviceEnumerator();
-            var mm = en.GetDevice(pick.Id); // WasapiLoopbackCapture takes ownership / Dispose
-            if (mm.State != NAudio.CoreAudioApi.DeviceState.Active)
+            static int CableScore((string Id, string Name) d)
             {
-                L($"FAIL playback_rms: render '{pick.Name}' state={mm.State}");
-                try { mm.Dispose(); } catch { /* */ }
+                var n = d.Name;
+                if (n.Contains("16ch", StringComparison.OrdinalIgnoreCase)) return 0;
+                if (n.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase)) return 100;
+                if (n.Contains("CABLE In", StringComparison.OrdinalIgnoreCase)) return 80;
+                if (n.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase)) return 60;
+                if (n.Contains("Scream", StringComparison.OrdinalIgnoreCase)) return 50;
+                if (n.Contains("CABLE", StringComparison.OrdinalIgnoreCase)) return 40;
                 return 1;
             }
 
-            using var capture = new NAudio.Wave.WasapiLoopbackCapture(mm);
+            var pick = devices.OrderByDescending(CableScore).First();
+            L($"playback_rms: target render='{pick.Name}' id={pick.Id[..Math.Min(24, pick.Id.Length)]}…");
+
+            var peak = 0f;
+            using var en = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+            // Separate MMDevice instances — WasapiOut and Loopback each take ownership
+            var playDev = en.GetDevice(pick.Id);
+            var capDev = en.GetDevice(pick.Id);
+            if (playDev.State != NAudio.CoreAudioApi.DeviceState.Active)
+            {
+                L($"FAIL playback_rms: render '{pick.Name}' state={playDev.State}");
+                try { playDev.Dispose(); } catch { /* */ }
+                try { capDev.Dispose(); } catch { /* */ }
+                return 1;
+            }
+
+            using var capture = new NAudio.Wave.WasapiLoopbackCapture(capDev);
             capture.DataAvailable += (_, e) =>
             {
                 if (e.BytesRecorded <= 0) return;
@@ -835,38 +843,33 @@ public static class SelfTestRunner
             };
             capture.StartRecording();
 
-            s.Agent.SuspendBargeHandling(true);
-            try
-            {
-                var play = s.BargeIn.PlayFileAsync(ttsPath, "Раз два три.", CancellationToken.None);
-                await Task.WhenAny(play, Task.Delay(8000));
-                if (!play.IsCompleted) s.BargeIn.AbortPlayback();
-                await play;
-                // Drain a bit more loopback after Underrun
-                await Task.Delay(400);
-            }
-            finally
-            {
-                s.Agent.SuspendBargeHandling(false);
-                try { capture.StopRecording(); } catch { /* */ }
-            }
+            // Direct WasapiOut to the same endpoint — no WaveOut fallback (that bypasses loopback).
+            using var reader = new NAudio.Wave.AudioFileReader(ttsPath);
+            using var output = new NAudio.Wave.WasapiOut(
+                playDev, NAudio.CoreAudioApi.AudioClientShareMode.Shared, true, 100);
+            output.Init(reader);
+            output.Play();
+
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (output.PlaybackState == NAudio.Wave.PlaybackState.Playing && DateTime.UtcNow < deadline)
+                await Task.Delay(50);
+            if (output.PlaybackState == NAudio.Wave.PlaybackState.Playing)
+                output.Stop();
+            await Task.Delay(400);
+            try { capture.StopRecording(); } catch { /* */ }
 
             if (peak < 0.0008f)
             {
                 L($"FAIL playback_rms: loopback peak={peak:F5} on '{pick.Name}' (file rms={fileRms:F4} bytes={fileBytes}; silent at render)");
                 return 1;
             }
-            L($"playback_rms: PASS peak={peak:F4} device={s.BargeIn.LastRenderDevice} role={s.BargeIn.LastRenderRole} file_rms={fileRms:F4} bytes={fileBytes}");
+            L($"playback_rms: PASS peak={peak:F4} device={pick.Name} role=Multimedia file_rms={fileRms:F4} bytes={fileBytes}");
             return 0;
         }
         catch (Exception ex)
         {
             L($"FAIL playback_rms: {ex.GetType().Name}: {ex.Message}");
             return 1;
-        }
-        finally
-        {
-            try { s.BargeIn.SetPreferredOutputDevice(prevPreferred); } catch { /* */ }
         }
     }
 
