@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 
@@ -157,13 +158,13 @@ public sealed class BargeInService : IDisposable
 
         try
         {
-            var device = new NAudio.CoreAudioApi.MMDeviceEnumerator()
-                .GetDefaultAudioEndpoint(NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Communications);
-            _output = new WasapiOut(device, NAudio.CoreAudioApi.AudioClientShareMode.Shared, true, 60);
+            var device = new MMDeviceEnumerator()
+                .GetDefaultAudioEndpoint(DataFlow.Render, Role.Communications);
+            _output = new WasapiOut(device, AudioClientShareMode.Shared, true, 60);
         }
         catch
         {
-            _output = new WasapiOut(NAudio.CoreAudioApi.AudioClientShareMode.Shared, 60);
+            _output = new WasapiOut(AudioClientShareMode.Shared, 60);
         }
 
         _output.Init(tap);
@@ -302,25 +303,8 @@ public sealed class BargeInService : IDisposable
     void StartCapture()
     {
         CleanupCapture();
-        try
-        {
-            var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator();
-            var device = enumerator.GetDefaultAudioEndpoint(
-                NAudio.CoreAudioApi.DataFlow.Capture,
-                NAudio.CoreAudioApi.Role.Communications);
-            var cap = new WasapiCapture(device) { ShareMode = NAudio.CoreAudioApi.AudioClientShareMode.Shared };
-            _capFormat = cap.WaveFormat;
-            cap.DataAvailable += OnCapData;
-            cap.StartRecording();
-            _capture = cap;
-            _log.Info("BargeIn: WASAPI communications capture (AEC)");
-            return;
-        }
-        catch (Exception ex)
-        {
-            _log.Info("BargeIn WASAPI capture fallback WaveIn: " + ex.Message);
-        }
-
+        // WaveIn + software echo-VAD. Playback uses WasapiOut Role.Communications so the
+        // OS can still engage communications AEC on duplex devices when available.
         var waveIn = new WaveInEvent
         {
             WaveFormat = new WaveFormat(16000, 16, 1),
@@ -330,6 +314,7 @@ public sealed class BargeInService : IDisposable
         waveIn.DataAvailable += OnCapData;
         waveIn.StartRecording();
         _capture = waveIn;
+        _log.Info("BargeIn: WaveIn capture + echo-cancel VAD (WasapiOut communications render)");
     }
 
     void OnCapData(object? sender, WaveInEventArgs e)
