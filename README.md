@@ -8,7 +8,7 @@ Windows App SDK / **WinUI 3** unpackaged self-contained app with **DirectX 11** 
 
 ## Install
 
-1. Download **LiaDesktop-0.7.3-setup.exe** (installer) or **LiaDesktop-0.7.3-win-x64.zip** (portable) from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
+1. Download **LiaDesktop-0.7.4-setup.exe** (installer) or **LiaDesktop-0.7.4-win-x64.zip** (portable) from [Releases](https://github.com/Shaman-ATTA/lia-desktop/releases).
 2. Run the setup (per-user, no admin) or unpack the zip and run `LiaDesktop.exe`.
 3. **CONFIG** → Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Optional: «Запускать вместе с Windows».
 
@@ -27,6 +27,7 @@ Head asset: Microsoft Rocketbox `Female_Adult_07` (MIT) — see `THIRD_PARTY.md`
 - TTS: Edge `ru-RU-SvetlanaNeural` via C# WebSocket (Sec-MS-GEC v2) + SAPI offline fallback; STT: Windows Speech or Gemini mic
 - Persistent daily logs under `%LOCALAPPDATA%\LiaDesktop\logs` (startup diagnostics, TTS metrics, crashes; Settings → copy `Lia-log.txt` to Desktop)
 - Low-latency TTS: speaks the first sentence while the rest synthesizes (warm Edge WS)
+- Offline wake word «Лиа» (Vosk small-ru, local model; first-run download ~45MB) — Settings toggle + sensitivity
 - DPAPI-protected API key; stop: «Лиа, стоп» / **Ctrl+Alt+S**
 - Clean exit via Job Object `KILL_ON_JOB_CLOSE`
 

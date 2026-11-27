@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.4 — Offline wake word «Лиа»
+
+- **Wake word:** always-listening low-CPU Vosk `vosk-model-small-ru-0.22` with grammar `["лиа","лия","[unk]"]` (UTF-8 PInvoke); no cloud for detection.
+- **Behaviour:** ОЖИДАНИЕ → «Лиа» pulses HUD + optional soft chime → capture follow-up; one-breath «Лиа, открой блокнот» runs the command; mic button unchanged.
+- **Echo guard:** own TTS (barge PlaybackStarted/Stopped) must not self-wake.
+- **Settings:** toggle «Пробуждение по слову „Лиа“» (default ON) + sensitivity slider; model downloads on first run (~45MB) into `%LOCALAPPDATA%\LiaDesktop\vosk` (installer stays lean).
+- **Selftest hard gates:** `wake_positive` ≥90%, `wake_negative` ≤1 false wake, `wake_own_tts`, `wake_command_inline`, `wake_offline`, `wake_cpu` idle &lt;5%; all prior gates unchanged. `sample_log.txt` includes `wake: DETECT` lines.
+
 ## v0.7.3 — Speak from the first sentence (low TTS latency)
 
 - **Streaming TTS:** split reply on RU `.!?…` / newlines (+ soft ~200-char comma cuts); synthesize sentence 1 immediately and play as soon as ready while prefetching 2+ (ordered).

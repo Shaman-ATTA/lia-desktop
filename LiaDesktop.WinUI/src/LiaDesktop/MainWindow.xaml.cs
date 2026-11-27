@@ -109,6 +109,7 @@ public sealed partial class MainWindow : Window
             MicGlyph.Text = "◉";
             OnSpeechFinal(text);
         });
+        _s.Wake.Woken += OnWakeWord;
         _clock.Tick += (_, _) => TickTelemetry();
         _clock.Start();
 
@@ -137,6 +138,43 @@ public sealed partial class MainWindow : Window
             BootOverlay.Visibility = Visibility.Collapsed;
         else
             DispatcherQueue.TryEnqueue(async () => await RunBootSequenceAsync());
+    }
+
+    void OnWakeWord(string full, string command, float conf)
+    {
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            Holo.Renderer.TriggerWakePulse();
+            _listening = true;
+            Holo.Renderer.SetListening(true);
+            StatusCaption.Text = "СЛУШАЮ";
+            VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
+            MicGlyph.Text = "■";
+            Subtitle.Text = string.IsNullOrWhiteSpace(command)
+                ? "Лиа · слушаю…"
+                : $"Лиа · {command}";
+
+            if (!string.IsNullOrWhiteSpace(command))
+            {
+                // One breath: «Лиа, открой блокнот» → NewRequest with command text
+                CommandBox.Text = command;
+                await SendAsync();
+                return;
+            }
+
+            // Wake only — capture following utterance via existing mic path
+            try
+            {
+                if (_s.WindowsSpeechOk)
+                    await _s.Speech.StartAsync();
+                else if (!string.IsNullOrWhiteSpace(_s.Secrets.Load().ApiKey))
+                    await _s.MicGemini.StartAsync();
+            }
+            catch (Exception ex)
+            {
+                _s.Log.Info("wake follow-up STT: " + ex.Message);
+            }
+        });
     }
 
     /// <summary>Called when AppWindow size/presenter changes (maximize, DPI move).</summary>
@@ -220,10 +258,28 @@ public sealed partial class MainWindow : Window
             BootOverlay.Visibility = Visibility.Collapsed;
             BootOverlay.Opacity = 1;
             RebuildHudGeometry();
+            Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";
+            // Ensure offline wake is up after HUD is visible
+            if (_s.Config.WakeWordEnabled && !_s.Wake.IsRunning)
+                _ = EnsureWakeListeningAsync();
         }
         catch
         {
             BootOverlay.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    async Task EnsureWakeListeningAsync()
+    {
+        try
+        {
+            BootStatus.Text = VoskModelStore.IsReady() ? "ПРОБУЖДЕНИЕ…" : "ЗАГРУЗКА МОДЕЛИ «ЛИА»…";
+            await _s.Wake.EnsureModelAsync();
+            _s.Wake.Start();
+        }
+        catch (Exception ex)
+        {
+            _s.Log.Info("wake boot: " + ex.Message);
         }
     }
 
@@ -311,8 +367,12 @@ public sealed partial class MainWindow : Window
     void TickHud()
     {
         _hudT += 0.05f;
-        var pulse = _listening || _speaking ? 0.55f + 0.45f * MathF.Sin(_hudT * 6f) : 0.12f;
-        _waveAmp += ((_listening || _speaking ? 1f : 0.15f) - _waveAmp) * 0.12f;
+        var wakePulse = Holo.Renderer.WakePulseActive;
+        var active = _listening || _speaking || wakePulse;
+        var pulse = active
+            ? 0.55f + 0.45f * MathF.Sin(_hudT * (wakePulse ? 10f : 6f))
+            : 0.12f;
+        _waveAmp += ((active ? (wakePulse ? 1.15f : 1f) : 0.15f) - _waveAmp) * 0.12f;
 
         // Rotate HUD arcs gently (reuse transforms — avoid per-frame alloc)
         var cx = HudCanvas.ActualWidth * 0.5;
@@ -470,14 +530,9 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            // Auto-wake uses Windows STT only; Gemini mic is push-to-talk (needs utterance end).
-            if (!_s.WindowsSpeechOk) return;
-            await _s.Speech.StartAsync();
-            _listening = true;
-            Holo.Renderer.SetListening(true);
-            VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
-            StatusCaption.Text = "СЛУШАЮ";
-            MicGlyph.Text = "■";
+            // Tray/autostart: offline Vosk wake (not Windows STT always-on).
+            if (!_s.Config.WakeWordEnabled) return;
+            await EnsureWakeListeningAsync();
         }
         catch { /* */ }
     }
@@ -925,6 +980,8 @@ public sealed partial class MainWindow : Window
         ApiKeyBox.Password = cfg.ApiKey;
         WorkspaceBox.Text = cfg.WorkspacePath;
         AutostartBox.IsChecked = AutostartService.IsEnabled();
+        WakeWordBox.IsChecked = cfg.WakeWordEnabled;
+        WakeSensSlider.Value = Math.Clamp(cfg.WakeWordSensitivity, 0.1, 0.9);
         ModelBox.Items.Clear();
         if (!string.IsNullOrEmpty(cfg.Model))
         {
@@ -1043,14 +1100,17 @@ public sealed partial class MainWindow : Window
         cfg.VisionModel = cfg.Model;
         if (AudioOutBox.SelectedItem is AudioDeviceItem a)
             cfg.AudioOutputDeviceId = a.Id ?? "";
+        cfg.WakeWordEnabled = WakeWordBox.IsChecked == true;
+        cfg.WakeWordSensitivity = (float)WakeSensSlider.Value;
         _s.BargeIn.SetPreferredOutputDevice(cfg.AudioOutputDeviceId);
         _s.Secrets.Save(cfg);
+        _s.ApplyWakeSettings(cfg);
         try { AutostartService.SetEnabled(AutostartBox.IsChecked == true); }
         catch (Exception ex) { _s.Log.Info("Автозапуск: " + ex.Message); }
         SettingsOverlay.Visibility = Visibility.Collapsed;
         await _s.Gemini.EnsureModelAsync();
         RefreshModelLine();
-        _s.Log.Info($"Сохранено · {ModelLabel()}");
+        _s.Log.Info($"Сохранено · {ModelLabel()} · wake={(cfg.WakeWordEnabled ? "on" : "off")} sens={cfg.WakeWordSensitivity:F2}");
     }
 
     async void RefreshModels_Click(object sender, RoutedEventArgs e) => await RefreshModelsAsync();

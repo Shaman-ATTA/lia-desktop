@@ -42,6 +42,16 @@ modified fonts under a different name. **OK for a public repo** (bundled as-is).
 
 Removed from the repository (were Edge TTS demo WAVs/MP3s). Speech is synthesized at runtime via Edge TTS (`ru-RU-SvetlanaNeural`); no committed voice binaries.
 
+## Vosk (wake word)
+
+| Field | Value |
+|-------|-------|
+| Package | NuGet `Vosk` 0.3.38 + native `libvosk` |
+| Model | `vosk-model-small-ru-0.22` (downloaded on first run / CI into `%LOCALAPPDATA%\LiaDesktop\vosk`) |
+| Source | [alphacep/vosk-api](https://github.com/alphacep/vosk-api) / [alphacephei.com/vosk](https://alphacephei.com/vosk/models) |
+| License | **Apache-2.0** (library); model under its own Alphacephei terms |
+| Redistribution | Native libs via NuGet; model not bundled in installer (download-on-first-run) |
+
 ## Icons
 
 | Paths | Notes |

@@ -103,11 +103,11 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command 7z -ErrorAction SilentlyContinue) {
-            7z a -tzip -mx=9 LiaDesktop-0.7.3-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
+            7z a -tzip -mx=9 LiaDesktop-0.7.4-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
           } else {
-            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.3-win-x64.zip -CompressionLevel Optimal -Force
+            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.4-win-x64.zip -CompressionLevel Optimal -Force
           }
-          Get-Item LiaDesktop-0.7.3-win-x64.zip | Format-List Name,Length
+          Get-Item LiaDesktop-0.7.4-win-x64.zip | Format-List Name,Length
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -120,10 +120,10 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found" }
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           & $iscc /Q installer\LiaDesktop.iss
-          $setup = Get-Item artifacts\LiaDesktop-0.7.3-setup.exe
-          Copy-Item $setup.FullName .\LiaDesktop-0.7.3-setup.exe -Force
+          $setup = Get-Item artifacts\LiaDesktop-0.7.4-setup.exe
+          Copy-Item $setup.FullName .\LiaDesktop-0.7.4-setup.exe -Force
           $setup | Format-List Name,Length
-          $zip = Get-Item LiaDesktop-0.7.3-win-x64.zip
+          $zip = Get-Item LiaDesktop-0.7.4-win-x64.zip
           Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
 
       - name: Install VB-CABLE virtual render (for playback_rms loopback)
@@ -229,6 +229,30 @@ jobs:
           }
           Write-Host 'VB-CABLE ready — app will use default Multimedia for playback_rms'
 
+      - name: Cache / download Vosk small-ru model (wake word)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'vosk'
+          $model = Join-Path $root 'vosk-model-small-ru-0.22'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          if (-not (Test-Path (Join-Path $model 'am\final.mdl'))) {
+            $zip = Join-Path $root 'vosk-model-small-ru-0.22.zip'
+            Write-Host 'Downloading vosk-model-small-ru-0.22 (~45MB)…'
+            Invoke-WebRequest 'https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip' -OutFile $zip
+            Expand-Archive $zip -DestinationPath $root -Force
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+          }
+          if (-not (Test-Path (Join-Path $model 'am\final.mdl'))) { throw "vosk model missing at $model" }
+          # Also stage under LocalAppData so app default path works offline
+          $app = Join-Path $env:LOCALAPPDATA 'LiaDesktop\vosk\vosk-model-small-ru-0.22'
+          if (-not (Test-Path (Join-Path $app 'am\final.mdl'))) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $app) | Out-Null
+            Copy-Item $model $app -Recurse -Force
+          }
+          Write-Host "LIA_VOSK_MODEL=$model"
+          "LIA_VOSK_MODEL=$model" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: E2E selftest (mock Gemini + optional live key)
         shell: pwsh
         env:
@@ -254,7 +278,7 @@ jobs:
             $out = Join-Path $PWD 'selftest.txt'
             if (Test-Path $out) { Remove-Item $out -Force }
             $hasLive = -not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)
-            Write-Host "selftest live_key_present=$hasLive"
+            Write-Host "selftest live_key_present=$hasLive LIA_VOSK_MODEL=$env:LIA_VOSK_MODEL"
             $args = @(
               '--selftest',
               "--gemini-base=http://127.0.0.1:$port/v1beta",
@@ -262,11 +286,11 @@ jobs:
               '--smoke-size=1024x720'
             )
             $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
-            $deadline = (Get-Date).AddMinutes(14)
+            $deadline = (Get-Date).AddMinutes(18)
             while (-not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2; $p.Refresh() }
             if (-not $p.HasExited) {
               try { $p.Kill($true) } catch {}
-              throw "selftest timed out (>14min)"
+              throw "selftest timed out (>18min)"
             }
             if (Test-Path $out) { Get-Content $out | Out-Host } else { Write-Warning "selftest.txt missing" }
             if ($p.ExitCode -ne 0) { throw "selftest exit $($p.ExitCode)" }
@@ -278,6 +302,12 @@ jobs:
             if ($txt -notmatch 'tts_first_sentence_latency: PASS') { throw "selftest missing tts_first_sentence_latency PASS" }
             if ($txt -notmatch 'tts_order: PASS') { throw "selftest missing tts_order PASS" }
             if ($txt -notmatch 'barge_queue_cancel: PASS') { throw "selftest missing barge_queue_cancel PASS" }
+            if ($txt -notmatch 'wake_positive: PASS') { throw "selftest missing wake_positive PASS" }
+            if ($txt -notmatch 'wake_negative: PASS') { throw "selftest missing wake_negative PASS" }
+            if ($txt -notmatch 'wake_own_tts: PASS') { throw "selftest missing wake_own_tts PASS" }
+            if ($txt -notmatch 'wake_command_inline: PASS') { throw "selftest missing wake_command_inline PASS" }
+            if ($txt -notmatch 'wake_offline: PASS') { throw "selftest missing wake_offline PASS" }
+            if ($txt -notmatch 'wake_cpu: PASS') { throw "selftest missing wake_cpu PASS" }
             if ($txt -notmatch 'log_file: PASS') { throw "selftest missing log_file PASS" }
             if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }
             if ($txt -notmatch 'render_nondefault_comm: PASS') { throw "selftest missing render_nondefault_comm PASS" }
@@ -293,7 +323,8 @@ jobs:
               if ($txt -notmatch 'vision_live: SKIP') { Write-Warning "vision_live skipped (no key)" }
             }
             if ($txt -match 'operation was canceled') { throw "selftest reported canceled" }
-            Write-Host "selftest ok (tts + barge + vision/memory gates)"
+            # sample_log must show wake DETECT lines
+            $sample = Join-Path $PWD 'sample_log.txt'
             $exeDir = Split-Path $exe
             foreach ($name in @('vision_test.png','sample_log.txt')) {
               $src = Join-Path $exeDir $name
@@ -301,6 +332,11 @@ jobs:
               elseif (Test-Path (Join-Path $PWD $name)) { Write-Host "$name already in cwd" }
               else { Write-Warning "$name missing after selftest" }
             }
+            if (Test-Path $sample) {
+              $slog = Get-Content $sample -Raw
+              if ($slog -notmatch 'wake: DETECT') { throw "sample_log.txt missing wake: DETECT lines" }
+            }
+            Write-Host "selftest ok (tts + barge + wake + vision/memory gates)"
           }
           finally {
             try { Stop-Process -Id $mock.Id -Force -ErrorAction SilentlyContinue } catch {}
@@ -667,7 +703,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $PWD 'LiaDesktop-0.7.3-setup.exe'
+          $setup = Join-Path $PWD 'LiaDesktop-0.7.4-setup.exe'
           if (-not (Test-Path $setup)) { throw "setup missing" }
           $dir = Join-Path $env:LOCALAPPDATA 'LiaDesktop-smoke'
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
@@ -693,8 +729,8 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.7.3-win-x64.zip
-            LiaDesktop-0.7.3-setup.exe
+            LiaDesktop-0.7.4-win-x64.zip
+            LiaDesktop-0.7.4-setup.exe
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_profile.png
@@ -722,11 +758,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.3** — Speak from the first sentence (low TTS latency)
+          Lia Desktop **v0.7.4** — Offline wake word «Лиа» (Vosk)
 
-          - Sentence-streamed Edge TTS with warm WS; barge cancels the queue
-          - Timings: t_text_ready / t_first_audio_byte / t_playback_start
-          - Selftest: tts_first_sentence_latency, tts_order, barge_queue_cancel + all v0.7.2 gates
+          - Always-on offline wake (vosk-model-small-ru + grammar лиа/лия); echo-guard vs own TTS
+          - Inline «Лиа, открой блокнот»; Settings toggle + sensitivity; mic button unchanged
+          - Streaming TTS from v0.7.3 kept; selftest wake_* + all prior hard gates
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -734,7 +770,7 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           fi
-          for f in LiaDesktop-0.7.3-win-x64.zip LiaDesktop-0.7.3-setup.exe \
+          for f in LiaDesktop-0.7.4-win-x64.zip LiaDesktop-0.7.4-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
                    desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt \
@@ -751,25 +787,25 @@ jobs:
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      - name: Mirror + publish Latest v0.7.3 on main pushes
+      - name: Mirror + publish Latest v0.7.4 on main pushes
         if: success() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.7.3
+          TAG=v0.7.4
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.3** — Speak from the first sentence (low TTS latency)
+          Lia Desktop **v0.7.4** — Offline wake word «Лиа» (Vosk)
 
-          - Sentence-streamed Edge TTS with warm WS; barge cancels the queue
-          - Timings: t_text_ready / t_first_audio_byte / t_playback_start
-          - Selftest: tts_first_sentence_latency, tts_order, barge_queue_cancel + all v0.7.2 gates
+          - Always-on offline wake (vosk-model-small-ru + grammar лиа/лия); echo-guard vs own TTS
+          - Inline «Лиа, открой блокнот»; Settings toggle + sensitivity; mic button unchanged
+          - Streaming TTS from v0.7.3 kept; selftest wake_* + all prior hard gates
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES" || true
-          for f in LiaDesktop-0.7.3-win-x64.zip LiaDesktop-0.7.3-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
+          for f in LiaDesktop-0.7.4-win-x64.zip LiaDesktop-0.7.4-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
             for m in $f; do
               [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
             done

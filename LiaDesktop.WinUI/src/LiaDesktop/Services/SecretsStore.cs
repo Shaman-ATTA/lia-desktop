@@ -15,6 +15,10 @@ public sealed class LiaConfig
     /// <summary>Empty = system default multimedia render. Else MMDevice.ID.</summary>
     public string AudioOutputDeviceId { get; set; } = "";
     public string WorkspacePath { get; set; } = "";
+    /// <summary>Offline wake word «Лиа» (Vosk). Default ON.</summary>
+    public bool WakeWordEnabled { get; set; } = true;
+    /// <summary>0..1 — higher = stricter. Default 0.55.</summary>
+    public float WakeWordSensitivity { get; set; } = 0.55f;
 }
 
 public sealed class SecretsStore

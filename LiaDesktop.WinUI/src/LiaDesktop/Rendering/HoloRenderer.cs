@@ -138,6 +138,7 @@ public sealed class HoloRenderer : IDisposable
     float _idleYawTarget, _idlePitchTarget;
     float _nextIdleWander = 2.5f;
     bool _listening;
+    float _wakePulseUntil;
     Vector3 _eyeL = new(-0.06f, 0.39f, 0.05f);
     Vector3 _eyeR = new(0.06f, 0.39f, 0.05f);
 
@@ -147,6 +148,10 @@ public sealed class HoloRenderer : IDisposable
     public float PoseYaw { set => _poseYaw = value; }
     public void SetPointer(float x, float y) { _ptrX = x; _ptrY = y; }
     public void SetListening(bool listening) => _listening = listening;
+    /// <summary>Brief HUD/listen pulse on wake word (does not change materials/lip sync).</summary>
+    public void TriggerWakePulse(float seconds = 0.85f) =>
+        _wakePulseUntil = _time + Math.Clamp(seconds, 0.2f, 2f);
+    public bool WakePulseActive => _time < _wakePulseUntil;
 
     public void ForcePose(float? yawDeg, float? jaw, bool eyesCloseup = false, bool ringsShowcase = false)
     {

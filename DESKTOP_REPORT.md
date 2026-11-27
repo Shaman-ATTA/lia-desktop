@@ -1,10 +1,10 @@
 # Lia Desktop — ship report
 
-## v0.7.3 — First-sentence TTS latency (Latest)
+## v0.7.4 — Offline wake word «Лиа» (Latest)
 
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.7.3
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.7.4
 
-Published non-draft Latest. Streaming sentence TTS + warm Edge WS; selftest `tts_first_sentence_latency` / `tts_order` / `barge_queue_cancel` + all prior hard gates. Assets: setup/zip, `selftest.txt`, `sample_log.txt` (with timing lines), vision_test, layout/hud/speaking.
+Published non-draft Latest. Offline Vosk wake «Лиа»/«Лия» + inline commands; echo-guard vs own TTS; Settings toggle/sensitivity. Streaming TTS from v0.7.3 kept. Selftest: `wake_*` + all prior hard gates. Assets: setup/zip, `selftest.txt`, `sample_log.txt` (with `wake: DETECT`), vision_test, layout/hud/speaking.
 
 ## v0.7.2 — Vision + memory + Multimedia TTS + logs
 

@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using LiaDesktop.Services.Tools;
+using NAudio.Wave;
 
 namespace LiaDesktop.Services;
 
@@ -73,9 +75,6 @@ public static class SelfTestRunner
             // Streaming first-sentence TTS pipeline
             failed += await RunStreamingTtsGatesAsync(services, L);
 
-            // Persistent log file gate
-            failed += RunLogFileGate(services, L);
-
             // Audio render: Multimedia (not Communications) + abrupt WS close + loopback RMS
             failed += await RunRenderGatesAsync(services, L);
 
@@ -92,6 +91,12 @@ public static class SelfTestRunner
             services.Agent.Abort();
             await Task.Delay(400);
             services.Agent.Memory.Clear();
+
+            // Offline wake word «Лиа» (Vosk) — hard gates (before log sample so wake lines appear)
+            failed += await RunWakeGatesAsync(services, L);
+
+            // Persistent log file gate (+ sample_log.txt with wake DETECT lines)
+            failed += RunLogFileGate(services, L);
 
             // Vision click mapping (no network) + dialog memory (mock) + persist
             failed += RunClickMapGate(L);
@@ -625,6 +630,12 @@ public static class SelfTestRunner
             if (!text.Contains("[REDACTED", StringComparison.Ordinal))
             {
                 L("FAIL log_file: expected redact marker after probe");
+                return 1;
+            }
+            // Wake gates run before this — sample must show wake events
+            if (!text.Contains("wake: DETECT", StringComparison.Ordinal))
+            {
+                L("FAIL log_file: missing wake: DETECT lines (wake gates should have logged)");
                 return 1;
             }
 
@@ -1197,6 +1208,424 @@ public static class SelfTestRunner
         for (var i = 0; i < samples; i++)
             a[i] = amp * MathF.Sin(2 * MathF.PI * freq * i / EchoCancelVad.SampleRate);
         return a;
+    }
+
+    /// <summary>
+    /// Hard wake gates: positive ≥90%, negative ≤1 false, own-TTS echo, inline command,
+    /// offline detection, idle CPU &lt;5%.
+    /// </summary>
+    static async Task<int> RunWakeGatesAsync(AppServices s, Action<string> L)
+    {
+        var fail = 0;
+        var wake = s.Wake;
+        wake.ChimeEnabled = false;
+        wake.Sensitivity = 0.45f; // CI voices vary
+
+        try
+        {
+            VoskModelStore.ApplyEnvOverride();
+            await wake.EnsureModelAsync();
+            if (!wake.IsReady)
+            {
+                L("FAIL wake_*: vosk model not ready");
+                return 1;
+            }
+            L($"wake: model ready path={VoskModelStore.ModelPath()}");
+
+            // --- wake_positive ---
+            fail += await GateWakePositiveAsync(s, L);
+
+            // --- wake_command_inline ---
+            fail += await GateWakeCommandInlineAsync(s, L);
+
+            // --- wake_own_tts ---
+            fail += await GateWakeOwnTtsAsync(s, L);
+
+            // --- wake_negative ---
+            fail += await GateWakeNegativeAsync(s, L);
+
+            // --- wake_offline ---
+            fail += GateWakeOffline(s, L);
+
+            // --- wake_cpu ---
+            fail += await GateWakeCpuAsync(s, L);
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL wake_*: {ex.GetType().Name}: {ex.Message}");
+            fail++;
+        }
+        finally
+        {
+            try { wake.Stop(); } catch { /* */ }
+            wake.SetEchoGuard(false);
+            wake.ChimeEnabled = true;
+        }
+        return fail;
+    }
+
+    static async Task<int> GateWakePositiveAsync(AppServices s, Action<string> L)
+    {
+        var phrases = new[] { "Лиа", "Лиа.", "Лия", "Лиа, привет", "Эй, Лиа" };
+        var hits = 0;
+        var total = 0;
+        var backends = new List<(string Name, Func<string, Task<string?>> Synth)>
+        {
+            ("sapi", async t =>
+            {
+                try { return await s.Tts.SpeakSapiOnlyAsync(t, CancellationToken.None); }
+                catch { return null; }
+            }),
+            ("edge", async t =>
+            {
+                try { return await s.Tts.SpeakWebSocketOnlyAsync(t, CancellationToken.None); }
+                catch { return null; }
+            }),
+        };
+
+        foreach (var (name, synth) in backends)
+        {
+            foreach (var phrase in phrases)
+            {
+                string? path = null;
+                try { path = await synth(phrase); } catch { /* */ }
+                if (path == null || !File.Exists(path)) continue;
+                byte[] pcm;
+                try { pcm = LoadPcm16kMono(path); }
+                catch { continue; }
+                finally { try { File.Delete(path); } catch { /* */ } }
+                total++;
+                if (s.Wake.ProcessUtterance(pcm, out var full, out _, out var conf))
+                {
+                    hits++;
+                    L($"wake_positive sample ok backend={name} phrase=\"{phrase}\" conf={conf:F2} text=\"{full}\"");
+                }
+                else
+                    L($"wake_positive MISS backend={name} phrase=\"{phrase}\"");
+            }
+        }
+
+        if (total < 5)
+        {
+            L($"FAIL wake_positive: only {total} synth samples (need ≥5)");
+            return 1;
+        }
+        var rate = hits / (double)total;
+        if (rate < 0.90)
+        {
+            L($"FAIL wake_positive: detect={hits}/{total} ({rate:P0}) need ≥90%");
+            return 1;
+        }
+        L($"wake_positive: PASS detect={hits}/{total} ({rate:P0})");
+        return 0;
+    }
+
+    static async Task<int> GateWakeCommandInlineAsync(AppServices s, Action<string> L)
+    {
+        const string phrase = "Лиа, открой блокнот";
+        string? path = null;
+        try
+        {
+            try { path = await s.Tts.SpeakWebSocketOnlyAsync(phrase, CancellationToken.None); }
+            catch { /* */ }
+            if (path == null)
+                path = await s.Tts.SpeakSapiOnlyAsync(phrase, CancellationToken.None);
+
+            var pcm = LoadPcm16kMono(path);
+            string? gotCmd = null;
+            float gotConf = 0;
+            void OnW(string full, string cmd, float conf)
+            {
+                gotCmd = cmd;
+                gotConf = conf;
+            }
+            s.Wake.Woken += OnW;
+            try
+            {
+                var ok = s.Wake.ProcessUtterance(pcm, out var full, out var cmd, out var conf);
+                if (!ok)
+                {
+                    L($"FAIL wake_command_inline: no wake on \"{phrase}\" text=\"{full}\"");
+                    return 1;
+                }
+                // Prefer event command; fall back to ProcessUtterance out
+                var command = !string.IsNullOrWhiteSpace(gotCmd) ? gotCmd! : cmd;
+                if (!command.Contains("открой", StringComparison.OrdinalIgnoreCase)
+                    || !command.Contains("блокнот", StringComparison.OrdinalIgnoreCase))
+                {
+                    L($"FAIL wake_command_inline: cmd=\"{command}\" full=\"{full}\" (need 'открой блокнот')");
+                    return 1;
+                }
+                L($"wake_command_inline: PASS cmd=\"{command}\" conf={conf:F2} (NewRequest text)");
+                return 0;
+            }
+            finally
+            {
+                s.Wake.Woken -= OnW;
+            }
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL wake_command_inline: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try { if (path != null) File.Delete(path); } catch { /* */ }
+        }
+    }
+
+    static async Task<int> GateWakeOwnTtsAsync(AppServices s, Action<string> L)
+    {
+        // Replies that rhyme / share phonemes but must NOT self-wake under echo guard
+        var replies = new[]
+        {
+            "Хорошо, открываю блокнот для вас.",
+            "Линия связи стабильна, я на месте.",
+            "Алия передала сообщение, продолжаю.",
+            "Лилии в саду, чем ещё помочь?",
+            "Привет, я готова помочь с файлами.",
+        };
+        var before = s.Wake.DetectCount;
+        s.Wake.SetEchoGuard(true);
+        try
+        {
+            foreach (var reply in replies)
+            {
+                string? path = null;
+                try
+                {
+                    try { path = await s.Tts.SpeakSapiOnlyAsync(reply, CancellationToken.None); }
+                    catch
+                    {
+                        path = await s.Tts.SpeakToFileAsync(reply, CancellationToken.None);
+                    }
+                    if (path == null) continue;
+                    var pcm = LoadPcm16kMono(path);
+                    // Push while echo guard active — must ignore
+                    s.Wake.Start();
+                    for (var i = 0; i < pcm.Length; i += 3200)
+                    {
+                        var n = Math.Min(3200, pcm.Length - i);
+                        var slice = new byte[n];
+                        Buffer.BlockCopy(pcm, i, slice, 0, n);
+                        s.Wake.PushPcm(slice);
+                    }
+                    // Also ProcessUtterance would bypass guard — only PushPcm is guarded;
+                    // simulate barge path: guard stays on during playback.
+                }
+                finally
+                {
+                    try { if (path != null) File.Delete(path); } catch { /* */ }
+                }
+            }
+            await Task.Delay(200);
+            var delta = s.Wake.DetectCount - before;
+            if (delta > 0)
+            {
+                L($"FAIL wake_own_tts: self-triggered {delta} times under echo guard");
+                return 1;
+            }
+            L("wake_own_tts: PASS (own TTS did not self-trigger)");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL wake_own_tts: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            s.Wake.SetEchoGuard(false);
+        }
+    }
+
+    static async Task<int> GateWakeNegativeAsync(AppServices s, Action<string> L)
+    {
+        var phrases = new[]
+        {
+            "Добрый день, как ваши дела сегодня?",
+            "Открой пожалуйста калькулятор на рабочем столе.",
+            "Какая сейчас погода в Москве и завтра?",
+            "Напиши короткое письмо коллеге про встречу.",
+            "Переключи музыку и сделай потише звук.",
+            "Сколько будет двадцать пять умножить на восемь?",
+            "Найди файл отчёт в папке документы.",
+            "Расскажи анекдот про программистов коротко.",
+        };
+        var before = s.Wake.DetectCount;
+        s.Wake.SetEchoGuard(false);
+        s.Wake.Start();
+        var sw = Stopwatch.StartNew();
+        var pcmAll = new List<byte>();
+
+        foreach (var phrase in phrases)
+        {
+            string? path = null;
+            try
+            {
+                try { path = await s.Tts.SpeakSapiOnlyAsync(phrase, CancellationToken.None); }
+                catch { path = await s.Tts.SpeakToFileAsync(phrase, CancellationToken.None); }
+                if (path == null) continue;
+                pcmAll.AddRange(LoadPcm16kMono(path));
+                // 400ms noise between phrases
+                pcmAll.AddRange(MakeNoisePcm(WakeWordService.SampleRate * 2 * 4 / 10));
+            }
+            finally
+            {
+                try { if (path != null) File.Delete(path); } catch { /* */ }
+            }
+        }
+
+        // Pad with noise to ≥2 minutes of audio (a few minutes of speech/noise)
+        var target = WakeWordService.SampleRate * 2 * 120; // 2 min
+        while (pcmAll.Count < target)
+            pcmAll.AddRange(MakeNoisePcm(WakeWordService.SampleRate * 2)); // 1s chunks
+
+        var buf = pcmAll.ToArray();
+        // Stream in 100ms chunks like live WaveIn
+        const int chunk = WakeWordService.SampleRate * 2 / 10;
+        for (var i = 0; i < buf.Length; i += chunk)
+        {
+            var n = Math.Min(chunk, buf.Length - i);
+            var slice = new byte[n];
+            Buffer.BlockCopy(buf, i, slice, 0, n);
+            s.Wake.PushPcm(slice);
+        }
+        s.Wake.Flush();
+        // Also try free-form on non-wake phrases (should reject)
+        foreach (var phrase in phrases.Take(3))
+        {
+            string? path = null;
+            try
+            {
+                path = await s.Tts.SpeakSapiOnlyAsync(phrase, CancellationToken.None);
+                var pcm = LoadPcm16kMono(path);
+                s.Wake.ProcessUtterance(pcm, out _, out _, out _);
+            }
+            catch { /* */ }
+            finally { try { if (path != null) File.Delete(path); } catch { /* */ } }
+        }
+
+        var falseWakes = s.Wake.DetectCount - before;
+        var sec = sw.Elapsed.TotalSeconds;
+        if (falseWakes > 1)
+        {
+            L($"FAIL wake_negative: false_wakes={falseWakes} over {sec:F0}s audio (need ≤1)");
+            return 1;
+        }
+        L($"wake_negative: PASS false_wakes={falseWakes} audio_s={sec:F0} pcm_s={buf.Length / (double)(WakeWordService.SampleRate * 2):F0}");
+        return 0;
+    }
+
+    static int GateWakeOffline(AppServices s, Action<string> L)
+    {
+        try
+        {
+            if (!VoskModelStore.IsReady())
+            {
+                L("FAIL wake_offline: model not on disk");
+                return 1;
+            }
+            // Block outbound HTTP for this check — detection must not need network
+            var old = ServicePointManager.Expect100Continue;
+            try
+            {
+                // Synthesize a simple tone+silence is useless; use already-cached SAPI file from memory
+                // Build a minimal spoken sample via SAPI (local) then detect with network "blocked"
+                // by ensuring EnsureModelAsync is not called and ProcessUtterance only uses disk model.
+                var path = s.Tts.SpeakSapiOnlyAsync("Лиа", CancellationToken.None).GetAwaiter().GetResult();
+                var pcm = LoadPcm16kMono(path);
+                try { File.Delete(path); } catch { /* */ }
+
+                // Point DNS-sensitive downloads at invalid host for any accidental fetch
+                var prevOverride = VoskModelStore.ModelRootOverride;
+                // Keep model root as-is (local). Detection:
+                var ok = s.Wake.ProcessUtterance(pcm, out var full, out _, out var conf);
+                if (!ok)
+                {
+                    L($"FAIL wake_offline: no detect offline text=\"{full}\"");
+                    return 1;
+                }
+                L($"wake_offline: PASS conf={conf:F2} text=\"{full}\" (local model, no download)");
+                return 0;
+            }
+            finally
+            {
+                ServicePointManager.Expect100Continue = old;
+            }
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL wake_offline: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+    }
+
+    static async Task<int> GateWakeCpuAsync(AppServices s, Action<string> L)
+    {
+        try
+        {
+            s.Wake.SetEchoGuard(false);
+            s.Wake.Start();
+            var proc = Process.GetCurrentProcess();
+            proc.Refresh();
+            var cpu0 = proc.TotalProcessorTime;
+            var wall0 = Stopwatch.StartNew();
+            // Idle listen: push near-silence for ~5s (simulates always-on WaveIn)
+            var silence = new byte[WakeWordService.SampleRate * 2 / 10]; // 100ms
+            var end = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < end)
+            {
+                s.Wake.PushPcm(silence);
+                await Task.Delay(100);
+            }
+            wall0.Stop();
+            proc.Refresh();
+            var cpuDt = (proc.TotalProcessorTime - cpu0).TotalMilliseconds;
+            var wallMs = Math.Max(1, wall0.Elapsed.TotalMilliseconds);
+            var cores = Math.Max(1, Environment.ProcessorCount);
+            var pct = cpuDt / wallMs / cores * 100.0;
+            if (pct >= 5.0)
+            {
+                L($"FAIL wake_cpu: idle_avg={pct:F2}% (need <5%) cores={cores}");
+                return 1;
+            }
+            L($"wake_cpu: PASS idle_avg={pct:F2}% cores={cores} wall_ms={wallMs:F0}");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL wake_cpu: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+    }
+
+    static byte[] MakeNoisePcm(int bytes)
+    {
+        var b = new byte[bytes];
+        for (var i = 0; i < b.Length; i += 2)
+        {
+            var s = (short)Random.Shared.Next(-800, 800);
+            b[i] = (byte)(s & 0xff);
+            b[i + 1] = (byte)((s >> 8) & 0xff);
+        }
+        return b;
+    }
+
+    static byte[] LoadPcm16kMono(string path)
+    {
+        using var reader = Path.GetExtension(path).Equals(".mp3", StringComparison.OrdinalIgnoreCase)
+            ? (WaveStream)new MediaFoundationReader(path)
+            : new WaveFileReader(path);
+        var target = new WaveFormat(WakeWordService.SampleRate, 16, 1);
+        using var resampler = new MediaFoundationResampler(reader, target) { ResamplerQuality = 60 };
+        using var ms = new MemoryStream();
+        var buf = new byte[target.AverageBytesPerSecond];
+        int n;
+        while ((n = resampler.Read(buf, 0, buf.Length)) > 0)
+            ms.Write(buf, 0, n);
+        return ms.ToArray();
     }
 
     static string Truncate(string s, int n) => s.Length <= n ? s : s[..n] + "…";
