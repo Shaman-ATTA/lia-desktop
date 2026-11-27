@@ -35,12 +35,18 @@ public static class SelfTestRunner
     public static async Task RunAndExitAsync(AppServices services)
     {
         var log = new StringBuilder();
-        void L(string s)
+        void FlushLog()
+        {
+            try { File.WriteAllText(OutPath!, log.ToString(), Encoding.UTF8); } catch { /* */ }
+        }
+        // Flush every line so timeouts always leave a useful partial selftest.txt
+        Action<string> L = s =>
         {
             log.AppendLine(s);
             services.Log.Info("[selftest] " + s);
             Program.BootLog("selftest: " + s);
-        }
+            FlushLog();
+        };
 
         var failed = 0;
         var baseUrl = GeminiEndpoints.Base;
@@ -49,11 +55,7 @@ public static class SelfTestRunner
         // Never log the key — only whether present
         L($"gemini_base={baseUrl}");
         L($"live_key_present={!string.IsNullOrWhiteSpace(liveKey)}");
-        void Checkpoint(string name)
-        {
-            L($"checkpoint: {name}");
-            try { File.WriteAllText(OutPath!, log.ToString(), Encoding.UTF8); } catch { /* */ }
-        }
+        void Checkpoint(string name) => L($"checkpoint: {name}");
 
         try
         {
@@ -1240,6 +1242,7 @@ public static class SelfTestRunner
         try
         {
             VoskModelStore.ApplyEnvOverride();
+            L("wake: EnsureModelAsync…");
             await wake.EnsureModelAsync();
             if (!wake.IsReady)
             {
@@ -1249,21 +1252,27 @@ public static class SelfTestRunner
             L($"wake: model ready path={VoskModelStore.ModelPath()}");
 
             // --- wake_positive ---
+            L("wake_positive: starting…");
             fail += await GateWakePositiveAsync(s, L);
 
             // --- wake_command_inline ---
+            L("wake_command_inline: starting…");
             fail += await GateWakeCommandInlineAsync(s, L);
 
             // --- wake_own_tts ---
+            L("wake_own_tts: starting…");
             fail += await GateWakeOwnTtsAsync(s, L);
 
             // --- wake_negative ---
+            L("wake_negative: starting…");
             fail += await GateWakeNegativeAsync(s, L);
 
             // --- wake_offline ---
+            L("wake_offline: starting…");
             fail += GateWakeOffline(s, L);
 
             // --- wake_cpu ---
+            L("wake_cpu: starting…");
             fail += await GateWakeCpuAsync(s, L);
         }
         catch (Exception ex)

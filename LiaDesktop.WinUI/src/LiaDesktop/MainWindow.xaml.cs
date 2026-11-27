@@ -142,6 +142,18 @@ public sealed partial class MainWindow : Window
 
     void OnWakeWord(string full, string command, float conf)
     {
+        // Selftest drives wake via ProcessUtterance/PushPcm — never steal mic or SendAsync
+        // (MicGemini.StartAsync would hang the gate for the whole selftest timeout).
+        if (SelfTestRunner.IsSelfTest)
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                try { Holo.Renderer.TriggerWakePulse(); } catch { /* */ }
+                _s.Log.Info($"wake UI (selftest): conf={conf:F2} text=\"{full}\" cmd=\"{command}\"");
+            });
+            return;
+        }
+
         DispatcherQueue.TryEnqueue(async () =>
         {
             Holo.Renderer.TriggerWakePulse();

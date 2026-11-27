@@ -112,32 +112,33 @@ public sealed class WakeWordService : IDisposable
                 return;
             }
             CreateGrammar_NoLock();
-            if (WaveIn.DeviceCount > 0)
-            {
-                _waveIn = new WaveInEvent
-                {
-                    WaveFormat = new WaveFormat(SampleRate, 16, 1),
-                    BufferMilliseconds = 100,
-                };
-                _waveIn.DataAvailable += OnData;
-                try
-                {
-                    _waveIn.StartRecording();
-                    _running = true;
-                    _log.Info("wake: listening (ОЖИДАНИЕ)");
-                }
-                catch (Exception ex)
-                {
-                    _log.Info("wake: WaveIn start fail — " + ex.Message);
-                    CleanupCapture_NoLock();
-                    // still allow PushPcm
-                    _running = true;
-                }
-            }
-            else
+            // Selftest injects PCM via PushPcm — skip WaveIn (avoids mic contention on CI)
+            if (SelfTestRunner.IsSelfTest || WaveIn.DeviceCount <= 0)
             {
                 _running = true;
-                _log.Info("wake: no WaveIn — PushPcm-only mode");
+                _log.Info(SelfTestRunner.IsSelfTest
+                    ? "wake: selftest PushPcm-only mode"
+                    : "wake: no WaveIn — PushPcm-only mode");
+                return;
+            }
+            _waveIn = new WaveInEvent
+            {
+                WaveFormat = new WaveFormat(SampleRate, 16, 1),
+                BufferMilliseconds = 100,
+            };
+            _waveIn.DataAvailable += OnData;
+            try
+            {
+                _waveIn.StartRecording();
+                _running = true;
+                _log.Info("wake: listening (ОЖИДАНИЕ)");
+            }
+            catch (Exception ex)
+            {
+                _log.Info("wake: WaveIn start fail — " + ex.Message);
+                CleanupCapture_NoLock();
+                // still allow PushPcm
+                _running = true;
             }
         }
     }
