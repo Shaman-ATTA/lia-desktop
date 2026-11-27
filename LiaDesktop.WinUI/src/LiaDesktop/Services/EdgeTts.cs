@@ -109,9 +109,9 @@ public sealed class EdgeTts
     public async Task<string> SpeakSapiOnlyAsync(string text, CancellationToken ct = default)
     {
         var path = await ViaSapiAsync(text, ct);
-        if (path == null || !TtsAudioGate.TryValidate(path, out _, out _, out var detail))
+        if (!TtsAudioGate.TryValidate(path, out _, out _, out var detail))
             throw new InvalidOperationException("SAPI-only produced no audible audio: " + detail);
-        return path;
+        return path!;
     }
 
     async Task ViaWebSocketAsync(string text, string outPath, CancellationToken ct)
