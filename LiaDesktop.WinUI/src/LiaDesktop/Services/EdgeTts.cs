@@ -4,7 +4,8 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using Windows.Media.SpeechSynthesis;
-using Windows.Storage.Streams;
+using WinSpeech = Windows.Media.SpeechSynthesis.SpeechSynthesizer;
+using SysSpeech = System.Speech.Synthesis.SpeechSynthesizer;
 
 namespace LiaDesktop.Services;
 
@@ -45,8 +46,9 @@ public sealed class EdgeTts
                 try
                 {
                     await ViaWebSocketAsync(text, outPath, ct);
-                    if (File.Exists(outPath) && new FileInfo(outPath).Length > 0)
+                    if (TtsAudioGate.TryValidate(outPath, out _, out _, out _))
                         return outPath;
+                    try { if (File.Exists(outPath)) File.Delete(outPath); } catch { /* */ }
                 }
                 catch (Exception ex)
                 {
@@ -69,9 +71,9 @@ public sealed class EdgeTts
             try
             {
                 var wav = await ViaSapiAsync(text, ct);
-                if (wav != null && File.Exists(wav) && new FileInfo(wav).Length > 0)
+                if (wav != null && TtsAudioGate.TryValidate(wav, out _, out _, out var sapiOk))
                 {
-                    _log.Info("TTS: SAPI/OneCore (офлайн)");
+                    _log.Info($"TTS: SAPI/OneCore офлайн ({sapiOk})");
                     return wav;
                 }
             }
@@ -187,34 +189,100 @@ public sealed class EdgeTts
 
     async Task<string?> ViaSapiAsync(string text, CancellationToken ct)
     {
-        using var synth = new SpeechSynthesizer();
+        // Prefer classic System.Speech → real PCM WAV (WinRT path often wrote header-only 46B files on GHA).
         try
         {
-            var voices = SpeechSynthesizer.AllVoices;
+            var path = await Task.Run(() => SpeakSystemSpeechToWav(text), ct);
+            if (TtsAudioGate.TryValidate(path, out _, out _, out var ok))
+            {
+                _log.Info($"TTS: System.Speech ({ok})");
+                return path;
+            }
+            _log.Info($"TTS System.Speech rejected: {ok}");
+            try { if (path != null) File.Delete(path); } catch { /* */ }
+        }
+        catch (Exception ex)
+        {
+            _log.Info($"TTS System.Speech: {OneLine(ex.Message)}");
+        }
+
+        ct.ThrowIfCancellationRequested();
+        return await SpeakWinRtToWavAsync(text, ct);
+    }
+
+    static string SpeakSystemSpeechToWav(string text)
+    {
+        using var synth = new SysSpeech();
+        var installed = synth.GetInstalledVoices().Where(v => v.Enabled).ToList();
+        if (installed.Count == 0)
+            throw new InvalidOperationException("no System.Speech voices installed");
+
+        var pick =
+            installed.FirstOrDefault(v =>
+                v.VoiceInfo.Culture.Name.StartsWith("ru", StringComparison.OrdinalIgnoreCase) &&
+                (v.VoiceInfo.Name.Contains("Irina", StringComparison.OrdinalIgnoreCase)
+                 || v.VoiceInfo.Name.Contains("Ирина", StringComparison.OrdinalIgnoreCase)))
+            ?? installed.FirstOrDefault(v =>
+                v.VoiceInfo.Culture.Name.StartsWith("ru", StringComparison.OrdinalIgnoreCase)
+                && (v.VoiceInfo.Name.Contains("Pavel", StringComparison.OrdinalIgnoreCase)
+                    || v.VoiceInfo.Name.Contains("Павел", StringComparison.OrdinalIgnoreCase)))
+            ?? installed.FirstOrDefault(v =>
+                v.VoiceInfo.Culture.Name.StartsWith("ru", StringComparison.OrdinalIgnoreCase))
+            ?? installed.FirstOrDefault(v => v.VoiceInfo.Gender == System.Speech.Synthesis.VoiceGender.Female)
+            ?? installed[0];
+
+        synth.SelectVoice(pick.VoiceInfo.Name);
+        try { synth.Rate = -1; } catch { /* */ }
+
+        var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-sapi-{Guid.NewGuid():N}.wav");
+        synth.SetOutputToWaveFile(outPath);
+        try { synth.Speak(text); }
+        finally { try { synth.SetOutputToNull(); } catch { /* */ } }
+
+        if (!File.Exists(outPath))
+            throw new InvalidOperationException("System.Speech produced no file");
+        return outPath;
+    }
+
+    async Task<string?> SpeakWinRtToWavAsync(string text, CancellationToken ct)
+    {
+        using var synth = new WinSpeech();
+        try
+        {
+            var voices = WinSpeech.AllVoices;
             var ru = voices.FirstOrDefault(v =>
                 v.Language.StartsWith("ru", StringComparison.OrdinalIgnoreCase) &&
                 (v.DisplayName.Contains("Irina", StringComparison.OrdinalIgnoreCase)
                  || v.DisplayName.Contains("Pavel", StringComparison.OrdinalIgnoreCase)
                  || v.DisplayName.Contains("Ирина", StringComparison.OrdinalIgnoreCase)));
             ru ??= voices.FirstOrDefault(v => v.Language.StartsWith("ru", StringComparison.OrdinalIgnoreCase));
+            ru ??= voices.FirstOrDefault();
             if (ru != null) synth.Voice = ru;
         }
-        catch { /* keep default voice */ }
+        catch { /* keep default */ }
 
         ct.ThrowIfCancellationRequested();
         var stream = await synth.SynthesizeTextToStreamAsync(text);
-        var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-sapi-{Guid.NewGuid():N}.wav");
-        await using (var fs = File.Create(outPath))
+        var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-winrt-{Guid.NewGuid():N}.wav");
+        try
         {
-            var reader = new DataReader(stream);
-            await reader.LoadAsync((uint)stream.Size);
-            var bytes = new byte[stream.Size];
-            reader.ReadBytes(bytes);
-            await fs.WriteAsync(bytes, ct);
+            // Copy full stream (not stream.Size via DataReader — that produced 46B header-only WAVs)
+            await using var input = stream.AsStreamForRead();
+            await using var fs = File.Create(outPath);
+            await input.CopyToAsync(fs, ct);
+            await fs.FlushAsync(ct);
         }
-        stream.Dispose();
-        if (!File.Exists(outPath) || new FileInfo(outPath).Length == 0)
-            throw new InvalidOperationException("SAPI returned empty audio");
+        finally
+        {
+            stream.Dispose();
+        }
+
+        if (!TtsAudioGate.TryValidate(outPath, out _, out _, out var detail))
+        {
+            try { File.Delete(outPath); } catch { /* */ }
+            throw new InvalidOperationException("WinRT SpeechSynthesis inaudible: " + detail);
+        }
+        _log.Info($"TTS: WinRT SpeechSynthesis ({detail})");
         return outPath;
     }
 

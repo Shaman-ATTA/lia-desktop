@@ -299,16 +299,13 @@ public static class SelfTestRunner
         try
         {
             var wsPath = await s.Tts.SpeakWebSocketOnlyAsync("Привет, я Лиа.", CancellationToken.None);
-            if (wsPath == null || !File.Exists(wsPath) || new FileInfo(wsPath).Length <= 0)
+            if (!TtsAudioGate.TryValidate(wsPath, out var n, out var rms, out var detail))
             {
-                L("FAIL tts_ws_only: no audio from C# WebSocket (Sec-MS-GEC)");
+                L($"FAIL tts_ws_only: inaudible/empty WebSocket audio ({detail})");
                 fail++;
             }
             else
-            {
-                var n = new FileInfo(wsPath).Length;
-                L($"tts_ws_only: PASS bytes={n}");
-            }
+                L($"tts_ws_only: PASS bytes={n} rms={rms:F4}");
         }
         catch (Exception ex)
         {
@@ -319,17 +316,15 @@ public static class SelfTestRunner
 
         try
         {
-            var sapiPath = await s.Tts.SpeakSapiOnlyAsync("Привет.", CancellationToken.None);
-            if (sapiPath == null || !File.Exists(sapiPath) || new FileInfo(sapiPath).Length <= 0)
+            var sapiPath = await s.Tts.SpeakSapiOnlyAsync(
+                "Привет, я Лиа. Это проверка офлайн голоса.", CancellationToken.None);
+            if (!TtsAudioGate.TryValidate(sapiPath, out var n, out var rms, out var detail))
             {
-                L("FAIL tts_sapi: SAPI/OneCore returned no audio");
+                L($"FAIL tts_sapi: inaudible/empty SAPI audio ({detail})");
                 fail++;
             }
             else
-            {
-                var n = new FileInfo(sapiPath).Length;
-                L($"tts_sapi: PASS bytes={n}");
-            }
+                L($"tts_sapi: PASS bytes={n} rms={rms:F4}");
         }
         catch (Exception ex)
         {

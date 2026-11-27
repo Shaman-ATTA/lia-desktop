@@ -1,11 +1,12 @@
 # Changelog
 
-## v0.7.1 — Barge-in / natural interruption
+## v0.7.1 — Barge-in / natural interruption + real SAPI
 
 - **Mic open while speaking:** WASAPI communications capture (OS AEC) + software echo-cancel VAD; ≥300ms user speech barges in.
 - **Interrupt policy:** backchannels (`угу`/`ага`/`да`/`продолжай`/`дальше`/`так`) resume remainder; `стоп`/`хватит`/`замолчи`/`тихо` stop silent; else new request with spoken-so-far context.
 - **HUD:** `СЛУШАЮ` on barge-in; Edge TTS SvetlanaNeural unchanged (no Gemini TTS).
-- **Selftest:** `barge_loopback` / `barge_backchannel` / `barge_stop` / `barge_new` gates in `selftest.txt`.
+- **SAPI:** System.Speech wave output (ru-RU Irina/Pavel if installed, else any voice); reject header-only/silent files. Selftest requires ≥10KB + RMS for `tts_sapi` and `tts_ws_only`.
+- **CI:** live maximized `layout_window_max.png`; barge_* gates in `selftest.txt`.
 
 ## v0.7.0 — Edge TTS Sec-MS-GEC, SAPI fallback, HiDPI MatrixTransform
 

@@ -322,6 +322,8 @@ jobs:
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_eyes.png') @('--smoke-eyes','--smoke-yaw=0') 12
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_rings.png') @('--smoke-rings','--smoke-yaw=-48') 12
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_hud.png') @('--smoke-hud','--smoke-yaw=8') 12
+          # Real maximized HWND on the runner desktop (not offscreen dump) — face centred in live window
+          Invoke-SmokeShot (Join-Path $PWD 'layout_window_max.png') @('--smoke-yaw=5') 12
 
           # Exact TV dumps via oversized/offscreen swapchain (independent of GHA HWND clamp).
           # Covers real 1920×1080 @100% maximize and 3840×2160 framing.
@@ -515,7 +517,7 @@ jobs:
           "OK: no LiaDesktop processes remain" | Out-File $after -Append
           Get-Content $after
 
-          foreach ($f in @('desktop_winui_front.png','desktop_winui_threequarter.png','desktop_winui_profile.png','desktop_winui_speaking.png','desktop_winui_eyes.png','desktop_winui_rings.png','desktop_winui_hud.png','desktop_winui_front_1080.png','desktop_winui_front_4k.png')) {
+          foreach ($f in @('desktop_winui_front.png','desktop_winui_threequarter.png','desktop_winui_profile.png','desktop_winui_speaking.png','desktop_winui_eyes.png','desktop_winui_rings.png','desktop_winui_hud.png','desktop_winui_front_1080.png','desktop_winui_front_4k.png','layout_window_max.png')) {
             $len = (Get-Item $f).Length
             if ($len -lt 40000) { throw "$f too small ($len) — likely blank/error dialog" }
           }
@@ -523,8 +525,9 @@ jobs:
           $hr = (Get-FileHash desktop_winui_rings.png).Hash
           if ($h3 -eq $hr) { throw "threequarter and rings screenshots are identical — need distinct views" }
           pip install --quiet pillow numpy
-          # Gate 100% maximize shots first (field bug)
+          # Gate live maximized HWND + exact 100% TV dumps
           python tools/check_framing.py `
+            layout_window_max.png `
             layout_1080_100_max.png layout_1080_100_maxlaunch.png `
             layout_4k_100_max.png layout_4k_100_maxlaunch.png `
             desktop_winui_front_1080.png desktop_winui_front_4k.png
@@ -575,30 +578,14 @@ jobs:
             desktop_winui_front_1080.png
             desktop_winui_front_4k.png
             layout_*.png
+            layout_window_max.png
             selftest.txt
             tasklist_before.txt
             tasklist_after.txt
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload smoke PNGs for QA (tags, even if framing fails)
-        if: always() && startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "CI smoke PNGs (draft until HUD QA)"
-          for f in desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
-                   desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
-                   desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt layout_*.png; do
-            for m in $f; do
-              [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
-            done
-          done
-
-      - name: Upload release assets (tags) — DRAFT until visual HUD QA
+      - name: Publish release assets (tags) — non-draft Latest
         if: success() && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -606,25 +593,24 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.1** — Barge-in interruption + Edge TTS SvetlanaNeural
+          Lia Desktop **v0.7.1** — Barge-in + real SAPI TTS + layout_window_max
 
           - Mic stays open while speaking: WASAPI communications AEC + echo-cancel VAD (≥300ms)
           - Backchannel resume / stop / new-request with spoken-so-far context; HUD СЛУШАЮ
-          - Edge TTS ru-RU-SvetlanaNeural unchanged (no Gemini TTS)
-          - E2E `--selftest` gates: tts_ws_only, tts_sapi, barge_loopback/backchannel/stop/new; see selftest.txt
-
-
+          - Edge TTS ru-RU-SvetlanaNeural; offline System.Speech/SAPI with ≥10KB audible PCM gate
+          - Live maximized HWND shot `layout_window_max.png` + exact 1920/4K offscreen dumps
+          - E2E `--selftest`: tts_ws_only, tts_sapi (RMS), barge_*; see selftest.txt
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "$NOTES"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "$NOTES"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           fi
           for f in LiaDesktop-0.7.1-win-x64.zip LiaDesktop-0.7.1-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
-                   desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt \
+                   desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt \
                    tasklist_before.txt tasklist_after.txt layout_*.png; do
             for m in $f; do
               if [ -f "$m" ]; then
@@ -634,20 +620,32 @@ jobs:
               fi
             done
           done
-          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG} (draft)"
+          # Publish as Latest (non-draft)
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      - name: Mirror assets to draft v0.7.1 on main pushes
+      - name: Mirror + publish Latest v0.7.1 on main pushes
         if: success() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           TAG=v0.7.1
+          NOTES=$(cat <<'EOF'
+          Lia Desktop **v0.7.1** — Barge-in + real SAPI TTS + layout_window_max
+
+          - Mic open while speaking (WASAPI AEC + echo-VAD); backchannel / stop / new-request
+          - System.Speech/SAPI audible PCM gate (≥10KB + RMS); Edge SvetlanaNeural
+          - layout_window_max.png + exact 1920/4K dumps; selftest.txt
+          EOF
+          )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "v0.7.1 barge-in (draft)"
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft || true
-          for f in LiaDesktop-0.7.1-win-x64.zip LiaDesktop-0.7.1-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt tasklist_after.txt layout_*.png; do
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES" || true
+          for f in LiaDesktop-0.7.1-win-x64.zip LiaDesktop-0.7.1-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt layout_*.png; do
             for m in $f; do
               [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
             done
           done
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
