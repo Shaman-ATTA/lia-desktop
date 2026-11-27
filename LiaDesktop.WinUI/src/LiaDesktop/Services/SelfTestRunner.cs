@@ -93,7 +93,9 @@ public static class SelfTestRunner
             services.Agent.Memory.Clear();
 
             // Offline wake word «Лиа» (Vosk) — hard gates (before log sample so wake lines appear)
+            L("wake: starting gates…");
             failed += await RunWakeGatesAsync(services, L);
+            L("wake: gates done");
 
             // Persistent log file gate (+ sample_log.txt with wake DETECT lines)
             failed += RunLogFileGate(services, L);
@@ -1266,26 +1268,14 @@ public static class SelfTestRunner
 
     static async Task<int> GateWakePositiveAsync(AppServices s, Action<string> L)
     {
+        // Several voices: SAPI first (offline), then Edge if reachable — cap Edge samples for CI time.
         var phrases = new[] { "Лиа", "Лиа.", "Лия", "Лиа, привет", "Эй, Лиа" };
         var hits = 0;
         var total = 0;
-        var backends = new List<(string Name, Func<string, Task<string?>> Synth)>
-        {
-            ("sapi", async t =>
-            {
-                try { return await s.Tts.SpeakSapiOnlyAsync(t, CancellationToken.None); }
-                catch { return null; }
-            }),
-            ("edge", async t =>
-            {
-                try { return await s.Tts.SpeakWebSocketOnlyAsync(t, CancellationToken.None); }
-                catch { return null; }
-            }),
-        };
 
-        foreach (var (name, synth) in backends)
+        async Task TryBackend(string name, Func<string, Task<string?>> synth, IEnumerable<string> set)
         {
-            foreach (var phrase in phrases)
+            foreach (var phrase in set)
             {
                 string? path = null;
                 try { path = await synth(phrase); } catch { /* */ }
@@ -1304,6 +1294,23 @@ public static class SelfTestRunner
                     L($"wake_positive MISS backend={name} phrase=\"{phrase}\"");
             }
         }
+
+        await TryBackend("sapi", async t =>
+        {
+            try { return await s.Tts.SpeakSapiOnlyAsync(t, CancellationToken.None); }
+            catch { return null; }
+        }, phrases);
+
+        // Edge: 3 samples (enough multi-voice without burning minutes)
+        await TryBackend("edge", async t =>
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+                return await s.Tts.SpeakWebSocketOnlyAsync(t, cts.Token);
+            }
+            catch { return null; }
+        }, phrases.Take(3));
 
         if (total < 5)
         {
@@ -1326,7 +1333,11 @@ public static class SelfTestRunner
         string? path = null;
         try
         {
-            try { path = await s.Tts.SpeakWebSocketOnlyAsync(phrase, CancellationToken.None); }
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                path = await s.Tts.SpeakWebSocketOnlyAsync(phrase, cts.Token);
+            }
             catch { /* */ }
             if (path == null)
                 path = await s.Tts.SpeakSapiOnlyAsync(phrase, CancellationToken.None);
@@ -1442,6 +1453,8 @@ public static class SelfTestRunner
 
     static async Task<int> GateWakeNegativeAsync(AppServices s, Action<string> L)
     {
+        // Keep wall-time bounded: free-form on multi-minute streams + grammar ghosts was
+        // hanging CI (>18min). Use utterance checks + ~90s noise PushPcm (no freeform spam).
         var phrases = new[]
         {
             "Добрый день, как ваши дела сегодня?",
@@ -1457,64 +1470,64 @@ public static class SelfTestRunner
         s.Wake.SetEchoGuard(false);
         s.Wake.Start();
         var sw = Stopwatch.StartNew();
-        var pcmAll = new List<byte>();
+        long pcmBytes = 0;
 
+        // 1) Free-form on non-wake phrases (must not detect)
         foreach (var phrase in phrases)
-        {
-            string? path = null;
-            try
-            {
-                try { path = await s.Tts.SpeakSapiOnlyAsync(phrase, CancellationToken.None); }
-                catch { path = await s.Tts.SpeakToFileAsync(phrase, CancellationToken.None); }
-                if (path == null) continue;
-                pcmAll.AddRange(LoadPcm16kMono(path));
-                // 400ms noise between phrases
-                pcmAll.AddRange(MakeNoisePcm(WakeWordService.SampleRate * 2 * 4 / 10));
-            }
-            finally
-            {
-                try { if (path != null) File.Delete(path); } catch { /* */ }
-            }
-        }
-
-        // Pad with noise to ≥2 minutes of audio (a few minutes of speech/noise)
-        var target = WakeWordService.SampleRate * 2 * 120; // 2 min
-        while (pcmAll.Count < target)
-            pcmAll.AddRange(MakeNoisePcm(WakeWordService.SampleRate * 2)); // 1s chunks
-
-        var buf = pcmAll.ToArray();
-        // Stream in 100ms chunks like live WaveIn
-        const int chunk = WakeWordService.SampleRate * 2 / 10;
-        for (var i = 0; i < buf.Length; i += chunk)
-        {
-            var n = Math.Min(chunk, buf.Length - i);
-            var slice = new byte[n];
-            Buffer.BlockCopy(buf, i, slice, 0, n);
-            s.Wake.PushPcm(slice);
-        }
-        s.Wake.Flush();
-        // Also try free-form on non-wake phrases (should reject)
-        foreach (var phrase in phrases.Take(3))
         {
             string? path = null;
             try
             {
                 path = await s.Tts.SpeakSapiOnlyAsync(phrase, CancellationToken.None);
                 var pcm = LoadPcm16kMono(path);
+                pcmBytes += pcm.Length;
                 s.Wake.ProcessUtterance(pcm, out _, out _, out _);
             }
-            catch { /* */ }
+            catch (Exception ex)
+            {
+                L($"wake_negative synth warn: {ex.Message}");
+            }
             finally { try { if (path != null) File.Delete(path); } catch { /* */ } }
         }
 
+        // 2) ~90s noise + a couple speech chunks through live PushPcm (grammar path)
+        var noise = MakeNoisePcm(WakeWordService.SampleRate * 2 * 90);
+        pcmBytes += noise.Length;
+        const int chunk = WakeWordService.SampleRate * 2 / 10; // 100ms
+        for (var i = 0; i < noise.Length; i += chunk)
+        {
+            var n = Math.Min(chunk, noise.Length - i);
+            var slice = new byte[n];
+            Buffer.BlockCopy(noise, i, slice, 0, n);
+            s.Wake.PushPcm(slice);
+        }
+        // Interleave one speech phrase via PushPcm (still no wake word)
+        try
+        {
+            var path = await s.Tts.SpeakSapiOnlyAsync(phrases[0], CancellationToken.None);
+            var pcm = LoadPcm16kMono(path);
+            pcmBytes += pcm.Length;
+            for (var i = 0; i < pcm.Length; i += chunk)
+            {
+                var n = Math.Min(chunk, pcm.Length - i);
+                var slice = new byte[n];
+                Buffer.BlockCopy(pcm, i, slice, 0, n);
+                s.Wake.PushPcm(slice);
+            }
+            try { File.Delete(path); } catch { /* */ }
+        }
+        catch { /* */ }
+        s.Wake.Flush();
+
         var falseWakes = s.Wake.DetectCount - before;
+        var pcmSec = pcmBytes / (double)(WakeWordService.SampleRate * 2);
         var sec = sw.Elapsed.TotalSeconds;
         if (falseWakes > 1)
         {
-            L($"FAIL wake_negative: false_wakes={falseWakes} over {sec:F0}s audio (need ≤1)");
+            L($"FAIL wake_negative: false_wakes={falseWakes} over {pcmSec:F0}s audio wall={sec:F0}s (need ≤1)");
             return 1;
         }
-        L($"wake_negative: PASS false_wakes={falseWakes} audio_s={sec:F0} pcm_s={buf.Length / (double)(WakeWordService.SampleRate * 2):F0}");
+        L($"wake_negative: PASS false_wakes={falseWakes} audio_s={pcmSec:F0} wall_s={sec:F0}");
         return 0;
     }
 

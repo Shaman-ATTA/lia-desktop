@@ -37,6 +37,7 @@ public sealed class WakeWordService : IDisposable
     bool _enabled = true;
     float _sensitivity = 0.55f;
     bool _chimeEnabled = true;
+    DateTime _grammarCooldownUntilUtc;
 
     public int DetectCount { get; private set; }
     public int RejectCount { get; private set; }
@@ -176,6 +177,7 @@ public sealed class WakeWordService : IDisposable
                 return;
             }
             if (_grmNative == IntPtr.Zero) return;
+            if (DateTime.UtcNow < _grammarCooldownUntilUtc) return;
             var ok = vosk_recognizer_accept_waveform(_grmNative, buffer, bytes);
             if (ok == 0) return;
             var json = PtrToUtf8(vosk_recognizer_result(_grmNative));
@@ -271,6 +273,7 @@ public sealed class WakeWordService : IDisposable
         {
             RejectCount++;
             FalseWakeCount++; // grammar-only ghost
+            _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(900);
             _log.Info($"wake: post reject (no wake in freeform) text=\"{text}\" conf={conf:F2}");
             ResetGrammar_NoLock();
             return;
@@ -279,6 +282,7 @@ public sealed class WakeWordService : IDisposable
         if (conf < floor * 0.7f)
         {
             RejectCount++;
+            _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(600);
             _log.Info($"wake: post reject conf={conf:F2} text={text}");
             ResetGrammar_NoLock();
             return;
