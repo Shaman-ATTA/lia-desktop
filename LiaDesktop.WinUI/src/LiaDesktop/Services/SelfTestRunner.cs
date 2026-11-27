@@ -657,34 +657,53 @@ public static class SelfTestRunner
         var fail = 0;
         try
         {
-            // --- render_nondefault_comm: multimedia id ≠ communications; we still pick Multimedia ---
+            // --- render_nondefault_comm: when Comm ≠ Multimedia, app must pick Multimedia ---
             var realMm = AudioOutput.DefaultMultimediaId();
             var realComm = AudioOutput.DefaultCommunicationsId();
-            AudioOutput.ResolveOverride = () => ("mm-selftest-id", "Selftest Multimedia Speakers",
-                NAudio.CoreAudioApi.Role.Multimedia);
-            try
+            s.BargeIn.SetPreferredOutputDevice(null); // system default path only
+            if (!string.IsNullOrEmpty(realMm) && !string.IsNullOrEmpty(realComm) &&
+                !string.Equals(realMm, realComm, StringComparison.OrdinalIgnoreCase))
             {
                 using var audio = new AudioOutput(s.Log);
                 using var player = audio.OpenPlayer(out var friendly, out var role, out var id, out _);
-                if (role == NAudio.CoreAudioApi.Role.Communications)
+                if (role == NAudio.CoreAudioApi.Role.Communications ||
+                    string.Equals(id, realComm, StringComparison.OrdinalIgnoreCase))
                 {
-                    L($"FAIL render_nondefault_comm: resolved Communications ({friendly})");
+                    L($"FAIL render_nondefault_comm: landed on Communications ({friendly}/{id})");
                     fail++;
                 }
-                else if (id != "mm-selftest-id" ||
-                         role is not (NAudio.CoreAudioApi.Role.Multimedia or NAudio.CoreAudioApi.Role.Console))
+                else if (role is not (NAudio.CoreAudioApi.Role.Multimedia or NAudio.CoreAudioApi.Role.Console) ||
+                         !string.Equals(id, realMm, StringComparison.OrdinalIgnoreCase))
                 {
-                    L($"FAIL render_nondefault_comm: id={id} role={role} friendly={friendly}");
+                    L($"FAIL render_nondefault_comm: expected Multimedia id={realMm}, got role={role} id={id} ({friendly})");
                     fail++;
                 }
                 else
                 {
-                    L($"render_nondefault_comm: PASS (mm≠comm simulated; mm={realMm} comm={realComm}; picked {role}/{id})");
+                    L($"render_nondefault_comm: PASS (mm≠comm; picked {role}/{friendly})");
                 }
             }
-            finally
+            else
             {
-                AudioOutput.ResolveOverride = null;
+                // Runner has same default for both roles — simulate split via ResolveOverride
+                AudioOutput.ResolveOverride = () => ("mm-selftest-id", "Selftest Multimedia Speakers",
+                    NAudio.CoreAudioApi.Role.Multimedia);
+                try
+                {
+                    using var audio = new AudioOutput(s.Log);
+                    using var player = audio.OpenPlayer(out var friendly, out var role, out var id, out _);
+                    if (role == NAudio.CoreAudioApi.Role.Communications || id != "mm-selftest-id")
+                    {
+                        L($"FAIL render_nondefault_comm: simulated pick failed role={role} id={id}");
+                        fail++;
+                    }
+                    else
+                        L($"render_nondefault_comm: PASS (mm≠comm simulated; mm={realMm} comm={realComm}; picked {role}/{id})");
+                }
+                finally
+                {
+                    AudioOutput.ResolveOverride = null;
+                }
             }
 
             // --- render_role: real play must use Multimedia/Console, never Communications ---
@@ -780,43 +799,21 @@ public static class SelfTestRunner
                 return 1;
             }
 
-            // Prefer stereo "CABLE Input" (VB-CABLE). Avoid "CABLE In 16ch" — stereo→16ch often silent.
-            var devices = AudioOutput.ListRenderDevices()
-                .Where(d => !string.IsNullOrEmpty(d.Id))
-                .ToList();
-            if (devices.Count == 0)
+            // Same path as the user: clear preferred id → app uses default Multimedia.
+            // CI is responsible for making a stereo virtual cable that default.
+            s.BargeIn.SetPreferredOutputDevice(null);
+            var mmId = AudioOutput.DefaultMultimediaId();
+            if (string.IsNullOrEmpty(mmId))
             {
-                L("FAIL playback_rms: no active render endpoints (install VB-CABLE / virtual audio in CI)");
+                L("FAIL playback_rms: no default Multimedia render endpoint");
                 return 1;
             }
-
-            static int CableScore((string Id, string Name) d)
-            {
-                var n = d.Name;
-                if (n.Contains("16ch", StringComparison.OrdinalIgnoreCase)) return 0;
-                if (n.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase)) return 100;
-                if (n.Contains("CABLE In", StringComparison.OrdinalIgnoreCase)) return 80;
-                if (n.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase)) return 60;
-                if (n.Contains("Scream", StringComparison.OrdinalIgnoreCase)) return 50;
-                if (n.Contains("CABLE", StringComparison.OrdinalIgnoreCase)) return 40;
-                return 1;
-            }
-
-            var pick = devices.OrderByDescending(CableScore).First();
-            L($"playback_rms: target render='{pick.Name}' id={pick.Id[..Math.Min(24, pick.Id.Length)]}…");
 
             var peak = 0f;
             using var en = new NAudio.CoreAudioApi.MMDeviceEnumerator();
-            // Separate MMDevice instances — WasapiOut and Loopback each take ownership
-            var playDev = en.GetDevice(pick.Id);
-            var capDev = en.GetDevice(pick.Id);
-            if (playDev.State != NAudio.CoreAudioApi.DeviceState.Active)
-            {
-                L($"FAIL playback_rms: render '{pick.Name}' state={playDev.State}");
-                try { playDev.Dispose(); } catch { /* */ }
-                try { capDev.Dispose(); } catch { /* */ }
-                return 1;
-            }
+            var capDev = en.GetDevice(mmId);
+            var mmName = capDev.FriendlyName;
+            L($"playback_rms: default Multimedia='{mmName}'");
 
             using var capture = new NAudio.Wave.WasapiLoopbackCapture(capDev);
             capture.DataAvailable += (_, e) =>
@@ -843,27 +840,34 @@ public static class SelfTestRunner
             };
             capture.StartRecording();
 
-            // Direct WasapiOut to the same endpoint — no WaveOut fallback (that bypasses loopback).
-            using var reader = new NAudio.Wave.AudioFileReader(ttsPath);
-            using var output = new NAudio.Wave.WasapiOut(
-                playDev, NAudio.CoreAudioApi.AudioClientShareMode.Shared, true, 100);
-            output.Init(reader);
-            output.Play();
-
-            var deadline = DateTime.UtcNow.AddSeconds(8);
-            while (output.PlaybackState == NAudio.Wave.PlaybackState.Playing && DateTime.UtcNow < deadline)
-                await Task.Delay(50);
-            if (output.PlaybackState == NAudio.Wave.PlaybackState.Playing)
-                output.Stop();
-            await Task.Delay(400);
-            try { capture.StopRecording(); } catch { /* */ }
-
-            if (peak < 0.0008f)
+            s.Agent.SuspendBargeHandling(true);
+            try
             {
-                L($"FAIL playback_rms: loopback peak={peak:F5} on '{pick.Name}' (file rms={fileRms:F4} bytes={fileBytes}; silent at render)");
+                var play = s.BargeIn.PlayFileAsync(ttsPath, "Раз два три.", CancellationToken.None);
+                await Task.WhenAny(play, Task.Delay(8000));
+                if (!play.IsCompleted) s.BargeIn.AbortPlayback();
+                await play;
+                await Task.Delay(400);
+            }
+            finally
+            {
+                s.Agent.SuspendBargeHandling(false);
+                try { capture.StopRecording(); } catch { /* */ }
+            }
+
+            var device = s.BargeIn.LastRenderDevice;
+            var role = s.BargeIn.LastRenderRole;
+            if (role == NAudio.CoreAudioApi.Role.Communications)
+            {
+                L($"FAIL playback_rms: played on Communications device={device}");
                 return 1;
             }
-            L($"playback_rms: PASS peak={peak:F4} device={pick.Name} role=Multimedia file_rms={fileRms:F4} bytes={fileBytes}");
+            if (peak < 0.0008f)
+            {
+                L($"FAIL playback_rms: loopback peak={peak:F5} on default '{mmName}' via app device={device} (file rms={fileRms:F4} bytes={fileBytes}; silent at render)");
+                return 1;
+            }
+            L($"playback_rms: PASS peak={peak:F4} device={device} role={role} file_rms={fileRms:F4} bytes={fileBytes}");
             return 0;
         }
         catch (Exception ex)

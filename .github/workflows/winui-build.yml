@@ -187,28 +187,47 @@ jobs:
             throw 'VB-CABLE driver did not install (no VB-Audio sound device present)'
           }
 
-          # Prefer stereo CABLE Input as default Multimedia playback (skip 16ch)
-          try {
-            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
-            Install-Module -Name AudioDeviceCmdlets -Force -Scope CurrentUser -AllowClobber -ErrorAction Stop
-            $play = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' }
-            $play | Format-Table Index, Name, Type, Default
-            $cable = $play |
-              Where-Object { $_.Name -match 'CABLE Input' -and $_.Name -notmatch '16ch' } |
-              Select-Object -First 1
-            if (-not $cable) {
-              $cable = $play | Where-Object { $_.Name -match 'CABLE' -and $_.Name -notmatch '16ch' } | Select-Object -First 1
-            }
-            if ($cable) {
-              Set-AudioDevice -Id $cable.ID
-              Write-Host "Default playback → $($cable.Name)"
-            } else {
-              Write-Host '::warning::No stereo CABLE Input playback device to set as default'
-            }
-          } catch {
-            Write-Host "::warning::AudioDeviceCmdlets default-set skipped: $_"
+          # Make stereo CABLE Input the system default Multimedia (app picks default — no CABLE hardcode).
+          # Optionally point Communications at a different endpoint so render_nondefault_comm is real.
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
+          Install-Module -Name AudioDeviceCmdlets -Force -Scope CurrentUser -AllowClobber
+          $play = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' }
+          $play | Format-Table Index, Name, Type, Default
+          $cable = $play |
+            Where-Object { $_.Name -match 'CABLE Input' -and $_.Name -notmatch '16ch' } |
+            Select-Object -First 1
+          if (-not $cable) {
+            $cable = $play | Where-Object { $_.Name -match 'CABLE' -and $_.Name -notmatch '16ch' } | Select-Object -First 1
           }
-          Write-Host 'VB-CABLE ready for playback_rms loopback'
+          if (-not $cable) { throw 'No stereo CABLE Input playback device after VB-CABLE install' }
+          Set-AudioDevice -Id $cable.ID
+          Write-Host "Default Multimedia → $($cable.Name)"
+
+          $commOther = $play |
+            Where-Object { $_.ID -ne $cable.ID -and ($_.Name -match '16ch' -or $_.Name -match 'Speakers' -or $_.Name -match 'Headphones') } |
+            Select-Object -First 1
+          if ($commOther) {
+            # nircmd can set Communications role independently (1=multimedia, 2=communications)
+            $nirZip = Join-Path $env:RUNNER_TEMP 'nircmd.zip'
+            $nirDir = Join-Path $env:RUNNER_TEMP 'nircmd'
+            try {
+              Invoke-WebRequest 'https://www.nirsoft.net/utils/nircmd-x64.zip' -OutFile $nirZip -UserAgent 'Mozilla/5.0'
+              Expand-Archive $nirZip -DestinationPath $nirDir -Force
+              $nircmd = Join-Path $nirDir 'nircmd.exe'
+              & $nircmd setdefaultsounddevice $cable.Name 1
+              & $nircmd setdefaultsounddevice $commOther.Name 2
+              Write-Host "Communications → $($commOther.Name) (Multimedia stays $($cable.Name))"
+            } catch {
+              Write-Host "::warning::Could not split Communications default: $_"
+            }
+          }
+
+          $verify = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' -and $_.Default }
+          $verify | Format-Table Index, Name, Default
+          if (-not ($verify | Where-Object { $_.Name -eq $cable.Name })) {
+            throw "CABLE Input is not the default Multimedia device after Set-AudioDevice"
+          }
+          Write-Host 'VB-CABLE ready — app will use default Multimedia for playback_rms'
 
       - name: E2E selftest (mock Gemini + optional live key)
         shell: pwsh

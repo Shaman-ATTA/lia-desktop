@@ -278,18 +278,27 @@ public sealed class BargeInService : IDisposable
             }
             else
             {
-                player = new WaveOutEvent { DesiredLatency = 100 };
-                friendly = "WAVE_MAPPER (WaveOutEvent)";
+                player = _audio.CreateStereoWaveOut(out friendly, out _);
                 role = Role.Multimedia;
                 waveOut = true;
             }
 
             player.PlaybackStopped += onStopped;
-            // WasapiOut/WaveOutEvent accept ISampleProvider via Init
             if (player is IWavePlayer wp)
             {
-                // Convert sample provider → wave provider for Init
-                var wave = tap.ToWaveProvider16();
+                // Echo tap is mono@16k. Wasapi shared upmixes; WaveOut needs explicit stereo@44.1k
+                // so a 16ch-wasapi failure cannot leave the user with silent mono-on-mapper.
+                IWaveProvider wave;
+                if (waveOut)
+                {
+                    var stereo = new MonoToStereoSampleProvider(tap) { LeftVolume = 1f, RightVolume = 1f };
+                    var at441 = new WdlResamplingSampleProvider(stereo, 44100);
+                    wave = at441.ToWaveProvider16();
+                }
+                else
+                {
+                    wave = tap.ToWaveProvider16();
+                }
                 wp.Init(wave);
                 wp.Play();
                 _output = wp;

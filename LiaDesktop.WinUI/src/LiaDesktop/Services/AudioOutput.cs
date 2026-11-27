@@ -190,6 +190,19 @@ public sealed class AudioOutput : IDisposable
                 _defaultDirty = false;
             }
 
+            // High-channel virtual devices (e.g. CABLE In 16ch) often accept Wasapi but leave
+            // stereo content inaudible on ch0/1 monitoring — prefer stereo WaveOut instead.
+            var mixCh = 2;
+            try { mixCh = device.AudioClient.MixFormat.Channels; } catch { /* */ }
+            if (mixCh > 2)
+            {
+                _log.Info($"AudioOutput: '{friendlyName}' mix={mixCh}ch → stereo WaveOut fallback");
+                try { device.Dispose(); } catch { /* */ }
+                device = null;
+                waveOutFallback = true;
+                return CreateStereoWaveOut(out friendlyName, out deviceId);
+            }
+
             try
             {
                 var wasapi = new WasapiOut(device, AudioClientShareMode.Shared, true, 80);
@@ -199,21 +212,20 @@ public sealed class AudioOutput : IDisposable
             }
             catch (Exception ex)
             {
-                _log.Info("WasapiOut fail → WaveOutEvent: " + ex.Message);
+                _log.Info("WasapiOut fail → stereo WaveOutEvent: " + ex.Message);
                 waveOutFallback = true;
                 try { device?.Dispose(); } catch { /* */ }
                 device = null;
-                return new WaveOutEvent { DesiredLatency = 100 };
+                return CreateStereoWaveOut(out friendlyName, out deviceId);
             }
         }
         catch (Exception ex)
         {
-            _log.Info("AudioOutput Wasapi resolve fail → WaveOutEvent: " + ex.Message);
+            _log.Info("AudioOutput Wasapi resolve fail → stereo WaveOutEvent: " + ex.Message);
             try { device?.Dispose(); } catch { /* */ }
             waveOutFallback = true;
-            friendlyName = "WAVE_MAPPER (WaveOutEvent)";
             role = Role.Multimedia;
-            deviceId = "wave_mapper";
+            var player = CreateStereoWaveOut(out friendlyName, out deviceId);
             lock (_gate)
             {
                 _lastDeviceId = deviceId;
@@ -221,8 +233,52 @@ public sealed class AudioOutput : IDisposable
                 _lastRole = role;
                 _defaultDirty = false;
             }
-            return new WaveOutEvent { DesiredLatency = 100 };
+            return player;
         }
+    }
+
+    /// <summary>
+    /// WaveOut on a stereo endpoint (never rely on a 16ch WASAPI mix). Used when WasapiOut
+    /// fails or the default mix format has &gt;2 channels.
+    /// </summary>
+    public WaveOutEvent CreateStereoWaveOut(out string friendlyName, out string deviceId)
+    {
+        var wo = new WaveOutEvent { DesiredLatency = 100 };
+        friendlyName = "WAVE_MAPPER (WaveOutEvent stereo)";
+        deviceId = "wave_mapper";
+        try
+        {
+            for (var i = 0; i < WaveOut.DeviceCount; i++)
+            {
+                var caps = WaveOut.GetCapabilities(i);
+                if (caps.Channels < 2) continue;
+                wo.DeviceNumber = i;
+                friendlyName = $"WaveOut[{i}] {caps.ProductName}";
+                deviceId = $"wave_out:{i}";
+                _log.Info($"AudioOutput WaveOut stereo → {friendlyName} ch={caps.Channels}");
+                lock (_gate)
+                {
+                    _lastDeviceId = deviceId;
+                    _lastFriendly = friendlyName;
+                    _lastRole = Role.Multimedia;
+                    _defaultDirty = false;
+                }
+                return wo;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Info("WaveOut enum: " + ex.Message);
+        }
+        wo.DeviceNumber = -1;
+        lock (_gate)
+        {
+            _lastDeviceId = deviceId;
+            _lastFriendly = friendlyName;
+            _lastRole = Role.Multimedia;
+            _defaultDirty = false;
+        }
+        return wo;
     }
 
     public void MarkDefaultDirty()
