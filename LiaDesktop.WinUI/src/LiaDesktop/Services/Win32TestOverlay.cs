@@ -51,7 +51,7 @@ public sealed class Win32TestOverlay : IDisposable
                 0x00000008 | 0x00000080, // WS_EX_TOPMOST | WS_EX_TOOLWINDOW
                 "LiaSelfTestOverlay",
                 "LIA TEST",
-                0x80000000 | 0x10000000, // WS_POPUP | WS_VISIBLE
+                unchecked((int)(0x80000000u | 0x10000000u)), // WS_POPUP | WS_VISIBLE
                 x, y, w, h,
                 IntPtr.Zero, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
             if (hwnd == IntPtr.Zero)
