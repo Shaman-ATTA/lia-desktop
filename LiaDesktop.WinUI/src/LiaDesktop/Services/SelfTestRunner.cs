@@ -1453,8 +1453,8 @@ public static class SelfTestRunner
 
     static async Task<int> GateWakeNegativeAsync(AppServices s, Action<string> L)
     {
-        // Keep wall-time bounded: free-form on multi-minute streams + grammar ghosts was
-        // hanging CI (>18min). Use utterance checks + ~90s noise PushPcm (no freeform spam).
+        // Live grammar path (PushPcm): all non-wake phrases + near-misses, looped to ≥60s speech.
+        // Skip ProcessUtterance free-form here — that's not what runs on the user's PC.
         var phrases = new[]
         {
             "Добрый день, как ваши дела сегодня?",
@@ -1465,48 +1465,63 @@ public static class SelfTestRunner
             "Сколько будет двадцать пять умножить на восемь?",
             "Найди файл отчёт в папке документы.",
             "Расскажи анекдот про программистов коротко.",
+            // Near-miss phonetics — must not wake
+            "Линия связи стабильна на всём протяжении.",
+            "Липа цветёт у дома каждый июнь.",
+            "Или а может просто подождём ответа.",
+            "Лиана вьётся по стене оранжереи.",
+            "Милия прислала письмо про проект.",
         };
+        if (phrases.Length < 8)
+        {
+            L("FAIL wake_negative: need ≥8 phrases");
+            return 1;
+        }
+
         var before = s.Wake.DetectCount;
         s.Wake.SetEchoGuard(false);
         s.Wake.Start();
         var sw = Stopwatch.StartNew();
-        long pcmBytes = 0;
+        const int chunk = WakeWordService.SampleRate * 2 / 10; // 100ms
+        const int gapBytes = WakeWordService.SampleRate * 2 / 5; // 200ms noise between phrases
+        var cached = new List<byte[]>();
+        var synthFail = 0;
 
-        // 1) Free-form on non-wake phrases (must not detect)
+        // Synth once, cache PCM (SAPI) — fail hard if any phrase missing
         foreach (var phrase in phrases)
         {
             string? path = null;
             try
             {
                 path = await s.Tts.SpeakSapiOnlyAsync(phrase, CancellationToken.None);
-                var pcm = LoadPcm16kMono(path);
-                pcmBytes += pcm.Length;
-                s.Wake.ProcessUtterance(pcm, out _, out _, out _);
+                if (path == null || !File.Exists(path))
+                {
+                    synthFail++;
+                    L($"FAIL wake_negative: synth missing for \"{phrase}\"");
+                    continue;
+                }
+                cached.Add(LoadPcm16kMono(path));
             }
             catch (Exception ex)
             {
-                L($"wake_negative synth warn: {ex.Message}");
+                synthFail++;
+                L($"FAIL wake_negative: synth failed for \"{phrase}\": {ex.Message}");
             }
             finally { try { if (path != null) File.Delete(path); } catch { /* */ } }
         }
-
-        // 2) ~90s noise + a couple speech chunks through live PushPcm (grammar path)
-        var noise = MakeNoisePcm(WakeWordService.SampleRate * 2 * 90);
-        pcmBytes += noise.Length;
-        const int chunk = WakeWordService.SampleRate * 2 / 10; // 100ms
-        for (var i = 0; i < noise.Length; i += chunk)
+        if (synthFail > 0 || cached.Count < phrases.Length)
         {
-            var n = Math.Min(chunk, noise.Length - i);
-            var slice = new byte[n];
-            Buffer.BlockCopy(noise, i, slice, 0, n);
-            s.Wake.PushPcm(slice);
+            L($"FAIL wake_negative: synth_fail={synthFail} cached={cached.Count}/{phrases.Length}");
+            return 1;
         }
-        // Interleave one speech phrase via PushPcm (still no wake word)
-        try
+
+        long speechBytes = 0;
+        long noiseBytes = 0;
+        const double needSpeechSec = 60.0;
+        var needSpeechBytes = (long)(WakeWordService.SampleRate * 2 * needSpeechSec);
+
+        void PushBytes(byte[] pcm, ref long counter)
         {
-            var path = await s.Tts.SpeakSapiOnlyAsync(phrases[0], CancellationToken.None);
-            var pcm = LoadPcm16kMono(path);
-            pcmBytes += pcm.Length;
             for (var i = 0; i < pcm.Length; i += chunk)
             {
                 var n = Math.Min(chunk, pcm.Length - i);
@@ -1514,20 +1529,49 @@ public static class SelfTestRunner
                 Buffer.BlockCopy(pcm, i, slice, 0, n);
                 s.Wake.PushPcm(slice);
             }
-            try { File.Delete(path); } catch { /* */ }
+            counter += pcm.Length;
         }
-        catch { /* */ }
+
+        // Loop cached phrases through live PushPcm until ≥60s speech
+        var round = 0;
+        while (speechBytes < needSpeechBytes)
+        {
+            round++;
+            foreach (var pcm in cached)
+            {
+                PushBytes(pcm, ref speechBytes);
+                var gap = MakeNoisePcm(gapBytes);
+                PushBytes(gap, ref noiseBytes);
+                if (speechBytes >= needSpeechBytes) break;
+            }
+            if (round > 40)
+            {
+                L($"FAIL wake_negative: could not reach {needSpeechSec}s speech (got {speechBytes / (double)(WakeWordService.SampleRate * 2):F1}s)");
+                return 1;
+            }
+        }
+
+        // Extra noise tail (~30s) — still grammar-listening
+        var tail = MakeNoisePcm(WakeWordService.SampleRate * 2 * 30);
+        PushBytes(tail, ref noiseBytes);
         s.Wake.Flush();
 
+        var speechS = speechBytes / (double)(WakeWordService.SampleRate * 2);
+        var noiseS = noiseBytes / (double)(WakeWordService.SampleRate * 2);
         var falseWakes = s.Wake.DetectCount - before;
-        var pcmSec = pcmBytes / (double)(WakeWordService.SampleRate * 2);
-        var sec = sw.Elapsed.TotalSeconds;
-        if (falseWakes > 1)
+        var wall = sw.Elapsed.TotalSeconds;
+
+        if (speechS < needSpeechSec)
         {
-            L($"FAIL wake_negative: false_wakes={falseWakes} over {pcmSec:F0}s audio wall={sec:F0}s (need ≤1)");
+            L($"FAIL wake_negative: speech_s={speechS:F1} < {needSpeechSec} noise_s={noiseS:F1} false_wakes={falseWakes}");
             return 1;
         }
-        L($"wake_negative: PASS false_wakes={falseWakes} audio_s={pcmSec:F0} wall_s={sec:F0}");
+        if (falseWakes > 1)
+        {
+            L($"FAIL wake_negative: false_wakes={falseWakes} speech_s={speechS:F1} noise_s={noiseS:F1} wall_s={wall:F0} (need ≤1)");
+            return 1;
+        }
+        L($"wake_negative: PASS false_wakes={falseWakes} speech_s={speechS:F1} noise_s={noiseS:F1} wall_s={wall:F0} rounds={round}");
         return 0;
     }
 
