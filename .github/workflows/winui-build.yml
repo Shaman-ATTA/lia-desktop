@@ -312,9 +312,11 @@ jobs:
             $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
             if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
             $scaleArg = "--force-scale=$($scale.ToString([System.Globalization.CultureInfo]::InvariantCulture))"
-            # max / maxlaunch: start SMALL so swapchain must resize after maximize (the real TV bug)
-            $launchW = if ($mode -eq 'windowed') { $forceW } else { 1024 }
-            $launchH = if ($mode -eq 'windowed') { $forceH } else { 720 }
+            # max / maxlaunch: start SMALL so swapchain must resize (TV field bug at 100%).
+            # Do NOT use SW_MAXIMIZE — GHA virtual display is ~1024px; instead SetWindowPos
+            # to the target 1920x1080 / 3840x2160 (PrintWindow captures off-screen full size).
+            $launchW = if ($mode -eq 'windowed' -or $mode -eq 'maxlaunch') { $forceW } else { 1024 }
+            $launchH = if ($mode -eq 'windowed' -or $mode -eq 'maxlaunch') { $forceH } else { 720 }
             $args = @('--smoke-yaw=5', $scaleArg, "--smoke-size=${launchW}x${launchH}")
             $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
             for ($i = 0; $i -lt 28; $i++) {
@@ -330,26 +332,34 @@ jobs:
             Start-Sleep -Seconds 2
             $hwnd = Find-Hwnd ([uint32]$p.Id)
             if ($hwnd -eq [IntPtr]::Zero) { throw "no hwnd for $shotPath" }
+            [void][Win]::ShowWindow($hwnd, 1) # SW_SHOWNORMAL — avoid display-clamped maximize
             if ($mode -eq 'max') {
-              # Windowed small first (settle swapchain at 1024x720), then maximize
-              [void][Win]::ShowWindow($hwnd, 1)
+              # Settle at small size first (stale-buffer repro), then jump to target res
               [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 40, 40, 1024, 720, 0x0040)
               Start-Sleep -Seconds 3
-              [void][Win]::ShowWindow($hwnd, 3) # SW_MAXIMIZE
-              # Wait for AppWindow.Changed + settle timers (120/400ms) + tick sync
+              [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $forceW, $forceH, 0x0040)
               Start-Sleep -Seconds 5
             } elseif ($mode -eq 'maxlaunch') {
-              # Already maximized path (no small intermediate frame in the capture)
-              [void][Win]::ShowWindow($hwnd, 3)
-              Start-Sleep -Seconds 5
+              # Already at target smoke-size; re-assert outer size after show
+              [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $forceW, $forceH, 0x0040)
+              Start-Sleep -Seconds 4
             } else {
-              [void][Win]::ShowWindow($hwnd, 1)
               [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $forceW, $forceH, 0x0040)
               Start-Sleep -Seconds 3
             }
             [void][Win]::SetForegroundWindow($hwnd)
             Start-Sleep -Seconds 2
             Capture-Window $hwnd $shotPath
+            $rect = New-Object RECT
+            [void][Win]::GetWindowRect($hwnd, [ref]$rect)
+            $gotW = $rect.R - $rect.L
+            $gotH = $rect.B - $rect.T
+            Write-Host "layout hwnd ${gotW}x${gotH} target ${forceW}x${forceH} mode=$mode"
+            # PrintWindow should match hwnd; require near-target so we don't silently test 1024px
+            if ($gotW -lt [int]($forceW * 0.85) -or $gotH -lt [int]($forceH * 0.85)) {
+              if (Test-Path $bootLog) { Get-Content $bootLog | Select-String 'SwapChain' | Out-Host }
+              throw "$shotPath hwnd ${gotW}x${gotH} << target ${forceW}x${forceH}"
+            }
             if (Test-Path $bootLog) {
               Write-Host "=== BOOT $shotPath ==="
               Get-Content $bootLog | Select-String -Pattern 'SwapChain' | Select-Object -Last 8 | Out-Host

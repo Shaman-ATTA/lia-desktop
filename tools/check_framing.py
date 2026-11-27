@@ -416,20 +416,48 @@ def grey_box_frac(path: Path) -> float:
     return float((grey & ~amber & ~skin).mean())
 
 
+def _face_core_x_span(vp: np.ndarray) -> tuple[int, int] | None:
+    """Tight horizontal span of opaque face/hair (excludes amber arcs / soft glow)."""
+    h, w, _ = vp.shape
+    r, g, b = vp[:, :, 0], vp[:, :, 1], vp[:, :, 2]
+    lum = (r + g + b) / 3.0
+    amber = (r > 145) & (g > 95) & (b < 95) & ((r - b) > 70) & ((g - b) > 40) & (r >= g)
+    skin = (
+        (r > 55) & (g > 30) & (b > 22) & (r >= g * 0.95) & (r > b * 0.85)
+        & ((r - b) > 5) & (~amber)
+    )
+    hair = (lum > 16) & (lum < 95) & (r >= g) & (g >= b * 0.8) & (r < 110) & (b < 70) & (~amber)
+    core = skin | hair
+    # Mid-face band only — avoids arc glow at the sides
+    band = core[int(h * 0.18) : int(h * 0.72), :]
+    xs = np.where(band.any(axis=0))[0]
+    if len(xs) < 8:
+        return None
+    return int(xs[0]), int(xs[-1])
+
+
 def face_inside_center_column(path: Path) -> tuple[bool, float, float]:
-    """Face bbox fully inside centre column (stage-local 0.22..0.78). Returns (ok, left_margin, right_margin)."""
+    """Face fully inside the hologram centre column (not under side glass).
+
+    Uses full-image X: centre column ≈ [0.20, 0.80] (matches StageGrid 0.22|0.56|0.22
+    plus a little tolerance). Returns (ok, left_margin_frac, right_margin_frac) vs
+    those bounds.
+    """
     im = Image.open(path).convert("RGB")
     a = np.asarray(im).astype(np.float32)
+    H, W, _ = a.shape
     yy0, yy1, x0, x1 = _find_viewport(a)
     vp = a[yy0:yy1, x0:x1]
-    h, w, _ = vp.shape
-    bb = _head_bbox(vp)
-    if bb is None:
+    span = _face_core_x_span(vp)
+    if span is None:
         return False, 0.0, 0.0
-    _, _, bx0, bx1 = bb
-    col0, col1 = int(w * 0.22), int(w * 0.78)
-    ok = bx0 >= col0 - 2 and bx1 <= col1 + 2
-    return ok, float((bx0 - col0) / max(1, w)), float((col1 - bx1) / max(1, w))
+    fx0 = (span[0] + x0) / W
+    fx1 = (span[1] + x0) / W
+    col0, col1 = 0.20, 0.80
+    left_m = fx0 - col0
+    right_m = col1 - fx1
+    ok = left_m >= -0.01 and right_m >= -0.01
+    return ok, float(left_m), float(right_m)
 
 
 def assert_center_column(path: Path, label: str | None = None, drift_limit: float = 0.03) -> int:
