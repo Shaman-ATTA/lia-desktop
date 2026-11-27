@@ -734,14 +734,20 @@ public static class SelfTestRunner
                     s.Agent.SuspendBargeHandling(false);
                 }
                 var role = s.BargeIn.LastRenderRole;
+                var dev = s.BargeIn.LastRenderDevice;
                 if (role == NAudio.CoreAudioApi.Role.Communications)
                 {
-                    L($"FAIL render_role: Role.Communications device={s.BargeIn.LastRenderDevice}");
+                    L($"FAIL render_role: Role.Communications device={dev}");
+                    fail++;
+                }
+                else if (string.IsNullOrWhiteSpace(dev) || dev == "(none)")
+                {
+                    L($"FAIL render_role: playback did not open a render device (role={role})");
                     fail++;
                 }
                 else
                 {
-                    L($"render_role: PASS role={role} device={s.BargeIn.LastRenderDevice}");
+                    L($"render_role: PASS role={role} device={dev}");
                 }
             }
 
@@ -857,6 +863,11 @@ public static class SelfTestRunner
 
             var device = s.BargeIn.LastRenderDevice;
             var role = s.BargeIn.LastRenderRole;
+            if (string.IsNullOrWhiteSpace(device) || device == "(none)")
+            {
+                L($"FAIL playback_rms: app did not open render device (default Multimedia='{mmName}')");
+                return 1;
+            }
             if (role == NAudio.CoreAudioApi.Role.Communications)
             {
                 L($"FAIL playback_rms: played on Communications device={device}");

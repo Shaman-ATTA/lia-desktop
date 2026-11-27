@@ -190,19 +190,8 @@ public sealed class AudioOutput : IDisposable
                 _defaultDirty = false;
             }
 
-            // High-channel virtual devices (e.g. CABLE In 16ch) often accept Wasapi but leave
-            // stereo content inaudible on ch0/1 monitoring — prefer stereo WaveOut instead.
-            var mixCh = 2;
-            try { mixCh = device.AudioClient.MixFormat.Channels; } catch { /* */ }
-            if (mixCh > 2)
-            {
-                _log.Info($"AudioOutput: '{friendlyName}' mix={mixCh}ch → stereo WaveOut fallback");
-                try { device.Dispose(); } catch { /* */ }
-                device = null;
-                waveOutFallback = true;
-                return CreateStereoWaveOut(out friendlyName, out deviceId);
-            }
-
+            // Never touch device.AudioClient before WasapiOut — peeking MixFormat activates the
+            // client and breaks the subsequent WasapiOut on some endpoints (CI CABLE Input).
             try
             {
                 var wasapi = new WasapiOut(device, AudioClientShareMode.Shared, true, 80);
@@ -212,6 +201,7 @@ public sealed class AudioOutput : IDisposable
             }
             catch (Exception ex)
             {
+                // Includes >2ch virtual mixes that reject stereo shared-mode init
                 _log.Info("WasapiOut fail → stereo WaveOutEvent: " + ex.Message);
                 waveOutFallback = true;
                 try { device?.Dispose(); } catch { /* */ }

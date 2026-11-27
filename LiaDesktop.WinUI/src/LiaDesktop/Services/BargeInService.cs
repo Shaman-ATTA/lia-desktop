@@ -177,7 +177,9 @@ public sealed class BargeInService : IDisposable
 
     async Task<PlayEnd> PlayRealAsync(string path, CancellationToken ct)
     {
-        StartCapture();
+        // Mic is best-effort — missing capture must NOT block TTS render (CI / no-mic laptops).
+        try { StartCapture(); }
+        catch (Exception ex) { _log.Info("BargeIn capture skip: " + ex.Message); }
 
         using var reader = new AudioFileReader(path);
         _playbackTotalBytes = Math.Max(1, reader.Length);
@@ -432,6 +434,8 @@ public sealed class BargeInService : IDisposable
     void StartCapture()
     {
         CleanupCapture();
+        if (WaveIn.DeviceCount <= 0)
+            throw new InvalidOperationException("no WaveIn capture devices");
         var waveIn = new WaveInEvent
         {
             WaveFormat = new WaveFormat(16000, 16, 1),
