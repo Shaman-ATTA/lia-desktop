@@ -1,17 +1,13 @@
 # Lia Desktop — ship report
 
-## v0.7.1 — Barge-in + real SAPI + layout_window_max (pending CI)
+## v0.7.1 — Barge-in + real SAPI + layout_window_max (Latest)
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.7.1
 
-Published as **Latest** when CI green. Fixes SAPI false-pass (System.Speech + ≥10KB/RMS gates), live maximized `layout_window_max.png`, barge-in selftests.
+Published non-draft Latest. Selftest PASS: `tts_ws_only` 15KB rms≈0.08, `tts_sapi` 194KB rms≈0.09, barge_loopback/backchannel/stop/new. Live maximized `layout_window_max.png` + exact 1920/4K dumps.
 
-## v0.7.0 — Edge TTS + HiDPI (superseded by v0.7.1)
+## v0.7.0 — superseded by v0.7.1
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.7.0
 
-Exact 1920/4K dumps OK; SAPI gate was a false pass (46B WAV) — fixed in v0.7.1.
-
-## v0.6.9 — Gemini / mic / HiDPI (published)
-
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.6.9
+SAPI false-pass (46B) fixed in v0.7.1; fold blockers into Latest.
