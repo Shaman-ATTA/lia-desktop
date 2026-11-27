@@ -168,13 +168,11 @@ public sealed class HoloPanel : SwapChainPanel
         foreach (var delayMs in new[] { 33, 100, 250, 500 })
         {
             var ms = delayMs;
-            _ = DispatcherQueue.CreateTimer(
-                TimeSpan.FromMilliseconds(ms),
-                () =>
-                {
-                    _lastW = _lastH = 0; // force compare against latest DIPs
-                    CreateSwapChain(ReadDipSize());
-                });
+            DispatcherQueueDelay.After(DispatcherQueue, TimeSpan.FromMilliseconds(ms), () =>
+            {
+                _lastW = _lastH = 0; // force compare against latest DIPs
+                CreateSwapChain(ReadDipSize());
+            });
         }
     }
 
@@ -215,8 +213,9 @@ public sealed class HoloPanel : SwapChainPanel
         if (_forceScale is { } f)
             return (f, f);
 
-        var sx = CompositionScaleX;
-        var sy = CompositionScaleY;
+        // CompositionScaleX/Y are float; RasterizationScale is double — keep everything double
+        double sx = CompositionScaleX;
+        double sy = CompositionScaleY;
         if (sx < 0.1) sx = XamlRoot?.RasterizationScale ?? 1.0;
         if (sy < 0.1) sy = XamlRoot?.RasterizationScale ?? 1.0;
         if (sx < 0.1) sx = 1.0;
@@ -342,8 +341,8 @@ interface ISwapChainPanelNative
 /// <summary>One-shot dispatcher delay without holding a DispatcherTimer forever.</summary>
 file static class DispatcherQueueDelay
 {
-    public static void CreateTimer(
-        this Microsoft.UI.Dispatching.DispatcherQueue q,
+    public static void After(
+        Microsoft.UI.Dispatching.DispatcherQueue q,
         TimeSpan delay,
         Action action)
     {
