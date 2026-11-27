@@ -161,6 +161,7 @@ public sealed class WakeWordService : IDisposable
     public void PushPcm(byte[] buffer, int bytes)
     {
         if (bytes <= 0) return;
+        byte[]? confirmPcm = null;
         lock (_gate)
         {
             if (!_running || _model == null || _echoGuard || !_enabled) return;
@@ -173,17 +174,22 @@ public sealed class WakeWordService : IDisposable
                 var wallDone = (DateTime.UtcNow - _wakeStartedUtc).TotalMilliseconds >= PostWakeMs;
                 var audioDone = _postWake.Count >= postBytesNeeded;
                 if (wallDone || audioDone)
-                    FinishPostCapture_NoLock();
-                return;
+                    confirmPcm = TakePostCapturePcm_NoLock();
             }
-            if (_grmNative == IntPtr.Zero) return;
-            if (DateTime.UtcNow < _grammarCooldownUntilUtc) return;
-            var ok = vosk_recognizer_accept_waveform(_grmNative, buffer, bytes);
-            if (ok == 0) return;
-            var json = PtrToUtf8(vosk_recognizer_result(_grmNative));
-            ResetGrammar_NoLock();
-            TryHandleGrammarFinal_NoLock(json);
+            else if (_grmNative != IntPtr.Zero && DateTime.UtcNow >= _grammarCooldownUntilUtc)
+            {
+                var ok = vosk_recognizer_accept_waveform(_grmNative, buffer, bytes);
+                if (ok != 0)
+                {
+                    var json = PtrToUtf8(vosk_recognizer_result(_grmNative));
+                    ResetGrammar_NoLock();
+                    TryHandleGrammarFinal_NoLock(json);
+                }
+            }
         }
+        // Free-form confirm OUTSIDE lock — Vosk decode must not block WaveIn/PushPcm
+        if (confirmPcm != null)
+            ConfirmWakeFromPcm(confirmPcm);
     }
 
     /// <summary>
@@ -219,10 +225,12 @@ public sealed class WakeWordService : IDisposable
     /// <summary>Flush pending post-wake capture (selftest end-of-stream).</summary>
     public void Flush()
     {
+        byte[]? confirmPcm;
         lock (_gate)
         {
-            if (_capturingPost) FinishPostCapture_NoLock();
+            confirmPcm = _capturingPost ? TakePostCapturePcm_NoLock() : null;
         }
+        if (confirmPcm != null) ConfirmWakeFromPcm(confirmPcm);
     }
 
     void OnData(object? sender, WaveInEventArgs e) => PushPcm(e.Buffer, e.BytesRecorded);
@@ -255,57 +263,68 @@ public sealed class WakeWordService : IDisposable
         _log.Info($"wake: grammar hit conf={conf:F2} text=\"{text}\" — capturing post…");
     }
 
-    void FinishPostCapture_NoLock()
+    /// <summary>Snapshot + reset post-capture; caller must hold _gate. Returns PCM for confirm.</summary>
+    byte[] TakePostCapturePcm_NoLock()
     {
         _capturingPost = false;
-        // Build utterance: last ~1.2s of ring (pre) + post
-        var preBytes = Math.Min(_ring.Count, SampleRate * 2 * 12 / 10); // 1.2s
-        var pre = _ring.Skip(Math.Max(0, _ring.Count - preBytes)).ToArray();
+        var preBytes = Math.Min(_ring.Count, SampleRate * 2 * 8 / 10); // 0.8s pre-roll
+        var pre = _ring.Count <= preBytes
+            ? _ring.ToArray()
+            : _ring.Skip(_ring.Count - preBytes).ToArray();
         var post = _postWake?.ToArray() ?? Array.Empty<byte>();
         _postWake = null;
-        var all = new byte[pre.Length + post.Length];
+        var maxConfirm = SampleRate * 2 * 2; // 2.0s total
+        var takePost = Math.Min(post.Length, Math.Max(0, maxConfirm - pre.Length));
+        var all = new byte[pre.Length + takePost];
         Buffer.BlockCopy(pre, 0, all, 0, pre.Length);
-        Buffer.BlockCopy(post, 0, all, pre.Length, post.Length);
-
-        var (text, conf) = FreeFormDecode(all);
-        // Grammar can false-fire on [unk]→лиа; free-form must confirm the wake word.
-        if (!ContainsWake(text))
-        {
-            RejectCount++;
-            FalseWakeCount++; // grammar-only ghost
-            _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(900);
-            _log.Info($"wake: post reject (no wake in freeform) text=\"{text}\" conf={conf:F2}");
-            ResetGrammar_NoLock();
-            return;
-        }
-        var floor = ConfidenceFloor();
-        if (conf < floor * 0.7f)
-        {
-            RejectCount++;
-            _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(600);
-            _log.Info($"wake: post reject conf={conf:F2} text={text}");
-            ResetGrammar_NoLock();
-            return;
-        }
-        var cmd = StripWake(text);
-        DetectCount++;
-        _log.Info($"wake: DETECT conf={conf:F2} text=\"{text}\" cmd=\"{cmd}\"");
-        RaiseWoken(text, cmd, conf);
+        if (takePost > 0) Buffer.BlockCopy(post, 0, all, pre.Length, takePost);
         ResetGrammar_NoLock();
+        return all;
+    }
+
+    void ConfirmWakeFromPcm(byte[] pcm)
+    {
+        var (text, conf) = FreeFormDecode(pcm);
+        lock (_gate)
+        {
+            if (!ContainsWake(text))
+            {
+                RejectCount++;
+                FalseWakeCount++;
+                _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(1200);
+                _log.Info($"wake: post reject (no wake in freeform) text=\"{text}\" conf={conf:F2}");
+                return;
+            }
+            var floor = ConfidenceFloor();
+            if (conf < floor * 0.7f)
+            {
+                RejectCount++;
+                _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(800);
+                _log.Info($"wake: post reject conf={conf:F2} text={text}");
+                return;
+            }
+            var cmd = StripWake(text);
+            DetectCount++;
+            _log.Info($"wake: DETECT conf={conf:F2} text=\"{text}\" cmd=\"{cmd}\"");
+            RaiseWoken(text, cmd, conf);
+        }
     }
 
     (string Text, float Conf) FreeFormDecode(byte[] pcm)
     {
-        if (_model == null || pcm.Length == 0) return ("", 0);
+        Model? model;
+        lock (_gate) model = _model;
+        if (model == null || pcm.Length == 0) return ("", 0);
         try
         {
-            using var rec = new VoskRecognizer(_model, SampleRate);
+            using var rec = new VoskRecognizer(model, SampleRate);
             rec.SetWords(true);
-            // feed in chunks
             const int chunk = 8000; // 0.25s
-            for (var i = 0; i < pcm.Length; i += chunk)
+            // Cap decode input at 2.5s to keep confirm cheap
+            var limit = Math.Min(pcm.Length, SampleRate * 2 * 25 / 10);
+            for (var i = 0; i < limit; i += chunk)
             {
-                var n = Math.Min(chunk, pcm.Length - i);
+                var n = Math.Min(chunk, limit - i);
                 var slice = new byte[n];
                 Buffer.BlockCopy(pcm, i, slice, 0, n);
                 rec.AcceptWaveform(slice, n);

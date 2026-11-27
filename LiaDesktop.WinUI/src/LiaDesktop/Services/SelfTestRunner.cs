@@ -49,6 +49,11 @@ public static class SelfTestRunner
         // Never log the key — only whether present
         L($"gemini_base={baseUrl}");
         L($"live_key_present={!string.IsNullOrWhiteSpace(liveKey)}");
+        void Checkpoint(string name)
+        {
+            L($"checkpoint: {name}");
+            try { File.WriteAllText(OutPath!, log.ToString(), Encoding.UTF8); } catch { /* */ }
+        }
 
         try
         {
@@ -68,15 +73,19 @@ public static class SelfTestRunner
             {
                 L("SKIP mock scenarios (base is production — pass --gemini-base=mock)");
             }
+            Checkpoint("after_mocks");
 
             // TTS gates — must prove C# WebSocket alone (no Python) + SAPI offline
             failed += await RunTtsGatesAsync(services, L);
+            Checkpoint("after_tts");
 
             // Streaming first-sentence TTS pipeline
             failed += await RunStreamingTtsGatesAsync(services, L);
+            Checkpoint("after_streaming_tts");
 
             // Audio render: Multimedia (not Communications) + abrupt WS close + loopback RMS
             failed += await RunRenderGatesAsync(services, L);
+            Checkpoint("after_render");
 
             // Barge-in: backchannel / stop / new-request + TTS loopback must not trigger
             services.Agent.SuspendBargeHandling(true);
@@ -91,11 +100,13 @@ public static class SelfTestRunner
             services.Agent.Abort();
             await Task.Delay(400);
             services.Agent.Memory.Clear();
+            Checkpoint("after_barge");
 
             // Offline wake word «Лиа» (Vosk) — hard gates (before log sample so wake lines appear)
             L("wake: starting gates…");
             failed += await RunWakeGatesAsync(services, L);
             L("wake: gates done");
+            Checkpoint("after_wake");
 
             // Persistent log file gate (+ sample_log.txt with wake DETECT lines)
             failed += RunLogFileGate(services, L);
@@ -103,6 +114,7 @@ public static class SelfTestRunner
             // Vision click mapping (no network) + dialog memory (mock) + persist
             failed += RunClickMapGate(L);
             failed += await RunMemoryGatesAsync(services, baseUrl, L);
+            Checkpoint("after_memory");
 
             if (!string.IsNullOrWhiteSpace(liveKey))
             {
@@ -1044,7 +1056,9 @@ public static class SelfTestRunner
 
         try
         {
-            var wsPath = await s.Tts.SpeakWebSocketOnlyAsync("Привет, я Лиа.", CancellationToken.None);
+            L("tts_ws_only: starting…");
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+            var wsPath = await s.Tts.SpeakWebSocketOnlyAsync("Привет, я Лиа.", cts.Token);
             if (!TtsAudioGate.TryValidate(wsPath, out var n, out var rms, out var detail))
             {
                 L($"FAIL tts_ws_only: inaudible/empty WebSocket audio ({detail})");

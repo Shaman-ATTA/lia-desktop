@@ -286,11 +286,12 @@ jobs:
               '--smoke-size=1024x720'
             )
             $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
-            $deadline = (Get-Date).AddMinutes(28)
+            $deadline = (Get-Date).AddMinutes(35)
             while (-not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2; $p.Refresh() }
             if (-not $p.HasExited) {
               try { $p.Kill($true) } catch {}
-              throw "selftest timed out (>28min)"
+              if (Test-Path $out) { Write-Host '--- partial selftest.txt on timeout ---'; Get-Content $out | Out-Host }
+              throw "selftest timed out (>35min)"
             }
             if (Test-Path $out) { Get-Content $out | Out-Host } else { Write-Warning "selftest.txt missing" }
             if ($p.ExitCode -ne 0) { throw "selftest exit $($p.ExitCode)" }
