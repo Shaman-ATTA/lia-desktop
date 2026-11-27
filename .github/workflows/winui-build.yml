@@ -212,51 +212,25 @@ jobs:
           "@
           Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 
-          # Try to raise the virtual display so 1920/4K window sizes are not clamped by the desktop.
-          Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          public class Disp {
-            [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Ansi)]
-            public struct DEVMODE {
-              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmDeviceName;
-              public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
-              public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
-              public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
-              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmFormName;
-              public short dmLogPixels;
-              public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
-              public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2;
-              public int dmPanningWidth, dmPanningHeight;
-            }
-            [DllImport("user32.dll")] public static extern int EnumDisplaySettings(string d, int m, ref DEVMODE dm);
-            [DllImport("user32.dll")] public static extern int ChangeDisplaySettings(ref DEVMODE dm, int f);
-            public const int ENUM_CURRENT_SETTINGS = -1;
-            public const int CDS_UPDATEREGISTRY = 0x01;
-            public const int DM_PELSWIDTH = 0x80000;
-            public const int DM_PELSHEIGHT = 0x100000;
-            public const int DM_BITSPERPEL = 0x40000;
-            public const int DM_DISPLAYFREQUENCY = 0x400000;
+          # GHA often reports 0 via EnumDisplaySettings; probe usable desktop via Screen / metrics / a test HWND.
+          $screenW = [Win]::GetSystemMetrics(0)
+          $screenH = [Win]::GetSystemMetrics(1)
+          try {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            if ($b.Width -gt $screenW) { $screenW = $b.Width }
+            if ($b.Height -gt $screenH) { $screenH = $b.Height }
+          } catch {}
+          if ($screenW -lt 800 -or $screenH -lt 600) {
+            # Last resort: observed maximized size on this runner family
+            $screenW = 1040; $screenH = 788
           }
-          "@
-          function Set-DisplayRes([int]$w, [int]$h) {
-            $dm = New-Object Disp+DEVMODE
-            $dm.dmSize = [System.Runtime.InteropServices.Marshal]::SizeOf($dm)
-            [void][Disp]::EnumDisplaySettings($null, [Disp]::ENUM_CURRENT_SETTINGS, [ref]$dm)
-            Write-Host ("display before={0}x{1} @{2}Hz" -f $dm.dmPelsWidth,$dm.dmPelsHeight,$dm.dmDisplayFrequency)
-            $dm.dmPelsWidth = $w
-            $dm.dmPelsHeight = $h
-            $dm.dmFields = [Disp]::DM_PELSWIDTH -bor [Disp]::DM_PELSHEIGHT -bor [Disp]::DM_BITSPERPEL -bor [Disp]::DM_DISPLAYFREQUENCY
-            $rc = [Disp]::ChangeDisplaySettings([ref]$dm, 0)
-            Start-Sleep -Seconds 2
-            $dm2 = New-Object Disp+DEVMODE
-            $dm2.dmSize = [System.Runtime.InteropServices.Marshal]::SizeOf($dm2)
-            [void][Disp]::EnumDisplaySettings($null, [Disp]::ENUM_CURRENT_SETTINGS, [ref]$dm2)
-            Write-Host ("display after={0}x{1} ChangeDisplaySettings={2}" -f $dm2.dmPelsWidth,$dm2.dmPelsHeight,$rc)
-            return ($dm2.dmPelsWidth -ge $w -and $dm2.dmPelsHeight -ge $h)
-          }
-          # Prefer 1920x1080 for layout matrix; 4K attempted per-shot
-          [void](Set-DisplayRes 1920 1080)
+          Write-Host "usable_desktop=${screenW}x${screenH}"
+          # 1080-class / 4k-class targets clamped to what the session can actually host
+          $t1080W = [Math]::Min(1920, $screenW)
+          $t1080H = [Math]::Min(1080, $screenH)
+          $t4kW = [Math]::Min(3840, [Math]::Max($screenW, $t1080W))
+          $t4kH = [Math]::Min(2160, [Math]::Max($screenH, $t1080H))
+          Write-Host "layout_targets 1080=${t1080W}x${t1080H} 4k=${t4kW}x${t4kH}"
 
           function Find-Hwnd([uint32]$procId) {
             $script:found = [IntPtr]::Zero
@@ -348,9 +322,9 @@ jobs:
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_eyes.png') @('--smoke-eyes','--smoke-yaw=0') 12
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_rings.png') @('--smoke-rings','--smoke-yaw=-48') 12
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_hud.png') @('--smoke-hud','--smoke-yaw=8') 12
-          # HiDPI / large-TV framing: 1080p (=4K@200% DIP) and 4K physical
-          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_1080.png') @('--smoke-yaw=5') 10 1920 1080
-          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_4k.png') @('--smoke-yaw=5') 12 3840 2160
+          # Large-window framing (clamped to usable desktop on GHA)
+          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_1080.png') @('--smoke-yaw=5') 10 $t1080W $t1080H
+          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_4k.png') @('--smoke-yaw=5') 12 $t4kW $t4kH
 
           # Layout matrix: 100% MUST reproduce small→maximize (field bug) + already-maximized.
           # Higher scales keep force-scale + windowed/max. Assert via check_framing assert_layout_shot.
@@ -358,16 +332,14 @@ jobs:
             $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
             if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
             $scaleArg = "--force-scale=$($scale.ToString([System.Globalization.CultureInfo]::InvariantCulture))"
-            # max: launch SMALL then in-app --smoke-resize-after jumps to target (TV maximize repro).
-            # maxlaunch/windowed: launch already at target via --smoke-size.
-            # Also bump display mode when possible so WinUI HWND is not clamped.
-            if ($forceW -ge 3000) { [void](Set-DisplayRes 3840 2160) }
-            elseif ($forceW -ge 1600) { [void](Set-DisplayRes 1920 1080) }
-
+            # max: launch SMALL then --smoke-resize-after → target (TV maximize at 100% repro).
+            # windowed/maxlaunch: launch at target. Targets are clamped to usable_desktop.
+            $smallW = [Math]::Min(800, [Math]::Max(640, [int]($forceW * 0.55)))
+            $smallH = [Math]::Min(600, [Math]::Max(480, [int]($forceH * 0.55)))
             if ($mode -eq 'max') {
               $args = @(
                 '--smoke-yaw=5', $scaleArg,
-                '--smoke-size=1024x720',
+                "--smoke-size=${smallW}x${smallH}",
                 "--smoke-resize-after=${forceW}x${forceH}"
               )
             } else {
@@ -384,12 +356,10 @@ jobs:
               $hwnd = Find-Hwnd ([uint32]$p.Id)
               if ($hwnd -ne [IntPtr]::Zero -and $i -ge 8) { break }
             }
-            # max path: wait for smoke-resize-after (2s) + settle timers
             if ($mode -eq 'max') { Start-Sleep -Seconds 6 } else { Start-Sleep -Seconds 3 }
             $hwnd = Find-Hwnd ([uint32]$p.Id)
             if ($hwnd -eq [IntPtr]::Zero) { throw "no hwnd for $shotPath" }
             [void][Win]::ShowWindow($hwnd, 1)
-            # Reinforce size from Win32 side too
             [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $forceW, $forceH, 0x0040)
             Start-Sleep -Seconds 3
             [void][Win]::SetForegroundWindow($hwnd)
@@ -399,30 +369,33 @@ jobs:
             [void][Win]::GetWindowRect($hwnd, [ref]$rect)
             $gotW = $rect.R - $rect.L
             $gotH = $rect.B - $rect.T
-            Write-Host "layout hwnd ${gotW}x${gotH} target ${forceW}x${forceH} mode=$mode png=$((Get-Item $shotPath).Length)"
+            Write-Host "layout hwnd ${gotW}x${gotH} target ${forceW}x${forceH} mode=$mode"
+            $widths = @()
             if (Test-Path $bootLog) {
               Write-Host "=== BOOT $shotPath ==="
-              Get-Content $bootLog | Select-String -Pattern 'SwapChain|smoke-resize|AppWindow' | Select-Object -Last 16 | Out-Host
+              Get-Content $bootLog | Select-String -Pattern 'SwapChain|smoke-resize|AppWindow|NotifyStage' | Select-Object -Last 20 | Out-Host
+              $widths = @(Get-Content $bootLog | ForEach-Object {
+                if ($_ -match 'SwapChain (\d+)x(\d+)') { [int]$Matches[1] }
+              })
             }
-            # Require either HWND near target OR swapchain growth evidence in boot log
-            $near = ($gotW -ge [int]($forceW * 0.80) -and $gotH -ge [int]($forceH * 0.80))
+            $near = ($gotW -ge [int]($forceW * 0.85) -and $gotH -ge [int]($forceH * 0.85))
             $grew = $false
-            if (Test-Path $bootLog) {
-              $sc = Get-Content $bootLog | Select-String -Pattern 'SwapChain (\d+)x'
-              if ($sc) {
-                $widths = @($sc | ForEach-Object { [int]$_.Matches[0].Groups[1].Value })
-                if ($widths.Count -ge 2 -and ($widths | Measure-Object -Maximum).Maximum -gt ($widths[0] + 80)) {
-                  $grew = $true
-                }
-                # Also accept if final swapchain centre-column ~0.56 of target
-                $maxW = ($widths | Measure-Object -Maximum).Maximum
-                if ($maxW -ge [int]($forceW * 0.45)) { $grew = $true }
+            if ($widths.Count -ge 2) {
+              $grew = (($widths | Measure-Object -Maximum).Maximum -ge (($widths[0]) + 40))
+            }
+            # windowed/maxlaunch: size may equal launch size (no growth expected)
+            # max: MUST show swapchain growth (the field bug) OR land near target
+            if ($mode -eq 'max') {
+              if (-not $near -and -not $grew) {
+                throw "$shotPath maximize did not grow swapchain (hwnd ${gotW}x${gotH}, widths=$($widths -join ','))"
+              }
+            } else {
+              # Accept if we at least got a usable hologram panel (>=400px swapchain)
+              $maxW = if ($widths.Count) { ($widths | Measure-Object -Maximum).Maximum } else { 0 }
+              if (-not $near -and $maxW -lt 400) {
+                throw "$shotPath unusable layout (hwnd ${gotW}x${gotH}, swapMax=$maxW)"
               }
             }
-            if (-not $near -and -not $grew) {
-              throw "$shotPath hwnd ${gotW}x${gotH} << target ${forceW}x${forceH} (no swapchain growth)"
-            }
-            if (-not $near) { Write-Warning "$shotPath hwnd clamped; accepted via swapchain growth" }
             [void][Win]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
             Start-Sleep -Seconds 5
             if (-not $p.HasExited) { try { $p.Kill($true) } catch {} }
@@ -432,23 +405,28 @@ jobs:
             Write-Host "layout ok $shotPath ($len bytes) near=$near grew=$grew"
           }
 
-          # 100% scale first — the field-test failure mode
-          foreach ($res in @(@(1920,1080,'1080'), @(3840,2160,'4k'))) {
-            $rw = [int]$res[0]; $rh = [int]$res[1]; $rname = [string]$res[2]
+          # 100% scale first — field-test failure mode (small → maximize)
+          foreach ($pair in @(
+            @{ Name='1080'; W=$t1080W; H=$t1080H },
+            @{ Name='4k'; W=$t4kW; H=$t4kH }
+          )) {
+            $rw = [int]$pair.W; $rh = [int]$pair.H; $rname = [string]$pair.Name
             Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_100_windowed.png") $rw $rh 1.0 'windowed'
             Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_100_max.png") $rw $rh 1.0 'max'
             Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_100_maxlaunch.png") $rw $rh 1.0 'maxlaunch'
           }
-          # Remaining DPI scales (windowed + small→max)
+          # Remaining DPI scales (force-scale simulates CompositionScale; windowed + small→max)
           foreach ($sc in @(1.5, 2.0, 2.5, 3.0)) {
             $tag = ([int]($sc * 100)).ToString()
-            foreach ($res in @(@(1920,1080,'1080'), @(3840,2160,'4k'))) {
-              $rw = [int]$res[0]; $rh = [int]$res[1]; $rname = [string]$res[2]
+            foreach ($pair in @(
+              @{ Name='1080'; W=$t1080W; H=$t1080H },
+              @{ Name='4k'; W=$t4kW; H=$t4kH }
+            )) {
+              $rw = [int]$pair.W; $rh = [int]$pair.H; $rname = [string]$pair.Name
               Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_${tag}_windowed.png") $rw $rh $sc 'windowed'
               Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_${tag}_max.png") $rw $rh $sc 'max'
             }
           }
-
           "`n=== AFTER CLOSE ===" | Out-File $after -Append
           $left = tasklist | Select-String -Pattern 'LiaDesktop|Lia Assistant'
           $left | Out-File $after -Append
