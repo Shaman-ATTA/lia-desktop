@@ -16,9 +16,35 @@ public partial class App : Application
         UnhandledException += (_, e) =>
         {
             Program.BootLog("UnhandledException: " + e.Message);
-            Services.Log.Error($"UI: {e.Message}");
+            try
+            {
+                AppLog.WriteCrash("ui-unhandled", e.Exception?.ToString() ?? e.Message);
+                Services.Log.Error($"UI: {e.Message}", e.Exception?.ToString());
+            }
+            catch { /* */ }
             e.Handled = true;
         };
+        try
+        {
+            AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            {
+                try
+                {
+                    AppLog.WriteCrash("domain-unhandled", e.ExceptionObject?.ToString() ?? "unknown");
+                }
+                catch { /* */ }
+            };
+            TaskScheduler.UnobservedTaskException += (_, e) =>
+            {
+                try
+                {
+                    AppLog.WriteCrash("task-unobserved", e.Exception.ToString());
+                    e.SetObserved();
+                }
+                catch { /* */ }
+            };
+        }
+        catch { /* */ }
     }
 
     /// <summary>Parse --smoke-size=1920x1080 or LIA_SMOKE_SIZE. Default 1280x800.</summary>

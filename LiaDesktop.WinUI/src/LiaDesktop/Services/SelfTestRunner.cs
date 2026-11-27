@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using LiaDesktop.Services.Tools;
 
 namespace LiaDesktop.Services;
@@ -68,6 +69,9 @@ public static class SelfTestRunner
 
             // TTS gates — must prove C# WebSocket alone (no Python) + SAPI offline
             failed += await RunTtsGatesAsync(services, L);
+
+            // Persistent log file gate
+            failed += RunLogFileGate(services, L);
 
             // Audio render: Multimedia (not Communications) + abrupt WS close + loopback RMS
             failed += await RunRenderGatesAsync(services, L);
@@ -555,6 +559,82 @@ public static class SelfTestRunner
             var cfg = s.Secrets.Load();
             cfg.ApiKey = "ci-mock-key";
             s.Secrets.Save(cfg);
+        }
+    }
+
+    static int RunLogFileGate(AppServices s, Action<string> L)
+    {
+        try
+        {
+            // Plant a lookalike key; Info/redact must scrub it from the file
+            const string fakeKey = "AIzaSyD-selftest-redact-check-XXXXXXXX";
+            s.Log.Info("redact-probe api_key=" + fakeKey);
+
+            // Ensure diagnostics present
+            s.Log.WriteStartupDiagnostics(s);
+            var path = AppLog.TodayLogPath();
+            if (!File.Exists(path))
+            {
+                L($"FAIL log_file: missing {path}");
+                return 1;
+            }
+            var text = File.ReadAllText(path, Encoding.UTF8);
+            if (!text.Contains("STARTUP DIAGNOSTICS", StringComparison.Ordinal))
+            {
+                L("FAIL log_file: missing STARTUP DIAGNOSTICS block");
+                return 1;
+            }
+            if (!text.Contains("RENDER", StringComparison.Ordinal) &&
+                !text.Contains("render", StringComparison.OrdinalIgnoreCase))
+            {
+                L("FAIL log_file: missing audio device list");
+                return 1;
+            }
+            var cfg = s.Secrets.Load();
+            if (!string.IsNullOrWhiteSpace(cfg.ApiKey) &&
+                text.Contains(cfg.ApiKey, StringComparison.Ordinal))
+            {
+                L("FAIL log_file: API key leaked into log");
+                return 1;
+            }
+            if (text.Contains(fakeKey, StringComparison.Ordinal) ||
+                Regex.IsMatch(text, @"AIza[0-9A-Za-z\-_]{20,}"))
+            {
+                L("FAIL log_file: AIza-looking key in log (redact failed)");
+                return 1;
+            }
+            if (!text.Contains("[REDACTED", StringComparison.Ordinal))
+            {
+                L("FAIL log_file: expected redact marker after probe");
+                return 1;
+            }
+
+            // Copy sample for CI release asset (cwd + next to exe)
+            try
+            {
+                var sample = Path.Combine(Environment.CurrentDirectory, "sample_log.txt");
+                File.Copy(path, sample, true);
+                try
+                {
+                    var exeDir = AppContext.BaseDirectory;
+                    if (!string.IsNullOrEmpty(exeDir))
+                        File.Copy(path, Path.Combine(exeDir, "sample_log.txt"), true);
+                }
+                catch { /* */ }
+                L($"log_file: wrote sample_log.txt ({new FileInfo(sample).Length}B)");
+            }
+            catch (Exception ex)
+            {
+                L("log_file: sample copy warn — " + ex.Message);
+            }
+
+            L($"log_file: PASS path={path} bytes={new FileInfo(path).Length}");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL log_file: {ex.GetType().Name}: {ex.Message}");
+            return 1;
         }
     }
 

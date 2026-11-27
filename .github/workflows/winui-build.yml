@@ -172,6 +172,7 @@ jobs:
             if ($txt -notmatch 'SELFTEST PASS') { throw "selftest.txt missing PASS marker" }
             if ($txt -notmatch 'tts_ws_only: PASS') { throw "selftest missing tts_ws_only PASS" }
             if ($txt -notmatch 'tts_sapi: PASS') { throw "selftest missing tts_sapi PASS" }
+            if ($txt -notmatch 'log_file: PASS') { throw "selftest missing log_file PASS" }
             if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }
             if ($txt -notmatch 'render_nondefault_comm: PASS') { throw "selftest missing render_nondefault_comm PASS" }
             if ($txt -notmatch 'playback_rms: PASS') { throw "selftest missing playback_rms PASS" }
@@ -187,10 +188,13 @@ jobs:
             }
             if ($txt -match 'operation was canceled') { throw "selftest reported canceled" }
             Write-Host "selftest ok (tts + barge + vision/memory gates)"
-            $vt = Join-Path (Split-Path $exe) 'vision_test.png'
-            if (Test-Path $vt) { Copy-Item $vt (Join-Path $PWD 'vision_test.png') -Force; Write-Host "copied vision_test.png" }
-            elseif (Test-Path (Join-Path $PWD 'vision_test.png')) { Write-Host "vision_test.png already in cwd" }
-            else { Write-Warning "vision_test.png missing after selftest" }
+            $exeDir = Split-Path $exe
+            foreach ($name in @('vision_test.png','sample_log.txt')) {
+              $src = Join-Path $exeDir $name
+              if (Test-Path $src) { Copy-Item $src (Join-Path $PWD $name) -Force; Write-Host "copied $name" }
+              elseif (Test-Path (Join-Path $PWD $name)) { Write-Host "$name already in cwd" }
+              else { Write-Warning "$name missing after selftest" }
+            }
           }
           finally {
             try { Stop-Process -Id $mock.Id -Force -ErrorAction SilentlyContinue } catch {}
@@ -598,6 +602,7 @@ jobs:
             layout_window_max.png
             selftest.txt
             vision_test.png
+            sample_log.txt
             tasklist_before.txt
             tasklist_after.txt
           if-no-files-found: warn
@@ -611,11 +616,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.2** — Audible Multimedia TTS + vision + memory
+          Lia Desktop **v0.7.2** — Audible Multimedia TTS + vision + memory + persistent logs
 
-          - TTS render on Multimedia/Console (never Communications); WaveOut fallback; device picker
-          - Edge WS abrupt close OK if audio received; look_at_screen + dialog memory
-          - Selftest: render_role, playback_rms, ws_close_handshake, vision_live, memory_*
+          - TTS → Multimedia/Console; WaveOut fallback; device picker + voice check
+          - Persistent logs in %LOCALAPPDATA%\LiaDesktop\logs (sample_log.txt on release)
+          - Vision + dialog memory; selftest render_*/playback_rms/ws_close_handshake/log_file
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -627,7 +632,7 @@ jobs:
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
                    desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt \
-                   tasklist_before.txt tasklist_after.txt vision_test.png layout_*.png; do
+                   tasklist_before.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
             for m in $f; do
               if [ -f "$m" ]; then
                 gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber
@@ -648,16 +653,17 @@ jobs:
         run: |
           TAG=v0.7.2
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.2** — Audible Multimedia TTS + vision + memory
+          Lia Desktop **v0.7.2** — Audible Multimedia TTS + vision + memory + persistent logs
 
-          - TTS → Multimedia/Console (not Communications); WaveOut fallback; device picker + voice check
-          - Vision + dialog memory; selftest render_*/playback_rms/ws_close_handshake
+          - TTS → Multimedia/Console; WaveOut fallback; device picker + voice check
+          - Persistent logs in %LOCALAPPDATA%\LiaDesktop\logs (sample_log.txt on release)
+          - Vision + dialog memory; selftest render_*/playback_rms/ws_close_handshake/log_file
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES" || true
-          for f in LiaDesktop-0.7.2-win-x64.zip LiaDesktop-0.7.2-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt vision_test.png layout_*.png; do
+          for f in LiaDesktop-0.7.2-win-x64.zip LiaDesktop-0.7.2-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
             for m in $f; do
               [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
             done

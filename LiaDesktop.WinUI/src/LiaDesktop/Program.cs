@@ -23,6 +23,7 @@ public static class Program
             File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {msg}\n");
         }
         catch { /* */ }
+        try { AppLog.WriteBoot(msg); } catch { /* */ }
     }
 
     [STAThread]
@@ -41,6 +42,7 @@ public static class Program
                 Directory.CreateDirectory(dir);
                 SecretsStore.ConfigDirOverride = dir;
                 ConversationMemory.PathOverride = Path.Combine(dir, "session.json");
+                AppLog.LogRootOverride = dir;
                 BootLog($"selftest config dir={dir}");
                 BootLog($"gemini base={GeminiEndpoints.Base}");
             }

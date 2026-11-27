@@ -27,6 +27,8 @@ public sealed class BargeInService : IDisposable
     long _playbackBytes;
     long _playbackTotalBytes;
     bool _playing;
+    float _playPeak;
+    DateTime _playStarted;
 
     /// <summary>Injected PCM mic source for selftest (16 kHz mono float frames).</summary>
     public Func<float[]?>? MockMicPull { get; set; }
@@ -81,8 +83,11 @@ public sealed class BargeInService : IDisposable
         while (_micQ.TryDequeue(out _)) { }
 
         _playing = true;
+        _playPeak = 0;
+        _playStarted = DateTime.UtcNow;
         PlaybackStarted?.Invoke();
         var end = PlayEnd.Completed;
+        string? playErr = null;
 
         try
         {
@@ -97,6 +102,7 @@ public sealed class BargeInService : IDisposable
         }
         catch (Exception ex)
         {
+            playErr = ex.Message;
             _log.Info("BargeIn play: " + ex.Message);
             AppLog.WriteCrash("barge-in", ex);
             end = PlayEnd.Cancelled;
@@ -109,6 +115,21 @@ public sealed class BargeInService : IDisposable
             _playing = false;
             MouthStop?.Invoke();
             PlaybackStopped?.Invoke();
+            try
+            {
+                var dur = (DateTime.UtcNow - _playStarted).TotalSeconds;
+                long bytes = 0;
+                try { if (File.Exists(path)) bytes = new FileInfo(path).Length; } catch { /* */ }
+                var rms = _playPeak > 0 ? _playPeak * 0.5f : (float?)null;
+                _log.LogTtsPlayback(
+                    _audio.LastDeviceFriendlyName,
+                    bytes,
+                    dur,
+                    rms,
+                    _playPeak > 0 ? _playPeak : null,
+                    playErr);
+            }
+            catch { /* */ }
         }
         return end;
     }
@@ -286,6 +307,11 @@ public sealed class BargeInService : IDisposable
     void OnPlaybackSamples(float[] mono16k)
     {
         _vad.PushPlayback(mono16k);
+        for (var i = 0; i < mono16k.Length; i++)
+        {
+            var a = Math.Abs(mono16k[i]);
+            if (a > _playPeak) _playPeak = a;
+        }
     }
 
     void DrainMicVad(ref bool barged, CancellationToken ct)

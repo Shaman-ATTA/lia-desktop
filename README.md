@@ -25,6 +25,7 @@ Head asset: Microsoft Rocketbox `Female_Adult_07` (MIT) — see `THIRD_PARTY.md`
 - Tools: files, PowerShell, Playwright, look_at_screen / screenshot (Gemini vision), mouse/keyboard
 - Dialog memory across turns (persist + «забудь» / НОВЫЙ РАЗГОВОР)
 - TTS: Edge `ru-RU-SvetlanaNeural` via C# WebSocket (Sec-MS-GEC v2) + SAPI offline fallback; STT: Windows Speech or Gemini mic
+- Persistent daily logs under `%LOCALAPPDATA%\LiaDesktop\logs` (startup diagnostics, TTS metrics, crashes; Settings → copy `Lia-log.txt` to Desktop)
 - DPAPI-protected API key; stop: «Лиа, стоп» / **Ctrl+Alt+S**
 - Clean exit via Job Object `KILL_ON_JOB_CLOSE`
 

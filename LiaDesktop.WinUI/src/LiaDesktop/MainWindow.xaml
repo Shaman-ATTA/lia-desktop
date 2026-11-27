@@ -38,8 +38,9 @@
           <TextBlock x:Name="GreetingLine" Text="Доброй ночи, сэр." Foreground="{StaticResource LiaCyanDim}"
                      FontFamily="{StaticResource LiaUi}" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
         </StackPanel>
-        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="12" Margin="0,0,8,0">
+        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8" Margin="0,0,8,0">
           <TextBlock x:Name="SysLine" Style="{StaticResource HudMono}" FontSize="10" VerticalAlignment="Center"/>
+          <Button Content="ЛОГИ" Click="OpenLogs_Click" Style="{StaticResource HudGhostButton}" Padding="10,3"/>
           <Button Content="НАСТРОЙКИ" Click="Settings_Click" Style="{StaticResource HudGhostButton}" Padding="10,3"/>
         </StackPanel>
       </Grid>
@@ -224,6 +225,10 @@
           <TextBox x:Name="WorkspaceBox" Style="{StaticResource HudLineInput}"/>
           <CheckBox x:Name="AutostartBox" Content="Запускать вместе с Windows (в трее, ждать «Лиа»)"
                     Foreground="{StaticResource LiaMuted}" Margin="0,8,0,0"/>
+          <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+            <Button Content="Открыть папку логов" Click="OpenLogs_Click" Style="{StaticResource HudGhostButton}"/>
+            <Button Content="Сохранить лог на рабочий стол" Click="SaveLogDesktop_Click" Style="{StaticResource HudGhostButton}"/>
+          </StackPanel>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,8,0,0">
             <Button Content="ОТМЕНА" Click="SettingsCancel_Click" Style="{StaticResource HudGhostButton}"/>
             <Button Content="СОХРАНИТЬ" Click="SettingsSave_Click" Style="{StaticResource HudGhostButton}"

@@ -30,6 +30,9 @@ public sealed class EdgeTts
     /// </summary>
     public static bool SelfTestOfflineAbruptClose { get; set; }
 
+    /// <summary>Last successful synthesis backend: edge-ws | sapi | none.</summary>
+    public string LastPathChosen { get; private set; } = "none";
+
     readonly AppLog _log;
     static readonly HttpClient DateProbe = new() { Timeout = TimeSpan.FromSeconds(8) };
 
@@ -53,7 +56,11 @@ public sealed class EdgeTts
                 {
                     await ViaWebSocketAsync(text, outPath, ct);
                     if (TtsAudioGate.TryValidate(outPath, out _, out _, out _))
+                    {
+                        LastPathChosen = "edge-ws";
+                        _log.Info($"tts_path_chosen=edge-ws file={Path.GetFileName(outPath)}");
                         return outPath;
+                    }
                     try { if (File.Exists(outPath)) File.Delete(outPath); } catch { /* */ }
                 }
                 catch (Exception ex)
@@ -79,7 +86,8 @@ public sealed class EdgeTts
                 var wav = await ViaSapiAsync(text, ct);
                 if (wav != null && TtsAudioGate.TryValidate(wav, out _, out _, out var sapiOk))
                 {
-                    _log.Info($"TTS: SAPI/OneCore офлайн ({sapiOk})");
+                    LastPathChosen = "sapi";
+                    _log.Info($"tts_path_chosen=sapi ({sapiOk})");
                     return wav;
                 }
             }
@@ -91,6 +99,7 @@ public sealed class EdgeTts
             }
         }
 
+        LastPathChosen = "none";
         _log.Error("TTS недоступен", OneLine(last?.Message ?? "no backend"));
         if (last != null) AppLog.WriteCrash("tts-final", last);
         return null;

@@ -1,12 +1,13 @@
 # Changelog
 
-## v0.7.2 — Vision + dialog memory + audible Multimedia TTS
+## v0.7.2 — Vision + dialog memory + audible Multimedia TTS + logs
 
 - **Field fix (inaudible TTS):** playback uses default **Multimedia/Console** render (never Communications); follow default-device changes; WasapiOut → WaveOutEvent fallback; log `TTS → <device>`. Settings: output device picker + **ПРОВЕРИТЬ ГОЛОС**.
+- **Persistent logs:** `%LOCALAPPDATA%\LiaDesktop\logs\lia-YYYY-MM-DD.log` (UTF-8, rotate 7d / ~5MB); startup diagnostics (version, displays, all audio endpoints + defaults, mic, model, key yes/no); TTS device/bytes/dur/RMS; crash handler; HUD **ЛОГИ** + Settings copy to Desktop as `Lia-log.txt`.
 - **Edge TTS:** abrupt WebSocket close without handshake is SUCCESS if audio bytes (or turn.end) already received.
 - **Vision:** `look_at_screen` / `screenshot` → Gemini `inline_data`; DPI click map.
 - **Dialog memory:** session persist, «забудь» / НОВЫЙ РАЗГОВОР, barge truncated spoken.
-- **Selftest:** `render_role`, `render_nondefault_comm`, `playback_rms`, `ws_close_handshake`, `vision_live`, `click_map`, `memory_*` + prior gates.
+- **Selftest:** `log_file`, `render_role`, `render_nondefault_comm`, `playback_rms`, `ws_close_handshake`, `vision_live`, `click_map`, `memory_*` + prior gates. Release asset `sample_log.txt`.
 
 ## v0.7.1 — Barge-in / natural interruption + real SAPI
 

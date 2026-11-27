@@ -33,6 +33,7 @@ public sealed class AppServices
         Memory = new ConversationMemory(Log);
         Agent = new AgentService(Gemini, Secrets, Log, Tools, Tts, BargeIn, Memory);
         MicGemini = new MicGeminiListen(Gemini, Log);
+        try { Log.WriteStartupDiagnostics(this); } catch { /* */ }
         _ = Gemini.EnsureModelAsync();
         _ = InitSpeechAsync();
     }

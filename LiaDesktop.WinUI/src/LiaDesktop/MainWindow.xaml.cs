@@ -883,6 +883,41 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    void OpenLogs_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            AppLog.OpenLogFolder();
+            _s.Log.Info("Открыта папка логов: " + AppLog.LogDir());
+        }
+        catch (Exception ex)
+        {
+            _s.Log.Error("Логи", ex.Message);
+        }
+    }
+
+    void SaveLogDesktop_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dest = AppLog.CopyLatestToDesktop();
+            if (dest == null)
+            {
+                _s.Log.Error("Лог", "файл не найден");
+                Subtitle.Text = "Лог ещё не создан";
+            }
+            else
+            {
+                _s.Log.Info("Лог скопирован → " + dest);
+                Subtitle.Text = "Лог на рабочем столе: Lia-log.txt";
+            }
+        }
+        catch (Exception ex)
+        {
+            _s.Log.Error("Лог", ex.Message);
+        }
+    }
+
     void Settings_Click(object sender, RoutedEventArgs e)
     {
         var cfg = _s.Secrets.Load();
