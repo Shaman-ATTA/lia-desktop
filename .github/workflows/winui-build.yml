@@ -310,8 +310,11 @@ jobs:
             if ($txt -notmatch 'wake_negative: PASS.*false_wakes=') { throw "selftest wake_negative missing false_wakes" }
             if ($txt -notmatch 'wake_own_tts: PASS') { throw "selftest missing wake_own_tts PASS" }
             if ($txt -notmatch 'wake_command_inline: PASS') { throw "selftest missing wake_command_inline PASS" }
+            if ($txt -notmatch 'wake_e2e: PASS') { throw "selftest missing wake_e2e PASS" }
+            if ($txt -notmatch 'wake_timeout: PASS') { throw "selftest missing wake_timeout PASS" }
             if ($txt -notmatch 'wake_offline: PASS') { throw "selftest missing wake_offline PASS" }
             if ($txt -notmatch 'wake_cpu: PASS') { throw "selftest missing wake_cpu PASS" }
+            if ($txt -notmatch 'wake_cpu: PASS.*mode=') { throw "selftest wake_cpu missing mode=" }
             if ($txt -notmatch 'log_file: PASS') { throw "selftest missing log_file PASS" }
             if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }
             if ($txt -notmatch 'render_nondefault_comm: PASS') { throw "selftest missing render_nondefault_comm PASS" }

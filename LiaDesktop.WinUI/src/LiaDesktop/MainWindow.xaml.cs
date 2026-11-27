@@ -110,6 +110,7 @@ public sealed partial class MainWindow : Window
             OnSpeechFinal(text);
         });
         _s.Wake.Woken += OnWakeWord;
+        _s.MicGemini.TimedOut += OnMicGeminiTimedOut;
         _clock.Tick += (_, _) => TickTelemetry();
         _clock.Start();
 
@@ -140,11 +141,25 @@ public sealed partial class MainWindow : Window
             DispatcherQueue.TryEnqueue(async () => await RunBootSequenceAsync());
     }
 
+    void OnMicGeminiTimedOut()
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            _listening = false;
+            Holo.Renderer.SetListening(false);
+            MicGlyph.Text = "◉";
+            StatusCaption.Text = "ОЖИДАНИЕ";
+            VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
+            Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";
+            _s.Log.Info("wake follow-up: timeout → ОЖИДАНИЕ");
+        });
+    }
+
     void OnWakeWord(string full, string command, float conf)
     {
-        // Selftest drives wake via ProcessUtterance/PushPcm — never steal mic or SendAsync
-        // (MicGemini.StartAsync would hang the gate for the whole selftest timeout).
-        if (SelfTestRunner.IsSelfTest)
+        // Most selftest wake_* gates only need DETECT counts — skip follow-up unless
+        // EnableWakeFollowUp (wake_e2e / wake_timeout exercise the real path).
+        if (SelfTestRunner.IsSelfTest && !SelfTestRunner.EnableWakeFollowUp)
         {
             DispatcherQueue.TryEnqueue(() =>
             {
@@ -174,17 +189,30 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            // Wake only — capture following utterance via existing mic path
+            // Wake only — capture following utterance.
+            // Prefer MicGemini when injectable (selftest e2e) or Windows STT unavailable.
             try
             {
-                if (_s.WindowsSpeechOk)
-                    await _s.Speech.StartAsync();
-                else if (!string.IsNullOrWhiteSpace(_s.Secrets.Load().ApiKey))
+                var forceMic = SelfTestRunner.EnableWakeFollowUp
+                               || _s.MicGemini.UseInjectableCapture
+                               || _s.MicGemini.MockCapturePull != null;
+                if (forceMic || !_s.WindowsSpeechOk)
+                {
+                    if (string.IsNullOrWhiteSpace(_s.Secrets.Load().ApiKey))
+                    {
+                        _s.Log.Info("wake follow-up: нет ключа Gemini для MicGemini");
+                        OnMicGeminiTimedOut();
+                        return;
+                    }
                     await _s.MicGemini.StartAsync();
+                }
+                else
+                    await _s.Speech.StartAsync();
             }
             catch (Exception ex)
             {
                 _s.Log.Info("wake follow-up STT: " + ex.Message);
+                OnMicGeminiTimedOut();
             }
         });
     }

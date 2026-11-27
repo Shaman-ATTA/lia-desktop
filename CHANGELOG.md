@@ -6,7 +6,8 @@
 - **Behaviour:** ОЖИДАНИЕ → «Лиа» pulses HUD + optional soft chime → capture follow-up; one-breath «Лиа, открой блокнот» runs the command; mic button unchanged.
 - **Echo guard:** own TTS (barge PlaybackStarted/Stopped) must not self-wake.
 - **Settings:** toggle «Пробуждение по слову „Лиа“» (default ON) + sensitivity slider; model downloads on first run (~45MB) into `%LOCALAPPDATA%\LiaDesktop\vosk` (installer stays lean).
-- **Selftest hard gates:** `wake_positive` ≥90%, `wake_negative` ≤1 false wake, `wake_own_tts`, `wake_command_inline`, `wake_offline`, `wake_cpu` idle &lt;5%; all prior gates unchanged. `sample_log.txt` includes `wake: DETECT` lines.
+- **Follow-up safety:** MicGemini no-speech hard timeout (8s) → ОЖИДАНИЕ (never hang).
+- **Selftest hard gates:** `wake_positive` ≥90%, `wake_negative` ≤1 false wake (`speech_s`/`noise_s`/`false_wakes`), `wake_own_tts`, `wake_command_inline`, `wake_e2e` (injectable mic → mock Gemini → TTS ≤60s), `wake_timeout` (silence → ОЖИДАНИЕ), `wake_offline`, `wake_cpu` idle &lt;5% with real WaveIn when available (`mode=wavein|pushonly`); all prior gates unchanged. `sample_log.txt` includes `wake: DETECT` lines.
 
 ## v0.7.3 — Speak from the first sentence (low TTS latency)
 

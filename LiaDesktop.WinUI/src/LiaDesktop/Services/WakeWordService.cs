@@ -100,7 +100,20 @@ public sealed class WakeWordService : IDisposable
         }
     }
 
-    public void Start()
+    public enum CaptureMode
+    {
+        /// <summary>Production: WaveIn when available. Selftest default: PushPcm-only.</summary>
+        Auto,
+        /// <summary>Prefer WaveIn when a capture device exists (wake_cpu on CI).</summary>
+        ForceWaveIn,
+        /// <summary>Never open WaveIn — PushPcm injection only.</summary>
+        PushOnly,
+    }
+
+    /// <summary>Last Start() capture mode actually used (wavein|pushonly).</summary>
+    public string LastCaptureMode { get; private set; } = "pushonly";
+
+    public void Start(CaptureMode mode = CaptureMode.Auto)
     {
         if (!_enabled) return;
         lock (_gate)
@@ -112,15 +125,24 @@ public sealed class WakeWordService : IDisposable
                 return;
             }
             CreateGrammar_NoLock();
-            // Selftest injects PCM via PushPcm — skip WaveIn (avoids mic contention on CI)
-            if (SelfTestRunner.IsSelfTest || WaveIn.DeviceCount <= 0)
+
+            var wantWaveIn = mode switch
+            {
+                CaptureMode.ForceWaveIn => WaveIn.DeviceCount > 0,
+                CaptureMode.PushOnly => false,
+                _ => !SelfTestRunner.IsSelfTest && WaveIn.DeviceCount > 0,
+            };
+
+            if (!wantWaveIn)
             {
                 _running = true;
-                _log.Info(SelfTestRunner.IsSelfTest
-                    ? "wake: selftest PushPcm-only mode"
-                    : "wake: no WaveIn — PushPcm-only mode");
+                LastCaptureMode = "pushonly";
+                _log.Info(WaveIn.DeviceCount <= 0
+                    ? "wake: no WaveIn — PushPcm-only mode"
+                    : "wake: PushPcm-only mode");
                 return;
             }
+
             _waveIn = new WaveInEvent
             {
                 WaveFormat = new WaveFormat(SampleRate, 16, 1),
@@ -131,14 +153,15 @@ public sealed class WakeWordService : IDisposable
             {
                 _waveIn.StartRecording();
                 _running = true;
-                _log.Info("wake: listening (ОЖИДАНИЕ)");
+                LastCaptureMode = "wavein";
+                _log.Info($"wake: listening (ОЖИДАНИЕ) WaveIn devices={WaveIn.DeviceCount}");
             }
             catch (Exception ex)
             {
                 _log.Info("wake: WaveIn start fail — " + ex.Message);
                 CleanupCapture_NoLock();
-                // still allow PushPcm
                 _running = true;
+                LastCaptureMode = "pushonly";
             }
         }
     }

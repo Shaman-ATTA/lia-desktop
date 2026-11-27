@@ -18,6 +18,12 @@ public static class SelfTestRunner
     public static bool IsSelfTest { get; private set; }
     public static string? OutPath { get; private set; }
 
+    /// <summary>
+    /// When true during selftest, MainWindow.OnWakeWord runs the real follow-up path
+    /// (MicGemini → SendAsync). Used by wake_e2e / wake_timeout only.
+    /// </summary>
+    public static bool EnableWakeFollowUp { get; set; }
+
     public static bool Detect(string[] args)
     {
         IsSelfTest = args.Any(a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase)
@@ -106,7 +112,7 @@ public static class SelfTestRunner
 
             // Offline wake word «Лиа» (Vosk) — hard gates (before log sample so wake lines appear)
             L("wake: starting gates…");
-            failed += await RunWakeGatesAsync(services, L);
+            failed += await RunWakeGatesAsync(services, baseUrl, L);
             L("wake: gates done");
             Checkpoint("after_wake");
 
@@ -1232,12 +1238,13 @@ public static class SelfTestRunner
     /// Hard wake gates: positive ≥90%, negative ≤1 false, own-TTS echo, inline command,
     /// offline detection, idle CPU &lt;5%.
     /// </summary>
-    static async Task<int> RunWakeGatesAsync(AppServices s, Action<string> L)
+    static async Task<int> RunWakeGatesAsync(AppServices s, string baseUrl, Action<string> L)
     {
         var fail = 0;
         var wake = s.Wake;
         wake.ChimeEnabled = false;
         wake.Sensitivity = 0.45f; // CI voices vary
+        EnableWakeFollowUp = false;
 
         try
         {
@@ -1267,6 +1274,14 @@ public static class SelfTestRunner
             L("wake_negative: starting…");
             fail += await GateWakeNegativeAsync(s, L);
 
+            // --- wake_e2e: real follow-up path via injectable MicGemini ---
+            L("wake_e2e: starting…");
+            fail += await GateWakeE2eAsync(s, baseUrl, L);
+
+            // --- wake_timeout: silence after wake → ОЖИДАНИЕ ---
+            L("wake_timeout: starting…");
+            fail += await GateWakeTimeoutAsync(s, L);
+
             // --- wake_offline ---
             L("wake_offline: starting…");
             fail += GateWakeOffline(s, L);
@@ -1282,6 +1297,9 @@ public static class SelfTestRunner
         }
         finally
         {
+            EnableWakeFollowUp = false;
+            try { s.MicGemini.UseInjectableCapture = false; } catch { /* */ }
+            try { s.MicGemini.MockCapturePull = null; } catch { /* */ }
             try { wake.Stop(); } catch { /* */ }
             wake.SetEchoGuard(false);
             wake.ChimeEnabled = true;
@@ -1642,17 +1660,230 @@ public static class SelfTestRunner
         }
     }
 
+    static async Task<int> GateWakeE2eAsync(AppServices s, string baseUrl, Action<string> L)
+    {
+        // Real path: wake DETECT → OnWakeWord → MicGemini (injectable) → Transcribe → SendAsync → TTS
+        const string followText = "какая сейчас погода";
+        EnableWakeFollowUp = true;
+        s.MicGemini.UseInjectableCapture = true;
+        s.MicGemini.MockCapturePull = null;
+        s.Agent.SuspendBargeHandling(true);
+        s.Wake.SetEchoGuard(false);
+        s.Wake.Stop();
+
+        var playbackStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnPlay() => playbackStarted.TrySetResult(true);
+        string? narrated = null;
+        void OnNarrate(string t) { if (!string.IsNullOrWhiteSpace(t)) narrated = t; }
+
+        string? wakePath = null;
+        string? followPath = null;
+        try
+        {
+            // Point mock STT at known follow-up phrase
+            if (!baseUrl.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var idx = baseUrl.IndexOf("/v1beta", StringComparison.OrdinalIgnoreCase);
+                    var root = idx >= 0 ? baseUrl[..idx] : baseUrl.TrimEnd('/');
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                    await http.PostAsync($"{root}/_control/scenario/normal", null);
+                    var sttBody = new StringContent(
+                        $"{{\"text\":\"{followText}\"}}", Encoding.UTF8, "application/json");
+                    await http.PostAsync($"{root}/_control/stt_text", sttBody);
+                    L($"wake_e2e: mock stt_text=\"{followText}\"");
+                }
+                catch (Exception ex)
+                {
+                    L($"FAIL wake_e2e: mock control failed: {ex.Message}");
+                    return 1;
+                }
+            }
+            else
+            {
+                L("FAIL wake_e2e: need mock Gemini base (not production)");
+                return 1;
+            }
+
+            wakePath = await s.Tts.SpeakSapiOnlyAsync("Лиа", CancellationToken.None);
+            followPath = await s.Tts.SpeakSapiOnlyAsync(followText, CancellationToken.None);
+            var wakePcm = LoadPcm16kMono(wakePath);
+            var followPcm = LoadPcm16kMono(followPath);
+
+            s.BargeIn.PlaybackStarted += OnPlay;
+            s.Agent.Narrate += OnNarrate;
+
+            var sw = Stopwatch.StartNew();
+            var okWake = s.Wake.ProcessUtterance(wakePcm, out var full, out _, out var conf);
+            if (!okWake)
+            {
+                L($"FAIL wake_e2e: no DETECT on «Лиа» text=\"{full}\"");
+                return 1;
+            }
+            L($"wake_e2e: DETECT conf={conf:F2} text=\"{full}\" — waiting MicGemini…");
+
+            // Wait for OnWakeWord → MicGemini.StartAsync (DispatcherQueue)
+            var listenDeadline = DateTime.UtcNow.AddSeconds(8);
+            while (!s.MicGemini.IsListening && DateTime.UtcNow < listenDeadline)
+                await Task.Delay(40);
+            if (!s.MicGemini.IsListening)
+            {
+                L("FAIL wake_e2e: MicGemini did not start (IsListening=false)");
+                return 1;
+            }
+
+            // Feed follow-up through the same MicGemini capture pipeline (100ms chunks)
+            const int chunk = WakeWordService.SampleRate * 2 / 10;
+            for (var i = 0; i < followPcm.Length; i += chunk)
+            {
+                var n = Math.Min(chunk, followPcm.Length - i);
+                var slice = new byte[n];
+                Buffer.BlockCopy(followPcm, i, slice, 0, n);
+                s.MicGemini.PushCapturePcm(slice);
+                await Task.Delay(25);
+            }
+            // Trailing silence so VAD ends the utterance
+            var silence = new byte[chunk];
+            for (var i = 0; i < 20; i++)
+            {
+                s.MicGemini.PushCapturePcm(silence);
+                await Task.Delay(50);
+            }
+
+            var finished = await Task.WhenAny(playbackStarted.Task, Task.Delay(TimeSpan.FromSeconds(60)));
+            sw.Stop();
+            if (finished != playbackStarted.Task || !playbackStarted.Task.IsCompletedSuccessfully)
+            {
+                L($"FAIL wake_e2e: no TTS playback within 60s wall_s={sw.Elapsed.TotalSeconds:F1} narrate=\"{narrated}\" listening={s.MicGemini.IsListening}");
+                return 1;
+            }
+            if (string.IsNullOrWhiteSpace(narrated))
+            {
+                // Agent may speak without Narrate in some paths — require ActiveReply or log
+                narrated = s.Agent.ActiveReply;
+            }
+            if (string.IsNullOrWhiteSpace(narrated))
+            {
+                L("FAIL wake_e2e: TTS started but no reply text");
+                return 1;
+            }
+            L($"wake_e2e: PASS reply=\"{Trim(narrated, 80)}\" wall_s={sw.Elapsed.TotalSeconds:F1} (mock Gemini + TTS)");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL wake_e2e: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            s.BargeIn.PlaybackStarted -= OnPlay;
+            s.Agent.Narrate -= OnNarrate;
+            try { await s.MicGemini.StopAsync(); } catch { /* */ }
+            s.MicGemini.UseInjectableCapture = false;
+            EnableWakeFollowUp = false;
+            s.Agent.SuspendBargeHandling(false);
+            s.Agent.Abort();
+            try { if (wakePath != null) File.Delete(wakePath); } catch { /* */ }
+            try { if (followPath != null) File.Delete(followPath); } catch { /* */ }
+            await Task.Delay(200);
+        }
+
+        static string Trim(string t, int n) => t.Length <= n ? t : t[..n] + "…";
+    }
+
+    static async Task<int> GateWakeTimeoutAsync(AppServices s, Action<string> L)
+    {
+        // «Лиа» then silence → MicGemini TimedOut → back to idle within timeout (no hang)
+        EnableWakeFollowUp = true;
+            s.MicGemini.UseInjectableCapture = true;
+            s.MicGemini.MockCapturePull = null; // empty queue → idle timeout (no fake silence resets)
+            s.Wake.SetEchoGuard(false);
+
+        var timedOut = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnTo() => timedOut.TrySetResult(true);
+        string? wakePath = null;
+        try
+        {
+            s.MicGemini.TimedOut += OnTo;
+            wakePath = await s.Tts.SpeakSapiOnlyAsync("Лиа", CancellationToken.None);
+            var wakePcm = LoadPcm16kMono(wakePath);
+            var ok = s.Wake.ProcessUtterance(wakePcm, out var full, out _, out _);
+            if (!ok)
+            {
+                L($"FAIL wake_timeout: no DETECT text=\"{full}\"");
+                return 1;
+            }
+
+            var listenDeadline = DateTime.UtcNow.AddSeconds(8);
+            while (!s.MicGemini.IsListening && DateTime.UtcNow < listenDeadline)
+                await Task.Delay(40);
+            if (!s.MicGemini.IsListening)
+            {
+                L("FAIL wake_timeout: MicGemini did not start");
+                return 1;
+            }
+
+            var sw = Stopwatch.StartNew();
+            // Bound: NoSpeechTimeoutMs (8s) + slack
+            var done = await Task.WhenAny(timedOut.Task, Task.Delay(TimeSpan.FromSeconds(14)));
+            sw.Stop();
+            if (done != timedOut.Task)
+            {
+                L($"FAIL wake_timeout: no TimedOut within 14s (still listening={s.MicGemini.IsListening})");
+                return 1;
+            }
+            // Allow UI to clear listening flag
+            await Task.Delay(200);
+            if (s.MicGemini.IsListening)
+            {
+                L("FAIL wake_timeout: TimedOut fired but IsListening still true");
+                return 1;
+            }
+            if (sw.Elapsed.TotalSeconds > 12)
+            {
+                L($"FAIL wake_timeout: too slow wall_s={sw.Elapsed.TotalSeconds:F1} (need ≤12)");
+                return 1;
+            }
+            L($"wake_timeout: PASS wall_s={sw.Elapsed.TotalSeconds:F1} → ОЖИДАНИЕ (no hang)");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL wake_timeout: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            s.MicGemini.TimedOut -= OnTo;
+            try { await s.MicGemini.StopAsync(); } catch { /* */ }
+            s.MicGemini.UseInjectableCapture = false;
+            s.MicGemini.MockCapturePull = null;
+            EnableWakeFollowUp = false;
+            try { if (wakePath != null) File.Delete(wakePath); } catch { /* */ }
+        }
+    }
+
     static async Task<int> GateWakeCpuAsync(AppServices s, Action<string> L)
     {
         try
         {
             s.Wake.SetEchoGuard(false);
-            s.Wake.Start();
+            s.Wake.Stop();
+            // Prefer real WaveIn when a capture device exists (VB-CABLE Output on CI)
+            var mode = WaveIn.DeviceCount > 0
+                ? WakeWordService.CaptureMode.ForceWaveIn
+                : WakeWordService.CaptureMode.PushOnly;
+            s.Wake.Start(mode);
+            var used = s.Wake.LastCaptureMode;
+            L($"wake_cpu: mode={used} WaveIn.DeviceCount={WaveIn.DeviceCount}");
+
             var proc = Process.GetCurrentProcess();
             proc.Refresh();
             var cpu0 = proc.TotalProcessorTime;
             var wall0 = Stopwatch.StartNew();
-            // Idle listen: push near-silence for ~5s (simulates always-on WaveIn)
+            // Idle listen ~5s; also push near-silence so PushPcm-only path still exercises grammar
             var silence = new byte[WakeWordService.SampleRate * 2 / 10]; // 100ms
             var end = DateTime.UtcNow.AddSeconds(5);
             while (DateTime.UtcNow < end)
@@ -1668,10 +1899,10 @@ public static class SelfTestRunner
             var pct = cpuDt / wallMs / cores * 100.0;
             if (pct >= 5.0)
             {
-                L($"FAIL wake_cpu: idle_avg={pct:F2}% (need <5%) cores={cores}");
+                L($"FAIL wake_cpu: idle_avg={pct:F2}% mode={used} (need <5%) cores={cores}");
                 return 1;
             }
-            L($"wake_cpu: PASS idle_avg={pct:F2}% cores={cores} wall_ms={wallMs:F0}");
+            L($"wake_cpu: PASS idle_avg={pct:F2}% mode={used} cores={cores} wall_ms={wallMs:F0}");
             return 0;
         }
         catch (Exception ex)

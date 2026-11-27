@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18765
-STATE = {"scenario": "normal", "hits": 0}
+STATE = {"scenario": "normal", "hits": 0, "stt_text": "какая сейчас погода", "last_user": ""}
 LOCK = threading.Lock()
 
 MODELS = {
@@ -87,9 +87,26 @@ def extract_texts(body: dict) -> list[str]:
 def has_inline_image(body: dict) -> bool:
     for c in body.get("contents") or []:
         for p in c.get("parts") or []:
-            if p.get("inline_data") or p.get("inlineData"):
+            idata = p.get("inline_data") or p.get("inlineData") or {}
+            mime = (idata.get("mime_type") or idata.get("mimeType") or "").lower()
+            if idata and mime.startswith("image/"):
                 return True
     return False
+
+
+def has_inline_audio(body: dict) -> bool:
+    for c in body.get("contents") or []:
+        for p in c.get("parts") or []:
+            idata = p.get("inline_data") or p.get("inlineData") or {}
+            mime = (idata.get("mime_type") or idata.get("mimeType") or "").lower()
+            if idata and (mime.startswith("audio/") or "wav" in mime):
+                return True
+    return False
+
+
+def is_stt_request(body: dict) -> bool:
+    blob = " ".join(extract_texts(body)).lower()
+    return has_inline_audio(body) and ("распознай" in blob or "транскриб" in blob)
 
 
 def last_user_text(body: dict) -> str:
@@ -110,6 +127,21 @@ def smart_reply(body: dict) -> dict:
     last = last_user_text(body)
     low = last.lower()
     blob = all_text.lower()
+
+    # STT / TranscribeRuAsync — return controlled transcription text
+    if is_stt_request(body):
+        with LOCK:
+            text = STATE.get("stt_text") or "какая сейчас погода"
+            STATE["last_user"] = f"[stt]{text}"
+        return {
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": text}]}}
+            ]
+        }
+
+    with LOCK:
+        if last.strip():
+            STATE["last_user"] = last
 
     # Vision: ask to look → functionCall first; after image → read marker
     vision_ask = any(
@@ -197,6 +229,19 @@ def smart_reply(body: dict) -> dict:
             ]
         }
 
+    # Weather / wake_e2e follow-up
+    if "погод" in low:
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Сейчас около плюс пяти, без осадков."}],
+                    }
+                }
+            ]
+        }
+
     return {
         "candidates": [
             {
@@ -253,6 +298,20 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             set_scenario(m.group(1))
             self._json(200, {"scenario": STATE["scenario"], "hits": STATE["hits"]})
+            return
+
+        if path in ("/_control/stt_text", "/_control/stt"):
+            text = ""
+            if isinstance(body, dict):
+                text = str(body.get("text") or body.get("stt_text") or "").strip()
+            if not text and raw:
+                try:
+                    text = raw.decode("utf-8", errors="replace").strip()
+                except Exception:
+                    text = ""
+            with LOCK:
+                STATE["stt_text"] = text or "какая сейчас погода"
+            self._json(200, {"stt_text": STATE["stt_text"]})
             return
 
         # /v1beta/models/{id}:generateContent  (id may be URL-encoded)

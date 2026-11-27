@@ -6,9 +6,13 @@ namespace LiaDesktop.Services;
 /// <summary>
 /// Default-mic capture (WaveInEvent) + energy VAD → Gemini inline-audio transcription (ru).
 /// Used when Windows.Media.SpeechRecognition (ru-RU) is not installed.
+/// Injectable capture (selftest): set <see cref="UseInjectableCapture"/> and feed via <see cref="PushCapturePcm"/>.
+/// No-speech hard timeout → <see cref="TimedOut"/> (never hang forever).
 /// </summary>
 public sealed class MicGeminiListen : IDisposable
 {
+    public const int NoSpeechTimeoutMs = 8000;
+
     readonly GeminiClient _gemini;
     readonly AppLog _log;
     readonly ConcurrentQueue<byte[]> _chunks = new();
@@ -19,7 +23,17 @@ public sealed class MicGeminiListen : IDisposable
     bool _armed;
 
     public bool IsListening { get; private set; }
+
+    /// <summary>When true, StartAsync skips WaveIn — feed PCM via PushCapturePcm / MockCapturePull.</summary>
+    public bool UseInjectableCapture { get; set; }
+
+    /// <summary>Optional pull (100ms cadence) when UseInjectableCapture; null = wait for PushCapturePcm.</summary>
+    public Func<byte[]?>? MockCapturePull { get; set; }
+
     public event Action<string>? FinalResult;
+
+    /// <summary>No speech within <see cref="NoSpeechTimeoutMs"/> — caller should return to ОЖИДАНИЕ.</summary>
+    public event Action? TimedOut;
 
     public MicGeminiListen(GeminiClient gemini, AppLog log)
     {
@@ -36,8 +50,21 @@ public sealed class MicGeminiListen : IDisposable
 
         while (_chunks.TryDequeue(out _)) { }
 
-        // WaveInEvent is in core NAudio.Wave (WasapiCapture needs NAudio.Wasapi pack).
         _format = new WaveFormat(16000, 16, 1);
+        IsListening = true;
+        _armed = true;
+
+        if (UseInjectableCapture || MockCapturePull != null)
+        {
+            _log.Info("Микрофон: Gemini STT (injectable capture)…");
+            _pipeline = Task.Run(() => PipelineAsync(ct), ct);
+            if (MockCapturePull != null)
+                _ = Task.Run(() => PullLoopAsync(ct), ct);
+            await Task.CompletedTask;
+            return;
+        }
+
+        // WaveInEvent is in core NAudio.Wave (WasapiCapture needs NAudio.Wasapi pack).
         _capture = new WaveInEvent
         {
             WaveFormat = _format,
@@ -46,11 +73,20 @@ public sealed class MicGeminiListen : IDisposable
         _capture.DataAvailable += OnData;
         _capture.RecordingStopped += (_, _) => { };
         _capture.StartRecording();
-        IsListening = true;
-        _armed = true;
         _log.Info("Микрофон: Gemini STT (WaveIn)…");
         _pipeline = Task.Run(() => PipelineAsync(ct), ct);
         await Task.CompletedTask;
+    }
+
+    /// <summary>Inject 16 kHz mono PCM16 into the active session (selftest fake mic).</summary>
+    public void PushCapturePcm(byte[] pcm16le, int bytes = -1)
+    {
+        if (!_armed) return;
+        var n = bytes < 0 ? pcm16le.Length : bytes;
+        if (n <= 0) return;
+        var buf = new byte[n];
+        Buffer.BlockCopy(pcm16le, 0, buf, 0, n);
+        _chunks.Enqueue(buf);
     }
 
     public async Task StopAsync()
@@ -74,6 +110,22 @@ public sealed class MicGeminiListen : IDisposable
         _chunks.Enqueue(buf);
     }
 
+    async Task PullLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && _armed)
+        {
+            try
+            {
+                var chunk = MockCapturePull?.Invoke();
+                if (chunk is { Length: > 0 })
+                    _chunks.Enqueue(chunk);
+                await Task.Delay(50, ct);
+            }
+            catch (OperationCanceledException) { break; }
+            catch { /* */ }
+        }
+    }
+
     async Task PipelineAsync(CancellationToken ct)
     {
         var pcm = new MemoryStream();
@@ -84,6 +136,7 @@ public sealed class MicGeminiListen : IDisposable
         const int silenceEndMs = 900;
         const int minSpeechMs = 350;
         var frameMsEst = 20;
+        var timedOut = false;
 
         try
         {
@@ -94,10 +147,12 @@ public sealed class MicGeminiListen : IDisposable
                 {
                     await Task.Delay(30, ct);
                     idleMs += 30;
-                    if (!speechStarted && idleMs > 8000)
+                    if (!speechStarted && idleMs >= NoSpeechTimeoutMs)
                     {
-                        _log.Info("Микрофон: тишина — скажите фразу или стоп.");
-                        idleMs = 0;
+                        // HARD timeout — never hang waiting for speech
+                        _log.Info($"Микрофон: таймаут {NoSpeechTimeoutMs}ms без речи — возврат в ОЖИДАНИЕ.");
+                        timedOut = true;
+                        break;
                     }
                     if (speechStarted)
                     {
@@ -108,7 +163,6 @@ public sealed class MicGeminiListen : IDisposable
                     continue;
                 }
 
-                idleMs = 0;
                 var rms = Rms16(_format!, chunk);
                 frameMsEst = Math.Max(10, chunk.Length * 1000 / Math.Max(1, _format!.AverageBytesPerSecond));
 
@@ -117,13 +171,26 @@ public sealed class MicGeminiListen : IDisposable
                     if (rms > 0.02)
                     {
                         speechStarted = true;
+                        idleMs = 0;
                         silenceMs = 0;
                         pcm.Write(chunk);
                         speechMs += frameMsEst;
                     }
+                    else
+                    {
+                        // Quiet pre-roll still counts toward no-speech timeout
+                        idleMs += frameMsEst;
+                        if (idleMs >= NoSpeechTimeoutMs)
+                        {
+                            _log.Info($"Микрофон: таймаут {NoSpeechTimeoutMs}ms без речи — возврат в ОЖИДАНИЕ.");
+                            timedOut = true;
+                            break;
+                        }
+                    }
                     continue;
                 }
 
+                idleMs = 0;
                 pcm.Write(chunk);
                 speechMs += frameMsEst;
                 if (rms < 0.012) silenceMs += frameMsEst;
@@ -133,9 +200,16 @@ public sealed class MicGeminiListen : IDisposable
                 if (speechMs >= maxMs) break;
             }
 
+            if (timedOut)
+            {
+                TimedOut?.Invoke();
+                return;
+            }
+
             if (pcm.Length < 1000)
             {
-                _log.Info("Микрофон: нет речи.");
+                _log.Info("Микрофон: нет речи — возврат в ОЖИДАНИЕ.");
+                TimedOut?.Invoke();
                 return;
             }
 
