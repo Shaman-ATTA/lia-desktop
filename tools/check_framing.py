@@ -349,8 +349,91 @@ def center_column_head_stats(path: Path) -> tuple[float, float, float]:
     return float(head_cx), float(col_cx), float(head_h)
 
 
-def assert_center_column(path: Path, label: str | None = None) -> int:
-    """Gate: head centred in centre column (±3%) and height 60–80%."""
+def face_vs_arc_center(path: Path) -> tuple[float, float, float]:
+    """Return (face_cx, arc_cx, abs_drift) in full-image X fractions (0..1)."""
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    h, w, _ = vp.shape
+    bb = _head_bbox(vp)
+    if bb is None:
+        return 0.0, 0.5, 1.0
+    lo, hi, bx0, bx1 = bb
+    face_cx = (0.5 * (bx0 + bx1) + x0) / a.shape[1]
+
+    r, g, b = vp[:, :, 0], vp[:, :, 1], vp[:, :, 2]
+    arcs = _hud_arc_mask(r, g, b)
+    mid_y = slice(int(h * 0.20), int(h * 0.75))
+    # Arc centroid in X (ring around head)
+    xs = np.where(arcs[mid_y].any(axis=0))[0]
+    if len(xs) < 8:
+        arc_cx = (x0 + 0.5 * w) / a.shape[1]
+    else:
+        # Weight left+right ring bands so face fill doesn't bias
+        left = arcs[mid_y, : int(w * 0.35)]
+        right = arcs[mid_y, int(w * 0.65) :]
+        lx = np.where(left.any(axis=0))[0]
+        rx = np.where(right.any(axis=0))[0]
+        if len(lx) >= 4 and len(rx) >= 4:
+            arc_local = 0.5 * (float(lx.mean()) + float(rx.mean() + int(w * 0.65)))
+        else:
+            arc_local = float(xs.mean())
+        arc_cx = (arc_local + x0) / a.shape[1]
+    return float(face_cx), float(arc_cx), float(abs(face_cx - arc_cx))
+
+
+def grey_box_frac(path: Path) -> float:
+    """Fraction of centre-column pixels that look like an opaque light-grey quad.
+
+    Catches the HiDPI SwapChainPanel bug: unscaled buffer leaves a hard-edged
+    grey/navy rectangle behind/beside the head.
+    """
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    h, w, _ = vp.shape
+    # Centre column interior (exclude side glass)
+    band = vp[int(h * 0.08) : int(h * 0.92), int(w * 0.18) : int(w * 0.82)]
+    if band.size == 0:
+        return 0.0
+    r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
+    lum = (r + g + b) / 3.0
+    # Flat mid-grey / washed panel (not navy clear ~4,3,8, not skin, not amber)
+    grey = (
+        (lum > 28)
+        & (lum < 120)
+        & (np.abs(r - g) < 12)
+        & (np.abs(g - b) < 14)
+        & (np.abs(r - b) < 16)
+        & (r < 140)
+        & (b < 140)
+    )
+    # Skin / hair / HUD must not count
+    amber = (r > 145) & (g > 95) & (b < 95) & ((r - b) > 70)
+    skin = (r > 55) & (g > 30) & (b > 22) & (r >= g * 0.95) & ((r - b) > 5)
+    return float((grey & ~amber & ~skin).mean())
+
+
+def face_inside_center_column(path: Path) -> tuple[bool, float, float]:
+    """Face bbox fully inside centre column (stage-local 0.22..0.78). Returns (ok, left_margin, right_margin)."""
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.float32)
+    yy0, yy1, x0, x1 = _find_viewport(a)
+    vp = a[yy0:yy1, x0:x1]
+    h, w, _ = vp.shape
+    bb = _head_bbox(vp)
+    if bb is None:
+        return False, 0.0, 0.0
+    _, _, bx0, bx1 = bb
+    col0, col1 = int(w * 0.22), int(w * 0.78)
+    ok = bx0 >= col0 - 2 and bx1 <= col1 + 2
+    return ok, float((bx0 - col0) / max(1, w)), float((col1 - bx1) / max(1, w))
+
+
+def assert_center_column(path: Path, label: str | None = None, drift_limit: float = 0.03) -> int:
+    """Gate: head centred in centre column and height 60–80%."""
     name = label or path.name
     if not path.is_file():
         print(f"FAIL: missing {name}", file=sys.stderr)
@@ -358,13 +441,40 @@ def assert_center_column(path: Path, label: str | None = None) -> int:
     hcx, ccx, hh = center_column_head_stats(path)
     drift = abs(hcx - ccx)
     print(f"{name} center_col: head_cx={hcx:.3f} col_cx={ccx:.3f} drift={drift:.3f} head_h={hh:.3f}")
-    if drift > 0.03:
-        print(f"FAIL: {name} head not centred (drift {drift:.1%} > 3%)", file=sys.stderr)
+    if drift > drift_limit:
+        print(f"FAIL: {name} head not centred (drift {drift:.1%} > {drift_limit:.0%})", file=sys.stderr)
         return 1
     if hh < 0.60 or hh > 0.80:
         print(f"FAIL: {name} head height {hh:.1%} not in 60–80%", file=sys.stderr)
         return 1
     return 0
+
+
+def assert_layout_shot(path: Path, label: str | None = None) -> int:
+    """Strict layout gate for DPI/maximize matrix: face in column, ±5% of arcs, no grey box."""
+    name = label or path.name
+    if not path.is_file():
+        print(f"FAIL: missing {name}", file=sys.stderr)
+        return 1
+    fail = 0
+    if assert_center_column(path, name, drift_limit=0.05) != 0:
+        fail = 1
+    inside, lm, rm = face_inside_center_column(path)
+    print(f"{name} face_in_col: ok={inside} left_m={lm:.3f} right_m={rm:.3f}")
+    if not inside:
+        print(f"FAIL: {name} face bbox clipped by side column", file=sys.stderr)
+        fail = 1
+    fcx, acx, adrift = face_vs_arc_center(path)
+    print(f"{name} face_vs_arc: face_cx={fcx:.3f} arc_cx={acx:.3f} drift={adrift:.3f}")
+    if adrift > 0.05:
+        print(f"FAIL: {name} face not centred on arcs (drift {adrift:.1%} > 5%)", file=sys.stderr)
+        fail = 1
+    gf = grey_box_frac(path)
+    print(f"{name} grey_box_frac={gf:.4f}")
+    if gf > 0.04:
+        print(f"FAIL: {name} opaque grey region around head ({gf:.1%})", file=sys.stderr)
+        fail = 1
+    return fail
 
 
 def main() -> int:
@@ -494,7 +604,17 @@ def main() -> int:
         Path("desktop_winui_front_1080.png"),
         Path("desktop_winui_front_4k.png"),
     ]:
-        if p.is_file() and assert_center_column(p) != 0:
+        if not p.is_file():
+            continue
+        if p.name.startswith("layout_"):
+            if assert_layout_shot(p) != 0:
+                return 1
+        elif assert_center_column(p) != 0:
+            return 1
+
+    # All layout_<res>_<scale>_<windowed|max>.png in CWD
+    for p in sorted(Path(".").glob("layout_*.png")):
+        if assert_layout_shot(p) != 0:
             return 1
 
     print("framing check ok")

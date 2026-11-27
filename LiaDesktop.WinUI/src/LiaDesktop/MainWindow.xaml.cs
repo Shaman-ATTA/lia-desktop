@@ -137,6 +137,14 @@ public sealed partial class MainWindow : Window
             DispatcherQueue.TryEnqueue(async () => await RunBootSequenceAsync());
     }
 
+    /// <summary>Called when AppWindow size/presenter changes (maximize, DPI move).</summary>
+    public void NotifyStageResized()
+    {
+        try { Holo.ForceRecreateSwapChain(); }
+        catch (Exception ex) { Program.BootLog("NotifyStageResized: " + ex.Message); }
+        RebuildHudGeometry();
+    }
+
     void TryApplyBackdrop()
     {
         try
@@ -605,35 +613,17 @@ public sealed partial class MainWindow : Window
 
     void AddLog(string line, string? detail)
     {
-        if (detail == null)
+        // One short journal line only — full traces live in %LOCALAPPDATA%\LiaDesktop\error.log
+        var text = string.IsNullOrWhiteSpace(detail) ? line : $"{line}: {detail}";
+        if (text.Length > 180) text = text[..180] + "…";
+        LogPanel.Children.Insert(0, new TextBlock
         {
-            LogPanel.Children.Insert(0, new TextBlock
-            {
-                Text = line,
-                Foreground = (Brush)Application.Current.Resources["LiaCyan"],
-                FontFamily = (FontFamily)Application.Current.Resources["LiaMono"],
-                FontSize = 11,
-                TextWrapping = TextWrapping.Wrap,
-            });
-        }
-        else
-        {
-            var exp = new Expander
-            {
-                Header = line,
-                IsExpanded = false,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-            };
-            exp.Content = new TextBlock
-            {
-                Text = detail,
-                FontSize = 10,
-                Foreground = (Brush)Application.Current.Resources["LiaMuted"],
-                FontFamily = (FontFamily)Application.Current.Resources["LiaMono"],
-                TextWrapping = TextWrapping.Wrap,
-            };
-            LogPanel.Children.Insert(0, exp);
-        }
+            Text = text,
+            Foreground = (Brush)Application.Current.Resources["LiaCyan"],
+            FontFamily = (FontFamily)Application.Current.Resources["LiaMono"],
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+        });
         while (LogPanel.Children.Count > 80) LogPanel.Children.RemoveAt(LogPanel.Children.Count - 1);
     }
 

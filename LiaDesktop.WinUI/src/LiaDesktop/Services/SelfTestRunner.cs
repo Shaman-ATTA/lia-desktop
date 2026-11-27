@@ -63,6 +63,9 @@ public static class SelfTestRunner
                 L("SKIP mock scenarios (base is production — pass --gemini-base=mock)");
             }
 
+            // TTS gates — must prove C# WebSocket alone (no Python) + SAPI offline
+            failed += await RunTtsGatesAsync(services, L);
+
             if (!string.IsNullOrWhiteSpace(liveKey))
             {
                 var liveFail = await RunLiveAsync(services, liveKey!, L);
@@ -269,6 +272,70 @@ public static class SelfTestRunner
 
         L($"PASS {name}: reply={narrated!.Length}c tts={len}B {sw.ElapsedMilliseconds}ms");
         return 0;
+    }
+
+    static async Task<int> RunTtsGatesAsync(AppServices s, Action<string> L)
+    {
+        var fail = 0;
+        // Poison PATH python so any accidental py fallback cannot save us
+        try
+        {
+            var poison = Path.Combine(Path.GetTempPath(), "lia-broken-python-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(poison);
+            var stub = Path.Combine(poison, "python.cmd");
+            await File.WriteAllTextAsync(stub, "@echo broken-python-for-selftest 1>&2\r\nexit /b 1\r\n");
+            var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+            Environment.SetEnvironmentVariable("PATH", poison + ";" + path);
+            L("tts: poisoned PATH python stub installed");
+        }
+        catch (Exception ex)
+        {
+            L("tts: PATH poison skipped: " + ex.Message);
+        }
+
+        try
+        {
+            var wsPath = await s.Tts.SpeakWebSocketOnlyAsync("Привет, я Лиа.", CancellationToken.None);
+            if (wsPath == null || !File.Exists(wsPath) || new FileInfo(wsPath).Length <= 0)
+            {
+                L("FAIL tts_ws_only: no audio from C# WebSocket (Sec-MS-GEC)");
+                fail++;
+            }
+            else
+            {
+                var n = new FileInfo(wsPath).Length;
+                L($"tts_ws_only: PASS bytes={n}");
+            }
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL tts_ws_only: {ex.GetType().Name}: {ex.Message}");
+            AppLog.WriteCrash("tts_ws_only", ex);
+            fail++;
+        }
+
+        try
+        {
+            var sapiPath = await s.Tts.SpeakSapiOnlyAsync("Привет.", CancellationToken.None);
+            if (sapiPath == null || !File.Exists(sapiPath) || new FileInfo(sapiPath).Length <= 0)
+            {
+                L("FAIL tts_sapi: SAPI/OneCore returned no audio");
+                fail++;
+            }
+            else
+            {
+                var n = new FileInfo(sapiPath).Length;
+                L($"tts_sapi: PASS bytes={n}");
+            }
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL tts_sapi: {ex.GetType().Name}: {ex.Message}");
+            AppLog.WriteCrash("tts_sapi", ex);
+            fail++;
+        }
+
+        return fail;
     }
 
     static string Truncate(string s, int n) => s.Length <= n ? s : s[..n] + "…";

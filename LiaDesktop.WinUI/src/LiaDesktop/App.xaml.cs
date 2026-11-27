@@ -62,6 +62,15 @@ public partial class App : Application
             var appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
             var (w, h) = SelfTestRunner.IsSelfTest ? (1024, 720) : ParseSmokeSize();
             appWindow.Resize(new Windows.Graphics.SizeInt32(w, h));
+            // Maximize / DPI changes must recreate the DX swapchain with MatrixTransform
+            appWindow.Changed += (_, e) =>
+            {
+                if (e.DidSizeChange || e.DidPresenterChange)
+                {
+                    if (MainWindowInstance is MainWindow mw)
+                        mw.DispatcherQueue.TryEnqueue(() => mw.NotifyStageResized());
+                }
+            };
             appWindow.Show();
             Program.BootLog($"AppWindow.Show done size={w}x{h}");
         }

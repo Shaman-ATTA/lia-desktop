@@ -1,29 +1,34 @@
-using System.Diagnostics;
+using System.Net;
+using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.RegularExpressions;
+using Windows.Media.SpeechSynthesis;
+using Windows.Storage.Streams;
 
 namespace LiaDesktop.Services;
 
 /// <summary>
-/// Free Edge neural TTS (ru-RU-SvetlanaNeural @ -4%).
-/// Prefers Edge websocket (reliable UTF-8); falls back to Python edge-tts via a UTF-8 script file.
+/// Edge neural TTS (ru-RU-SvetlanaNeural @ -4%) via C# WebSocket + Sec-MS-GEC v2.
+/// No Python. Offline fallback: Windows SAPI / OneCore (prefer ru-RU).
 /// </summary>
 public sealed class EdgeTts
 {
     public const string Voice = "ru-RU-SvetlanaNeural";
     public const string Rate = "-4%";
 
+    /// <summary>When true, skip Edge WebSocket (selftest SAPI path / forced offline).</summary>
+    public static bool DisableWebSocket { get; set; }
+
+    /// <summary>When true, skip SAPI fallback (selftest tts_ws_only).</summary>
+    public static bool DisableSapi { get; set; }
+
     readonly AppLog _log;
-    Process? _active;
+    static readonly HttpClient DateProbe = new() { Timeout = TimeSpan.FromSeconds(8) };
 
     public EdgeTts(AppLog log) => _log = log;
 
-    public void Stop()
-    {
-        try { _active?.Kill(entireProcessTree: true); } catch { /* */ }
-        _active = null;
-    }
+    public void Stop() { /* WS/SAPI are per-call; nothing long-lived to kill */ }
 
     public async Task<string?> SpeakToFileAsync(string text, CancellationToken ct = default)
     {
@@ -31,94 +36,108 @@ public sealed class EdgeTts
         if (string.IsNullOrEmpty(text)) return null;
 
         Exception? last = null;
-        for (var attempt = 0; attempt < 3; attempt++)
+        if (!DisableWebSocket)
         {
-            ct.ThrowIfCancellationRequested();
-            var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-{Guid.NewGuid():N}.mp3");
-            try
+            for (var attempt = 0; attempt < 3; attempt++)
             {
-                // Websocket first — avoids Windows console encoding breakage on Cyrillic
-                await ViaWebSocketAsync(text, outPath, ct);
-                if (File.Exists(outPath) && new FileInfo(outPath).Length > 0)
-                    return outPath;
-            }
-            catch (Exception ex)
-            {
-                last = ex;
-                _log.Info($"edge-tts ws try{attempt + 1}: {ex.Message}");
-                try { if (File.Exists(outPath)) File.Delete(outPath); } catch { /* */ }
-            }
+                ct.ThrowIfCancellationRequested();
+                var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-{Guid.NewGuid():N}.mp3");
+                try
+                {
+                    await ViaWebSocketAsync(text, outPath, ct);
+                    if (File.Exists(outPath) && new FileInfo(outPath).Length > 0)
+                        return outPath;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    _log.Info($"edge-tts ws try{attempt + 1}: {OneLine(ex.Message)}");
+                    AppLog.WriteCrash("edge-tts-ws", ex);
+                    try { if (File.Exists(outPath)) File.Delete(outPath); } catch { /* */ }
 
-            try
-            {
-                outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-{Guid.NewGuid():N}.mp3");
-                await ViaPythonAsync(text, outPath, ct);
-                if (File.Exists(outPath) && new FileInfo(outPath).Length > 0)
-                    return outPath;
+                    if (IsForbidden(ex))
+                    {
+                        await TryAdjustClockSkewAsync(ct);
+                    }
+                    await Task.Delay(350 * (attempt + 1), ct);
+                }
             }
-            catch (Exception ex)
-            {
-                last = ex;
-                _log.Info($"edge-tts py try{attempt + 1}: {ex.Message}");
-                try { if (File.Exists(outPath)) File.Delete(outPath); } catch { /* */ }
-            }
-
-            await Task.Delay(400 * (attempt + 1), ct);
         }
 
-        _log.Error("TTS недоступен", last?.Message);
+        if (!DisableSapi)
+        {
+            try
+            {
+                var wav = await ViaSapiAsync(text, ct);
+                if (wav != null && File.Exists(wav) && new FileInfo(wav).Length > 0)
+                {
+                    _log.Info("TTS: SAPI/OneCore (офлайн)");
+                    return wav;
+                }
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                _log.Info($"TTS SAPI: {OneLine(ex.Message)}");
+                AppLog.WriteCrash("tts-sapi", ex);
+            }
+        }
+
+        _log.Error("TTS недоступен", OneLine(last?.Message ?? "no backend"));
+        if (last != null) AppLog.WriteCrash("tts-final", last);
         return null;
     }
 
-    async Task ViaPythonAsync(string text, string outPath, CancellationToken ct)
+    /// <summary>WebSocket-only path for CI gate (no SAPI).</summary>
+    public async Task<string?> SpeakWebSocketOnlyAsync(string text, CancellationToken ct = default)
     {
-        // Avoid argv encoding issues: write a tiny UTF-8 runner script
-        var script = Path.Combine(Path.GetTempPath(), $"lia-edge-tts-{Guid.NewGuid():N}.py");
-        var textPath = Path.Combine(Path.GetTempPath(), $"lia-tts-in-{Guid.NewGuid():N}.txt");
-        await File.WriteAllTextAsync(textPath, text, new UTF8Encoding(false), ct);
-        // C# $"…" — paths embedded into a Python runner (UTF-8 file, no argv Cyrillic)
-        var py =
-            "import asyncio, edge_tts, pathlib\n"
-            + $"text = pathlib.Path(r'{textPath.Replace("'", "\\'")}').read_text(encoding='utf-8')\n"
-            + $"out = r'{outPath.Replace("'", "\\'")}'\n"
-            + "async def main():\n"
-            + $"    await edge_tts.Communicate(text, '{Voice}', rate='{Rate}').save(out)\n"
-            + "asyncio.run(main())\n";
-        await File.WriteAllTextAsync(script, py, new UTF8Encoding(false), ct);
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "python",
-                Arguments = $"\"{script}\"",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-            };
-            _active = Process.Start(psi) ?? throw new InvalidOperationException("python start failed");
-            var err = await _active.StandardError.ReadToEndAsync(ct);
-            await _active.WaitForExitAsync(ct);
-            var code = _active.ExitCode;
-            _active = null;
-            if (!File.Exists(outPath) || new FileInfo(outPath).Length == 0)
-                throw new InvalidOperationException($"edge-tts empty (exit {code}): {err}");
-        }
+        var prevWs = DisableWebSocket;
+        var prevSapi = DisableSapi;
+        DisableWebSocket = false;
+        DisableSapi = true;
+        try { return await SpeakToFileAsync(text, ct); }
         finally
         {
-            try { File.Delete(script); } catch { /* */ }
-            try { File.Delete(textPath); } catch { /* */ }
+            DisableWebSocket = prevWs;
+            DisableSapi = prevSapi;
+        }
+    }
+
+    /// <summary>SAPI-only path for CI gate.</summary>
+    public async Task<string?> SpeakSapiOnlyAsync(string text, CancellationToken ct = default)
+    {
+        var prevWs = DisableWebSocket;
+        var prevSapi = DisableSapi;
+        DisableWebSocket = true;
+        DisableSapi = false;
+        try { return await SpeakToFileAsync(text, ct); }
+        finally
+        {
+            DisableWebSocket = prevWs;
+            DisableSapi = prevSapi;
         }
     }
 
     async Task ViaWebSocketAsync(string text, string outPath, CancellationToken ct)
     {
         var connId = Guid.NewGuid().ToString("N");
-        var url =
-            $"wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&ConnectionId={connId}";
+        var url = EdgeMsDrm.BuildWssUrl(connId);
         using var ws = new ClientWebSocket();
-        ws.Options.SetRequestHeader("User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0");
+        // Cookie via container — SetRequestHeader("Cookie") is rejected by ClientWebSocket
+        ws.Options.Cookies = new CookieContainer();
+        ws.Options.Cookies.Add(
+            new Uri("https://speech.platform.bing.com"),
+            new Cookie("muid", EdgeMsDrm.GenerateMuid()));
+
+        foreach (var (k, v) in EdgeMsDrm.WssHeadersWithoutCookie())
+        {
+            // Sec-WebSocket-* are set by the runtime; Accept-Encoding can break the upgrade
+            if (k.StartsWith("Sec-WebSocket", StringComparison.OrdinalIgnoreCase)) continue;
+            if (k.Equals("Accept-Encoding", StringComparison.OrdinalIgnoreCase)) continue;
+            try { ws.Options.SetRequestHeader(k, v); }
+            catch { /* some headers are restricted */ }
+        }
+
         using var link = CancellationTokenSource.CreateLinkedTokenSource(ct);
         link.CancelAfter(TimeSpan.FromSeconds(45));
         await ws.ConnectAsync(new Uri(url), link.Token);
@@ -164,5 +183,72 @@ public sealed class EdgeTts
             }
         }
         if (fs.Length == 0) throw new InvalidOperationException("Edge TTS returned empty audio");
+    }
+
+    async Task<string?> ViaSapiAsync(string text, CancellationToken ct)
+    {
+        using var synth = new SpeechSynthesizer();
+        try
+        {
+            var voices = SpeechSynthesizer.AllVoices;
+            var ru = voices.FirstOrDefault(v =>
+                v.Language.StartsWith("ru", StringComparison.OrdinalIgnoreCase) &&
+                (v.DisplayName.Contains("Irina", StringComparison.OrdinalIgnoreCase)
+                 || v.DisplayName.Contains("Pavel", StringComparison.OrdinalIgnoreCase)
+                 || v.DisplayName.Contains("Ирина", StringComparison.OrdinalIgnoreCase)));
+            ru ??= voices.FirstOrDefault(v => v.Language.StartsWith("ru", StringComparison.OrdinalIgnoreCase));
+            if (ru != null) synth.Voice = ru;
+        }
+        catch { /* keep default voice */ }
+
+        ct.ThrowIfCancellationRequested();
+        var stream = await synth.SynthesizeTextToStreamAsync(text);
+        var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-sapi-{Guid.NewGuid():N}.wav");
+        await using (var fs = File.Create(outPath))
+        {
+            var reader = new DataReader(stream);
+            await reader.LoadAsync((uint)stream.Size);
+            var bytes = new byte[stream.Size];
+            reader.ReadBytes(bytes);
+            await fs.WriteAsync(bytes, ct);
+        }
+        stream.Dispose();
+        if (!File.Exists(outPath) || new FileInfo(outPath).Length == 0)
+            throw new InvalidOperationException("SAPI returned empty audio");
+        return outPath;
+    }
+
+    static bool IsForbidden(Exception ex)
+    {
+        var m = ex.Message ?? "";
+        return m.Contains("403", StringComparison.Ordinal)
+               || m.Contains("'101'", StringComparison.Ordinal);
+    }
+
+    static async Task TryAdjustClockSkewAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, "https://speech.platform.bing.com/");
+            req.Headers.TryAddWithoutValidation("User-Agent", EdgeTtsConstants.UserAgent);
+            using var res = await DateProbe.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+            string? date = null;
+            if (res.Headers.Date.HasValue)
+                date = res.Headers.Date.Value.UtcDateTime.ToString("r");
+            else if (res.Headers.TryGetValues("Date", out var vals))
+                date = vals.FirstOrDefault();
+            EdgeMsDrm.AdjustClockSkewFromServerDate(date);
+        }
+        catch
+        {
+            // Best-effort — next attempt still regenerates a fresh token
+        }
+    }
+
+    static string OneLine(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return "";
+        var t = Regex.Replace(s, @"\s+", " ").Trim();
+        return t.Length <= 160 ? t : t[..160] + "…";
     }
 }

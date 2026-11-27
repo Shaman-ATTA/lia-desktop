@@ -15,5 +15,7 @@
     <Compile Include="..\..\src\LiaDesktop\Services\GeminiEndpoints.cs" Link="GeminiEndpoints.cs" />
     <Compile Include="..\..\src\LiaDesktop\Services\GeminiHttpException.cs" Link="GeminiHttpException.cs" />
     <Compile Include="..\..\src\LiaDesktop\Services\Visemes.cs" Link="Visemes.cs" />
+    <Compile Include="..\..\src\LiaDesktop\Services\EdgeTtsConstants.cs" Link="EdgeTtsConstants.cs" />
+    <Compile Include="..\..\src\LiaDesktop\Services\EdgeMsDrm.cs" Link="EdgeMsDrm.cs" />
   </ItemGroup>
 </Project>

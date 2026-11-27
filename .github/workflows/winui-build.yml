@@ -103,11 +103,11 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command 7z -ErrorAction SilentlyContinue) {
-            7z a -tzip -mx=9 LiaDesktop-0.6.9-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
+            7z a -tzip -mx=9 LiaDesktop-0.7.0-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
           } else {
-            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.6.9-win-x64.zip -CompressionLevel Optimal -Force
+            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.0-win-x64.zip -CompressionLevel Optimal -Force
           }
-          Get-Item LiaDesktop-0.6.9-win-x64.zip | Format-List Name,Length
+          Get-Item LiaDesktop-0.7.0-win-x64.zip | Format-List Name,Length
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -120,10 +120,10 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found" }
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           & $iscc /Q installer\LiaDesktop.iss
-          $setup = Get-Item artifacts\LiaDesktop-0.6.9-setup.exe
-          Copy-Item $setup.FullName .\LiaDesktop-0.6.9-setup.exe -Force
+          $setup = Get-Item artifacts\LiaDesktop-0.7.0-setup.exe
+          Copy-Item $setup.FullName .\LiaDesktop-0.7.0-setup.exe -Force
           $setup | Format-List Name,Length
-          $zip = Get-Item LiaDesktop-0.6.9-win-x64.zip
+          $zip = Get-Item LiaDesktop-0.7.0-win-x64.zip
           Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
 
       - name: E2E selftest (mock Gemini + optional live key)
@@ -135,7 +135,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path $PWD 'publish/LiaDesktop/LiaDesktop.exe'
           if (-not (Test-Path $exe)) { throw "exe missing: $exe" }
-          pip install --quiet edge-tts pillow numpy
+          # Do NOT install edge-tts — C# WebSocket must work alone (selftest poisons PATH python)
+          pip install --quiet pillow numpy
           $port = 18765
           $mock = Start-Process -FilePath python -ArgumentList @('tools/mock_gemini_server.py', "$port") -PassThru -NoNewWindow
           try {
@@ -158,19 +159,21 @@ jobs:
               '--smoke-size=1024x720'
             )
             $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
-            $deadline = (Get-Date).AddMinutes(6)
+            $deadline = (Get-Date).AddMinutes(8)
             while (-not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2; $p.Refresh() }
             if (-not $p.HasExited) {
               try { $p.Kill($true) } catch {}
-              throw "selftest timed out (>6min)"
+              throw "selftest timed out (>8min)"
             }
             if (Test-Path $out) { Get-Content $out | Out-Host } else { Write-Warning "selftest.txt missing" }
             if ($p.ExitCode -ne 0) { throw "selftest exit $($p.ExitCode)" }
             if (-not (Test-Path $out)) { throw "selftest.txt not written" }
             $txt = Get-Content $out -Raw
             if ($txt -notmatch 'SELFTEST PASS') { throw "selftest.txt missing PASS marker" }
+            if ($txt -notmatch 'tts_ws_only: PASS') { throw "selftest missing tts_ws_only PASS" }
+            if ($txt -notmatch 'tts_sapi: PASS') { throw "selftest missing tts_sapi PASS" }
             if ($txt -match 'operation was canceled') { throw "selftest reported canceled" }
-            Write-Host "selftest ok"
+            Write-Host "selftest ok (incl. tts_ws_only + tts_sapi)"
           }
           finally {
             try { Stop-Process -Id $mock.Id -Force -ErrorAction SilentlyContinue } catch {}
@@ -303,6 +306,60 @@ jobs:
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_1080.png') @('--smoke-yaw=5') 10 1920 1080
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_4k.png') @('--smoke-yaw=5') 12 3840 2160
 
+          # DPI × windowed/max matrix (force-scale simulates CompositionScale; MatrixTransform must compensate)
+          function Invoke-LayoutShot([string]$shotPath, [int]$forceW, [int]$forceH, [double]$scale, [string]$mode) {
+            $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
+            if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
+            $scaleArg = "--force-scale=$($scale.ToString([System.Globalization.CultureInfo]::InvariantCulture))"
+            $args = @('--smoke-yaw=5', $scaleArg, "--smoke-size=${forceW}x${forceH}")
+            $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
+            for ($i = 0; $i -lt 28; $i++) {
+              Start-Sleep -Seconds 1
+              $p.Refresh()
+              if ($p.HasExited) {
+                if (Test-Path $bootLog) { Get-Content $bootLog | Out-Host }
+                throw "layout exited early code=$($p.ExitCode) $shotPath"
+              }
+              $hwnd = Find-Hwnd ([uint32]$p.Id)
+              if ($hwnd -ne [IntPtr]::Zero -and $i -ge 8) { break }
+            }
+            Start-Sleep -Seconds 3
+            $hwnd = Find-Hwnd ([uint32]$p.Id)
+            if ($hwnd -eq [IntPtr]::Zero) { throw "no hwnd for $shotPath" }
+            if ($mode -eq 'max') {
+              # Start windowed small, then maximize (resize-after-launch)
+              [void][Win]::ShowWindow($hwnd, 1)
+              [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 40, 40, [Math]::Min(1100,$forceW), [Math]::Min(700,$forceH), 0x0040)
+              Start-Sleep -Seconds 2
+              [void][Win]::ShowWindow($hwnd, 3) # SW_MAXIMIZE
+              Start-Sleep -Seconds 3
+            } else {
+              [void][Win]::ShowWindow($hwnd, 1)
+              [void][Win]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $forceW, $forceH, 0x0040)
+              Start-Sleep -Seconds 2
+            }
+            [void][Win]::SetForegroundWindow($hwnd)
+            Start-Sleep -Seconds 3
+            Capture-Window $hwnd $shotPath
+            [void][Win]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+            Start-Sleep -Seconds 5
+            if (-not $p.HasExited) { try { $p.Kill($true) } catch {} }
+            Start-Sleep -Seconds 1
+            $len = (Get-Item $shotPath).Length
+            if ($len -lt 30000) { throw "$shotPath too small ($len)" }
+            Write-Host "layout ok $shotPath ($len bytes)"
+          }
+
+          $scales = @(1.0, 1.5, 2.0, 2.5, 3.0)
+          foreach ($res in @(@(1920,1080,'1080'), @(3840,2160,'4k'))) {
+            $rw = [int]$res[0]; $rh = [int]$res[1]; $rname = [string]$res[2]
+            foreach ($sc in $scales) {
+              $tag = ([int]($sc * 100)).ToString()
+              Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_${tag}_windowed.png") $rw $rh $sc 'windowed'
+              Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_${tag}_max.png") $rw $rh $sc 'max'
+            }
+          }
+
           "`n=== AFTER CLOSE ===" | Out-File $after -Append
           $left = tasklist | Select-String -Pattern 'LiaDesktop|Lia Assistant'
           $left | Out-File $after -Append
@@ -320,13 +377,15 @@ jobs:
           pip install --quiet pillow numpy
           python tools/check_framing.py desktop_winui_front_1080.png desktop_winui_front_4k.png
           if ($LASTEXITCODE -ne 0) { throw "framing self-check failed" }
-          Write-Host "smoke ok"
+          $layoutCount = (Get-ChildItem layout_*.png -ErrorAction SilentlyContinue | Measure-Object).Count
+          if ($layoutCount -lt 20) { throw "expected >=20 layout_*.png, got $layoutCount" }
+          Write-Host "smoke ok (layout shots=$layoutCount)"
 
       - name: Installer silent install / uninstall smoke
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $PWD 'LiaDesktop-0.6.9-setup.exe'
+          $setup = Join-Path $PWD 'LiaDesktop-0.7.0-setup.exe'
           if (-not (Test-Path $setup)) { throw "setup missing" }
           $dir = Join-Path $env:LOCALAPPDATA 'LiaDesktop-smoke'
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
@@ -352,8 +411,8 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.6.9-win-x64.zip
-            LiaDesktop-0.6.9-setup.exe
+            LiaDesktop-0.7.0-win-x64.zip
+            LiaDesktop-0.7.0-setup.exe
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_profile.png
@@ -363,6 +422,7 @@ jobs:
             desktop_winui_hud.png
             desktop_winui_front_1080.png
             desktop_winui_front_4k.png
+            layout_*.png
             selftest.txt
             tasklist_before.txt
             tasklist_after.txt
@@ -380,8 +440,10 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "CI smoke PNGs (draft until HUD QA)"
           for f in desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
-                   desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt; do
-            [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
+                   desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt layout_*.png; do
+            for m in $f; do
+              [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
+            done
           done
 
       - name: Upload release assets (tags) — DRAFT until visual HUD QA
@@ -392,11 +454,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.6.9** — Gemini resilience, mic STT, HiDPI centre stage
+          Lia Desktop **v0.7.0** — Edge TTS Sec-MS-GEC, SAPI fallback, HiDPI MatrixTransform
 
-          - Default `gemini-flash-lite-latest`; 25s/attempt; retry once then next in ListModels chain
-          - Mic STT shares the same fallback chain; HiDPI centre-column framing
-          - E2E `--selftest` mock + live GEMINI_API_KEY; see selftest.txt
+          - C# Edge TTS WebSocket with Sec-MS-GEC v2 (edge-tts 7.3.1 DRM) + clock-skew retry; no Python
+          - Offline SAPI/OneCore voice fallback; journal errors collapsed to one line (full log under %LOCALAPPDATA%)
+          - SwapChainPanel HiDPI: physical buffers + inverse MatrixTransform; layout matrix 1080/4K × 100–300% × windowed/max
+          - E2E `--selftest` requires `tts_ws_only` + `tts_sapi` + live Gemini; see selftest.txt
 
 
           EOF
@@ -406,29 +469,33 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "$NOTES"
           fi
-          for f in LiaDesktop-0.6.9-win-x64.zip LiaDesktop-0.6.9-setup.exe \
+          for f in LiaDesktop-0.7.0-win-x64.zip LiaDesktop-0.7.0-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
                    desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt \
-                   tasklist_before.txt tasklist_after.txt; do
-            if [ -f "$f" ]; then
-              gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber
-            else
-              echo "missing $f"
-            fi
+                   tasklist_before.txt tasklist_after.txt layout_*.png; do
+            for m in $f; do
+              if [ -f "$m" ]; then
+                gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber
+              else
+                echo "missing $m"
+              fi
+            done
           done
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG} (draft)"
 
-      - name: Mirror assets to draft v0.6.9 on main pushes
+      - name: Mirror assets to draft v0.7.0 on main pushes
         if: success() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.6.9
+          TAG=v0.7.0
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "Cinematic HUD v0.6.9 (draft)"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Lia Desktop $TAG" --notes "v0.7.0 TTS+HiDPI (draft)"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft || true
-          for f in LiaDesktop-0.6.9-win-x64.zip LiaDesktop-0.6.9-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt tasklist_after.txt; do
-            [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
+          for f in LiaDesktop-0.7.0-win-x64.zip LiaDesktop-0.7.0-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png selftest.txt tasklist_after.txt layout_*.png; do
+            for m in $f; do
+              [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
+            done
           done

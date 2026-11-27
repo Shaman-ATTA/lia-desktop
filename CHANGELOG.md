@@ -1,67 +1,15 @@
 # Changelog
 
+## v0.7.0 — Edge TTS Sec-MS-GEC, SAPI fallback, HiDPI MatrixTransform
+
+- **TTS:** C# WebSocket path ports edge-tts 7.3.1 Sec-MS-GEC v2 DRM (clock-skew adjust on 403). Python fallback removed.
+- **Offline:** Windows SAPI/OneCore voice if Edge fails (prefer ru-RU Irina/Pavel).
+- **Journal:** one-line errors; full traces in `%LOCALAPPDATA%\LiaDesktop\error.log`.
+- **HiDPI:** SwapChainPanel buffers sized with CompositionScaleX/Y + inverse `IDXGISwapChain2.MatrixTransform` (fixes grey box / right-crop on high-DPI TVs). Recreate on maximize/DPI.
+- **CI:** `tts_ws_only` + `tts_sapi` gates; layout shots `layout_<res>_<scale>_<windowed|max>.png` at 100–300% on 1080p/4K.
+
 ## v0.6.9 — Gemini resilience, mic STT fallback, HiDPI centre stage
 
-- Gemini default `gemini-flash-lite-latest`; fallback chain [user, flash-lite-latest, 3.1/3.5-flash-lite, 3.8/3.7-flash] ∩ ListModels; 25s/attempt, retry once on 503/429/timeout then next model; journal logs which model answered
-- Mic STT uses the same generateContent fallback chain; Windows Speech → WaveIn+Gemini when missing
-- Layout: hologram only in centre 0.56 column; physical swapchain scale; CI 1080p/4K framing asserts
-- CI E2E `--selftest` mock (normal/503/429/slow/404) + live `GEMINI_API_KEY` must pass; `selftest.txt` gates release
-
-
-## v0.6.8 — neck fade below jaw; clean chin
-
-- Fade starts ≥25% neckHeight below chin tip (local Y); jaw/chin alpha=1
-- Opaque depth prepass + depth-equal color pass (no backface blotches)
-- CI: face MAD vs v0.6.6 + neck_bottom_avg_alpha + arcs
-
-## v0.6.7 — hologram neck dissolve
-
-- Lower ~40% of neck fades to transparent (premul) with side-edge falloff
-- Stepped cut / shoulder notch dissolve into navy; arcs/cam unchanged
-- CI: neck_bottom_avg_alpha < 0.1
-
-## v0.6.6 — Visible arcs behind head + soft neck fade
-
-- Fix CW fullscreen triangle backface-cull that wiped DX arcs
-- Dense amber/cyan arcs drawn before head (NoCull, premul); CI asserts ring pixels
-- Soft lower-neck smoothstep dissolve (stump/notch into navy)
-
-## v0.6.5 — v0.6.2 head baseline, 2D arcs behind hologram
-
-- Restore exact v0.6.2 camera (Z=2.82) and full neck mesh; simple vertical alpha only
-- Dense screen-space arcs drawn in DX *before* the head (head occludes; never on skin)
-- No 3D rings; opaque navy stage clear (v0.6.2)
-
-## v0.6.4 — Clean face, geometric neck trim, 2D arcs only
-
-
-- Fix chin/jaw blotches: drop two-pass/pow dissolve that ate the face
-- Geometric mesh trim below Y=0.30 (no stump/shoulder notch) + short clean alpha
-- Remove broken 3D crown/chin rings (diagonal bars / smears); keep dense 2D arcs
-- Framing ~72–80%
-
-## v0.6.3 — Soft neck dissolve, crown halo, chin ring in-frame
-
-
-- Neck: pure vertical alpha over lower ~25% (no stepped stump / shoulder notch)
-- Crown halo: tilted ring above/behind head (never on skin)
-- Lower ring raised/shrunk so it sits below chin inside the viewport (not clipped by dock)
-- Framing still ~75–80%; face/materials/lip sync unchanged
-
-## v0.6.2 — Visible halos, softer neck, brighter HUD
-
-- Crown + neck 3D amber rings visible again (core + glow), head-parented, behind face
-- Neck stump alpha dissolve over last ~15% height; framing ~0.75–0.80
-- Brighter 2D arcs with soft glow underlay + slow rotation (outside face/neck)
-- Subtle holo veil: faint scanlines + amber silhouette rim (no skin hue shift)
-- Head / materials / lip sync still locked from v0.5.5
-
-## v0.6.1 — Clean orbits, RU HUD
-
-- Face-clean HUD; Russian UI; head-parented rings; real CPU%
-
-## v0.6.0 — Cinematic HUD shell (superseded)
-
-## Earlier
-
-See git history for v0.5.x.
+- Default `gemini-flash-lite-latest`; 25s/attempt; retry once then next ListModels chain.
+- Mic STT via NAudio VAD + Gemini when Windows Speech missing.
+- Centre-column hologram stage; E2E `--selftest` mock + live key.
