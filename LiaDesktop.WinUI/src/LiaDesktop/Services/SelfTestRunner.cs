@@ -316,8 +316,9 @@ public static class SelfTestRunner
 
         try
         {
+            // English+Russian — GHA runners often only ship en-US desktop voices
             var sapiPath = await s.Tts.SpeakSapiOnlyAsync(
-                "Привет, я Лиа. Это проверка офлайн голоса.", CancellationToken.None);
+                "Hello. This is Lia offline voice check. Привет, я Лиа.", CancellationToken.None);
             if (!TtsAudioGate.TryValidate(sapiPath, out var n, out var rms, out var detail))
             {
                 L($"FAIL tts_sapi: inaudible/empty SAPI audio ({detail})");

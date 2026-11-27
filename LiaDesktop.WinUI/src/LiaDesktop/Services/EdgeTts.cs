@@ -105,19 +105,13 @@ public sealed class EdgeTts
         }
     }
 
-    /// <summary>SAPI-only path for CI gate.</summary>
-    public async Task<string?> SpeakSapiOnlyAsync(string text, CancellationToken ct = default)
+    /// <summary>SAPI-only path for CI gate — throws with detail if all offline backends fail.</summary>
+    public async Task<string> SpeakSapiOnlyAsync(string text, CancellationToken ct = default)
     {
-        var prevWs = DisableWebSocket;
-        var prevSapi = DisableSapi;
-        DisableWebSocket = true;
-        DisableSapi = false;
-        try { return await SpeakToFileAsync(text, ct); }
-        finally
-        {
-            DisableWebSocket = prevWs;
-            DisableSapi = prevSapi;
-        }
+        var path = await ViaSapiAsync(text, ct);
+        if (path == null || !TtsAudioGate.TryValidate(path, out _, out _, out var detail))
+            throw new InvalidOperationException("SAPI-only produced no audible audio: " + detail);
+        return path;
     }
 
     async Task ViaWebSocketAsync(string text, string outPath, CancellationToken ct)
@@ -189,30 +183,59 @@ public sealed class EdgeTts
 
     async Task<string?> ViaSapiAsync(string text, CancellationToken ct)
     {
-        // Prefer classic System.Speech on an STA thread → real PCM WAV.
-        // (Task.Run/MTA yields empty/missing files; WinRT DataReader+Size was the 46B false pass.)
+        // Offline stack (in order). System.Speech/COM need STA. WinRT Size-only reads
+        // previously produced 46B header-only WAVs — we drain the stream in chunks.
+        var errors = new List<string>();
+
         try
         {
-            var path = await SpeakSystemSpeechStaAsync(text, ct);
+            var path = await RunStaAsync(() => SpeakSystemSpeechToWav(text), ct);
             if (TtsAudioGate.TryValidate(path, out _, out _, out var ok))
             {
                 _log.Info($"TTS: System.Speech ({ok})");
                 return path;
             }
-            _log.Info($"TTS System.Speech rejected: {ok}");
-            try { if (path != null) File.Delete(path); } catch { /* */ }
+            errors.Add("System.Speech: " + ok);
+            try { File.Delete(path); } catch { /* */ }
         }
         catch (Exception ex)
         {
-            _log.Info($"TTS System.Speech: {OneLine(ex.Message)}");
+            errors.Add("System.Speech: " + OneLine(ex.Message));
             AppLog.WriteCrash("tts-system-speech", ex);
         }
 
-        ct.ThrowIfCancellationRequested();
-        return await SpeakWinRtToWavAsync(text, ct);
+        try
+        {
+            var path = await RunStaAsync(() => SpeakComSapiToWav(text), ct);
+            if (TtsAudioGate.TryValidate(path, out _, out _, out var ok))
+            {
+                _log.Info($"TTS: COM SAPI.SpVoice ({ok})");
+                return path;
+            }
+            errors.Add("COM SAPI: " + ok);
+            try { File.Delete(path); } catch { /* */ }
+        }
+        catch (Exception ex)
+        {
+            errors.Add("COM SAPI: " + OneLine(ex.Message));
+            AppLog.WriteCrash("tts-com-sapi", ex);
+        }
+
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            return await SpeakWinRtToWavAsync(text, ct);
+        }
+        catch (Exception ex)
+        {
+            errors.Add("WinRT: " + OneLine(ex.Message));
+            AppLog.WriteCrash("tts-winrt", ex);
+            _log.Error("TTS SAPI unavailable", string.Join(" | ", errors));
+            return null;
+        }
     }
 
-    static Task<string> SpeakSystemSpeechStaAsync(string text, CancellationToken ct)
+    static Task<string> RunStaAsync(Func<string> work, CancellationToken ct)
     {
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var th = new Thread(() =>
@@ -220,7 +243,7 @@ public sealed class EdgeTts
             try
             {
                 ct.ThrowIfCancellationRequested();
-                tcs.TrySetResult(SpeakSystemSpeechToWav(text));
+                tcs.TrySetResult(work());
             }
             catch (Exception ex)
             {
@@ -259,14 +282,67 @@ public sealed class EdgeTts
         try { synth.Rate = -1; } catch { /* */ }
 
         var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-sapi-{Guid.NewGuid():N}.wav");
-        synth.SetOutputToWaveFile(outPath);
-        try { synth.Speak(text); }
-        finally { try { synth.SetOutputToNull(); } catch { /* */ } }
+        using (var ms = new MemoryStream())
+        {
+            synth.SetOutputToWaveStream(ms);
+            try { synth.Speak(text); }
+            finally { try { synth.SetOutputToNull(); } catch { /* */ } }
+            if (ms.Length < TtsAudioGate.MinBytes)
+                throw new InvalidOperationException(
+                    $"System.Speech wave too small ({ms.Length}B) voice={pick.VoiceInfo.Name} "
+                    + $"culture={pick.VoiceInfo.Culture.Name} voices=[{string.Join(", ", installed.Select(v => v.VoiceInfo.Name))}]");
+            File.WriteAllBytes(outPath, ms.ToArray());
+        }
+        return outPath;
+    }
 
-        var len = File.Exists(outPath) ? new FileInfo(outPath).Length : 0;
-        if (len <= 0)
+    static string SpeakComSapiToWav(string text)
+    {
+        var voiceType = Type.GetTypeFromProgID("SAPI.SpVoice")
+            ?? throw new InvalidOperationException("SAPI.SpVoice ProgID missing");
+        var fileType = Type.GetTypeFromProgID("SAPI.SpFileStream")
+            ?? throw new InvalidOperationException("SAPI.SpFileStream ProgID missing");
+        dynamic voice = Activator.CreateInstance(voiceType)
+            ?? throw new InvalidOperationException("SAPI.SpVoice create failed");
+        dynamic fs = Activator.CreateInstance(fileType)
+            ?? throw new InvalidOperationException("SAPI.SpFileStream create failed");
+
+        var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-com-{Guid.NewGuid():N}.wav");
+        // SSFMCreateForWrite = 3
+        fs.Open(outPath, 3);
+        try
+        {
+            voice.AudioOutputStream = fs;
+            // Prefer ru-RU token if present
+            try
+            {
+                dynamic tokens = voice.GetVoices();
+                var count = (int)tokens.Count;
+                for (var i = 0; i < count; i++)
+                {
+                    dynamic tok = tokens.Item(i);
+                    string desc = tok.GetDescription();
+                    if (desc.Contains("Irina", StringComparison.OrdinalIgnoreCase)
+                        || desc.Contains("Russian", StringComparison.OrdinalIgnoreCase)
+                        || desc.Contains("ru-", StringComparison.OrdinalIgnoreCase))
+                    {
+                        voice.Voice = tok;
+                        break;
+                    }
+                }
+            }
+            catch { /* default voice */ }
+
+            voice.Speak(text, 0); // SVSFDefault = sync
+        }
+        finally
+        {
+            try { fs.Close(); } catch { /* */ }
+        }
+
+        if (!File.Exists(outPath) || new FileInfo(outPath).Length < TtsAudioGate.MinBytes)
             throw new InvalidOperationException(
-                $"System.Speech produced no file (voice={pick.VoiceInfo.Name} culture={pick.VoiceInfo.Culture.Name} voices={installed.Count})");
+                $"COM SAPI wave too small ({(File.Exists(outPath) ? new FileInfo(outPath).Length : 0)}B)");
         return outPath;
     }
 
