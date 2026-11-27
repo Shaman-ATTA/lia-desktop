@@ -172,6 +172,10 @@ jobs:
             if ($txt -notmatch 'SELFTEST PASS') { throw "selftest.txt missing PASS marker" }
             if ($txt -notmatch 'tts_ws_only: PASS') { throw "selftest missing tts_ws_only PASS" }
             if ($txt -notmatch 'tts_sapi: PASS') { throw "selftest missing tts_sapi PASS" }
+            if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }
+            if ($txt -notmatch 'render_nondefault_comm: PASS') { throw "selftest missing render_nondefault_comm PASS" }
+            if ($txt -notmatch 'playback_rms: PASS') { throw "selftest missing playback_rms PASS" }
+            if ($txt -notmatch 'ws_close_handshake: PASS') { throw "selftest missing ws_close_handshake PASS" }
             if ($txt -notmatch 'click_map: PASS') { throw "selftest missing click_map PASS" }
             if ($txt -notmatch 'PASS memory_live') { throw "selftest missing memory_live PASS" }
             if ($txt -notmatch 'PASS memory_clear') { throw "selftest missing memory_clear PASS" }
@@ -607,12 +611,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.2** — Vision (look_at_screen) + dialog memory
+          Lia Desktop **v0.7.2** — Audible Multimedia TTS + vision + memory
 
-          - `look_at_screen` / `screenshot` return DPI-aware capture to Gemini as inline_data
-          - mouse_click maps downscaled image coords → physical pixels (DPI 100–300%)
-          - Session dialog memory (%LOCALAPPDATA%), «забудь»/НОВЫЙ РАЗГОВОР, barge truncated spoken
-          - Selftest: vision_live, click_map, memory_live/clear/persist + prior TTS/barge/layout gates
+          - TTS render on Multimedia/Console (never Communications); WaveOut fallback; device picker
+          - Edge WS abrupt close OK if audio received; look_at_screen + dialog memory
+          - Selftest: render_role, playback_rms, ws_close_handshake, vision_live, memory_*
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -645,11 +648,10 @@ jobs:
         run: |
           TAG=v0.7.2
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.2** — Vision (look_at_screen) + dialog memory
+          Lia Desktop **v0.7.2** — Audible Multimedia TTS + vision + memory
 
-          - Screen vision via Gemini inline_data; DPI-aware click mapping
-          - Dialog memory persist + «забудь» / HUD НОВЫЙ РАЗГОВОР
-          - Selftest: vision_live, click_map, memory_*; layout + TTS + barge retained
+          - TTS → Multimedia/Console (not Communications); WaveOut fallback; device picker + voice check
+          - Vision + dialog memory; selftest render_*/playback_rms/ws_close_handshake
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \

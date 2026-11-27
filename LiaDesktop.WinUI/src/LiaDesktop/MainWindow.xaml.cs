@@ -80,7 +80,10 @@ public sealed partial class MainWindow : Window
             _speaking = true;
             StatusCaption.Text = "ГОВОРЮ";
             VoiceLine.Text = "ГОЛОС  ГОВОРЮ";
-            _s.Log.Info("TTS: воспроизведение SvetlanaNeural (barge-in)");
+            var dev = _s.BargeIn.LastRenderDevice;
+            _s.Log.Info(string.IsNullOrWhiteSpace(dev) || dev == "(none)"
+                ? "TTS: воспроизведение SvetlanaNeural (barge-in)"
+                : $"TTS → {dev}");
         });
         _s.Agent.BargeInListening += () => DispatcherQueue.TryEnqueue(() =>
         {
@@ -893,9 +896,68 @@ public sealed partial class MainWindow : Window
             ModelBox.Items.Add(cfg.Model);
             ModelBox.SelectedIndex = 0;
         }
+        FillAudioOutBox(cfg.AudioOutputDeviceId);
         SettingsOverlay.Visibility = Visibility.Visible;
         if (cfg.Provider != "ollama" && !string.IsNullOrEmpty(cfg.ApiKey))
             _ = RefreshModelsAsync();
+    }
+
+    void FillAudioOutBox(string selectedId)
+    {
+        AudioOutBox.Items.Clear();
+        var devices = AudioOutput.ListRenderDevices();
+        var sel = 0;
+        for (var i = 0; i < devices.Count; i++)
+        {
+            var (id, name) = devices[i];
+            AudioOutBox.Items.Add(new AudioDeviceItem(id, name));
+            if (!string.IsNullOrEmpty(selectedId) &&
+                string.Equals(id, selectedId, StringComparison.OrdinalIgnoreCase))
+                sel = i;
+        }
+        AudioOutBox.SelectedIndex = sel;
+    }
+
+    sealed record AudioDeviceItem(string Id, string Name)
+    {
+        public override string ToString() => Name;
+    }
+
+    async void TestVoice_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            ApplyAudioOutFromUi();
+            StatusCaption.Text = "ГОЛОС";
+            Subtitle.Text = "Проверка вывода…";
+            var path = await _s.Tts.SpeakToFileAsync(
+                "Привет, я Лиа. Проверка голоса и устройства вывода.", CancellationToken.None);
+            if (path == null || !File.Exists(path))
+            {
+                _s.Log.Error("Проверка голоса", "TTS не создал файл");
+                Subtitle.Text = "TTS недоступен";
+                return;
+            }
+            await _s.BargeIn.PlayFileAsync(path, "Проверка голоса.", CancellationToken.None);
+            Subtitle.Text = $"Голос → {_s.BargeIn.LastRenderDevice}";
+            StatusCaption.Text = "ОЖИДАНИЕ";
+        }
+        catch (Exception ex)
+        {
+            _s.Log.Error("Проверка голоса", ex.Message);
+            Subtitle.Text = "Ошибка вывода: " + ex.Message;
+        }
+    }
+
+    void ApplyAudioOutFromUi()
+    {
+        var id = "";
+        if (AudioOutBox.SelectedItem is AudioDeviceItem it)
+            id = it.Id ?? "";
+        _s.BargeIn.SetPreferredOutputDevice(id);
+        var cfg = _s.Secrets.Load();
+        cfg.AudioOutputDeviceId = id;
+        _s.Secrets.Save(cfg);
     }
 
     void SettingsCancel_Click(object sender, RoutedEventArgs e) =>
@@ -944,6 +1006,9 @@ public sealed partial class MainWindow : Window
 
         cfg.Model = picked;
         cfg.VisionModel = cfg.Model;
+        if (AudioOutBox.SelectedItem is AudioDeviceItem a)
+            cfg.AudioOutputDeviceId = a.Id ?? "";
+        _s.BargeIn.SetPreferredOutputDevice(cfg.AudioOutputDeviceId);
         _s.Secrets.Save(cfg);
         try { AutostartService.SetEnabled(AutostartBox.IsChecked == true); }
         catch (Exception ex) { _s.Log.Info("Автозапуск: " + ex.Message); }

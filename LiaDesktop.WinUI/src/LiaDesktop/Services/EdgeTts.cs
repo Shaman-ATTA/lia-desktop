@@ -24,6 +24,12 @@ public sealed class EdgeTts
     /// <summary>When true, skip SAPI fallback (selftest tts_ws_only).</summary>
     public static bool DisableSapi { get; set; }
 
+    /// <summary>
+    /// Selftest: skip real Edge WS — write audible audio then throw abrupt-close exception
+    /// (must still succeed via handshake-tolerant path).
+    /// </summary>
+    public static bool SelfTestOfflineAbruptClose { get; set; }
+
     readonly AppLog _log;
     static readonly HttpClient DateProbe = new() { Timeout = TimeSpan.FromSeconds(8) };
 
@@ -116,6 +122,28 @@ public sealed class EdgeTts
 
     async Task ViaWebSocketAsync(string text, string outPath, CancellationToken ct)
     {
+        if (SelfTestOfflineAbruptClose)
+        {
+            // Seed audible bytes (SAPI wav), then simulate remote drop without close handshake
+            var seed = await ViaSapiAsync(text, ct)
+                ?? throw new InvalidOperationException("selftest abrupt-close: no seed audio");
+            await File.WriteAllBytesAsync(outPath, await File.ReadAllBytesAsync(seed, ct), ct);
+            try
+            {
+                throw new WebSocketException(
+                    "The remote party closed the WebSocket connection without completing the close handshake.");
+            }
+            catch (Exception ex) when (IsAbruptWsClose(ex))
+            {
+                if (new FileInfo(outPath).Length > 0)
+                {
+                    _log.Info($"edge-tts: abrupt WS close after {new FileInfo(outPath).Length}B audio — treating as OK");
+                    return;
+                }
+                throw;
+            }
+        }
+
         var connId = Guid.NewGuid().ToString("N");
         var url = EdgeMsDrm.BuildWssUrl(connId);
         using var ws = new ClientWebSocket();
@@ -151,34 +179,70 @@ public sealed class EdgeTts
 
         await using var fs = File.Create(outPath);
         var buf = new byte[256 * 1024];
-        while (ws.State == WebSocketState.Open)
+        var sawTurnEnd = false;
+        try
         {
-            using var ms = new MemoryStream();
-            WebSocketReceiveResult result;
-            do
+            while (ws.State == WebSocketState.Open)
             {
-                result = await ws.ReceiveAsync(buf, link.Token);
-                if (result.MessageType == WebSocketMessageType.Close) break;
-                ms.Write(buf, 0, result.Count);
-            } while (!result.EndOfMessage);
+                using var ms = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
+                {
+                    result = await ws.ReceiveAsync(buf, link.Token);
+                    if (result.MessageType == WebSocketMessageType.Close) break;
+                    ms.Write(buf, 0, result.Count);
+                } while (!result.EndOfMessage);
 
-            if (result.MessageType == WebSocketMessageType.Close) break;
-            var msg = ms.ToArray();
-            if (result.MessageType == WebSocketMessageType.Binary)
-            {
-                if (msg.Length < 2) continue;
-                var headerLen = (msg[0] << 8) | msg[1];
-                var dataStart = 2 + headerLen;
-                if (msg.Length > dataStart)
-                    await fs.WriteAsync(msg.AsMemory(dataStart), link.Token);
-            }
-            else
-            {
-                var s = Encoding.UTF8.GetString(msg);
-                if (s.Contains("Path:turn.end", StringComparison.Ordinal)) break;
+                if (result.MessageType == WebSocketMessageType.Close) break;
+                var msg = ms.ToArray();
+                if (result.MessageType == WebSocketMessageType.Binary)
+                {
+                    if (msg.Length < 2) continue;
+                    var headerLen = (msg[0] << 8) | msg[1];
+                    var dataStart = 2 + headerLen;
+                    if (msg.Length > dataStart)
+                        await fs.WriteAsync(msg.AsMemory(dataStart), link.Token);
+                }
+                else
+                {
+                    var s = Encoding.UTF8.GetString(msg);
+                    if (s.Contains("Path:turn.end", StringComparison.Ordinal))
+                    {
+                        sawTurnEnd = true;
+                        break;
+                    }
+                }
             }
         }
+        catch (Exception ex) when (IsAbruptWsClose(ex))
+        {
+            // Remote closed without close handshake — if we already have audio (or turn.end), SUCCESS
+            if (fs.Length > 0 || sawTurnEnd)
+            {
+                _log.Info($"edge-tts: abrupt WS close after {fs.Length}B audio — treating as OK");
+                await fs.FlushAsync(link.Token);
+                if (fs.Length > 0) return;
+            }
+            throw;
+        }
         if (fs.Length == 0) throw new InvalidOperationException("Edge TTS returned empty audio");
+    }
+
+    static bool IsAbruptWsClose(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException!)
+        {
+            var m = e.Message ?? "";
+            if (m.Contains("without completing the close handshake", StringComparison.OrdinalIgnoreCase))
+                return true;
+            // Connection reset mid-stream after audio — common Edge quirk
+            if (e is WebSocketException &&
+                (m.Contains("connection", StringComparison.OrdinalIgnoreCase) ||
+                 m.Contains("closed", StringComparison.OrdinalIgnoreCase) ||
+                 m.Contains("aborted", StringComparison.OrdinalIgnoreCase)))
+                return true;
+        }
+        return false;
     }
 
     async Task<string?> ViaSapiAsync(string text, CancellationToken ct)

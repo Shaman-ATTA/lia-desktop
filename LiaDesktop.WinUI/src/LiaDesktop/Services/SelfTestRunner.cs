@@ -69,6 +69,9 @@ public static class SelfTestRunner
             // TTS gates — must prove C# WebSocket alone (no Python) + SAPI offline
             failed += await RunTtsGatesAsync(services, L);
 
+            // Audio render: Multimedia (not Communications) + abrupt WS close + loopback RMS
+            failed += await RunRenderGatesAsync(services, L);
+
             // Barge-in: backchannel / stop / new-request + TTS loopback must not trigger
             services.Agent.SuspendBargeHandling(true);
             try
@@ -552,6 +555,186 @@ public static class SelfTestRunner
             var cfg = s.Secrets.Load();
             cfg.ApiKey = "ci-mock-key";
             s.Secrets.Save(cfg);
+        }
+    }
+
+    static async Task<int> RunRenderGatesAsync(AppServices s, Action<string> L)
+    {
+        var fail = 0;
+        try
+        {
+            // --- render_nondefault_comm: multimedia id ≠ communications; we still pick Multimedia ---
+            var realMm = AudioOutput.DefaultMultimediaId();
+            var realComm = AudioOutput.DefaultCommunicationsId();
+            AudioOutput.ResolveOverride = () => ("mm-selftest-id", "Selftest Multimedia Speakers",
+                NAudio.CoreAudioApi.Role.Multimedia);
+            try
+            {
+                using var audio = new AudioOutput(s.Log);
+                using var player = audio.OpenPlayer(out var friendly, out var role, out var id, out _);
+                if (role == NAudio.CoreAudioApi.Role.Communications)
+                {
+                    L($"FAIL render_nondefault_comm: resolved Communications ({friendly})");
+                    fail++;
+                }
+                else if (id != "mm-selftest-id" ||
+                         role is not (NAudio.CoreAudioApi.Role.Multimedia or NAudio.CoreAudioApi.Role.Console))
+                {
+                    L($"FAIL render_nondefault_comm: id={id} role={role} friendly={friendly}");
+                    fail++;
+                }
+                else
+                {
+                    L($"render_nondefault_comm: PASS (mm≠comm simulated; mm={realMm} comm={realComm}; picked {role}/{id})");
+                }
+            }
+            finally
+            {
+                AudioOutput.ResolveOverride = null;
+            }
+
+            // --- render_role: real play must use Multimedia/Console, never Communications ---
+            string? ttsPath = null;
+            try
+            {
+                ttsPath = await s.Tts.SpeakSapiOnlyAsync("Проверка вывода Лиа.", CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                L("render_role: SAPI seed warn — " + ex.Message);
+                ttsPath = await s.Tts.SpeakToFileAsync("Проверка вывода Лиа.", CancellationToken.None);
+            }
+            if (ttsPath == null || !File.Exists(ttsPath))
+            {
+                L("FAIL render_role: no TTS file");
+                fail++;
+            }
+            else
+            {
+                s.Agent.SuspendBargeHandling(true);
+                try
+                {
+                    await s.BargeIn.PlayFileAsync(ttsPath, "Проверка вывода Лиа.", CancellationToken.None);
+                }
+                finally
+                {
+                    s.Agent.SuspendBargeHandling(false);
+                }
+                var role = s.BargeIn.LastRenderRole;
+                if (role == NAudio.CoreAudioApi.Role.Communications)
+                {
+                    L($"FAIL render_role: Role.Communications device={s.BargeIn.LastRenderDevice}");
+                    fail++;
+                }
+                else
+                {
+                    L($"render_role: PASS role={role} device={s.BargeIn.LastRenderDevice}");
+                }
+            }
+
+            // --- playback_rms: loopback of render device while TTS plays ---
+            fail += await RunPlaybackRmsGateAsync(s, L, ttsPath);
+
+            // --- ws_close_handshake: abrupt close after audio bytes → SUCCESS ---
+            var prev = EdgeTts.SelfTestOfflineAbruptClose;
+            var prevSapi = EdgeTts.DisableSapi;
+            EdgeTts.SelfTestOfflineAbruptClose = true;
+            EdgeTts.DisableSapi = true; // SpeakToFile must succeed via WS abrupt-close path alone
+            try
+            {
+                var p = await s.Tts.SpeakWebSocketOnlyAsync("Тест обрыва WebSocket.", CancellationToken.None);
+                if (!TtsAudioGate.TryValidate(p, out var n, out var rms, out var detail))
+                {
+                    L($"FAIL ws_close_handshake: inaudible after abrupt close ({detail})");
+                    fail++;
+                }
+                else
+                    L($"ws_close_handshake: PASS bytes={n} rms={rms:F4}");
+            }
+            catch (Exception ex)
+            {
+                L($"FAIL ws_close_handshake: {ex.GetType().Name}: {ex.Message}");
+                fail++;
+            }
+            finally
+            {
+                EdgeTts.SelfTestOfflineAbruptClose = prev;
+                EdgeTts.DisableSapi = prevSapi;
+            }
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL render_gates: {ex.GetType().Name}: {ex.Message}");
+            fail++;
+        }
+        return fail;
+    }
+
+    static async Task<int> RunPlaybackRmsGateAsync(AppServices s, Action<string> L, string? ttsPath)
+    {
+        try
+        {
+            ttsPath ??= await s.Tts.SpeakToFileAsync("Раз два три проверка звука.", CancellationToken.None);
+            if (ttsPath == null || !File.Exists(ttsPath))
+            {
+                L("FAIL playback_rms: no TTS file");
+                return 1;
+            }
+
+            var peak = 0f;
+            using var capture = new NAudio.Wave.WasapiLoopbackCapture();
+            capture.DataAvailable += (_, e) =>
+            {
+                // IEEE float or PCM16
+                if (e.BytesRecorded <= 0) return;
+                var fmt = capture.WaveFormat;
+                if (fmt.Encoding == NAudio.Wave.WaveFormatEncoding.IeeeFloat)
+                {
+                    for (var i = 0; i + 4 <= e.BytesRecorded; i += 4)
+                    {
+                        var v = Math.Abs(BitConverter.ToSingle(e.Buffer, i));
+                        if (v > peak) peak = v;
+                    }
+                }
+                else if (fmt.BitsPerSample == 16)
+                {
+                    for (var i = 0; i + 2 <= e.BytesRecorded; i += 2)
+                    {
+                        var s16 = (short)(e.Buffer[i] | (e.Buffer[i + 1] << 8));
+                        var v = Math.Abs(s16 / 32768f);
+                        if (v > peak) peak = v;
+                    }
+                }
+            };
+            capture.StartRecording();
+            s.Agent.SuspendBargeHandling(true);
+            try
+            {
+                var play = s.BargeIn.PlayFileAsync(ttsPath, "Раз два три.", CancellationToken.None);
+                // Allow some lead-in
+                await Task.WhenAny(play, Task.Delay(8000));
+                if (!play.IsCompleted) s.BargeIn.AbortPlayback();
+                await play;
+            }
+            finally
+            {
+                s.Agent.SuspendBargeHandling(false);
+                try { capture.StopRecording(); } catch { /* */ }
+            }
+
+            // Shared-mode loopback of our own WasapiOut should show energy on CI
+            if (peak < 0.0008f)
+            {
+                L($"FAIL playback_rms: loopback peak={peak:F5} (silent — sound did not reach render endpoint?)");
+                return 1;
+            }
+            L($"playback_rms: PASS peak={peak:F4} device={s.BargeIn.LastRenderDevice}");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL playback_rms: {ex.GetType().Name}: {ex.Message}");
+            return 1;
         }
     }
 

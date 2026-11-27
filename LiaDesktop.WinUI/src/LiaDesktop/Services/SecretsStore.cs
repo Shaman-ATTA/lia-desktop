@@ -12,6 +12,8 @@ public sealed class LiaConfig
     public string Model { get; set; } = "";
     public string VisionModel { get; set; } = "";
     public string TtsVoice { get; set; } = "SvetlanaNeural";
+    /// <summary>Empty = system default multimedia render. Else MMDevice.ID.</summary>
+    public string AudioOutputDeviceId { get; set; } = "";
     public string WorkspacePath { get; set; } = "";
 }
 

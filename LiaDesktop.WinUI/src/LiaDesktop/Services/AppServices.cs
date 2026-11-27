@@ -13,6 +13,7 @@ public sealed class AppServices
     public SpeechListen Speech { get; } = new();
     public MicGeminiListen MicGemini { get; private set; } = null!;
     public BargeInService BargeIn { get; private set; } = null!;
+    public AudioOutput Audio { get; private set; } = null!;
     public ConversationMemory Memory { get; private set; } = null!;
     public LiaConfig Config { get; private set; } = new();
 
@@ -26,7 +27,9 @@ public sealed class AppServices
         Gemini = new GeminiClient(Secrets, Log);
         Tts = new EdgeTts(Log);
         Tools = new ToolHost(Log, () => Secrets.Load().WorkspacePath);
-        BargeIn = new BargeInService(Gemini, Log);
+        Audio = new AudioOutput(Log);
+        Audio.SetPreferredDeviceId(Config.AudioOutputDeviceId);
+        BargeIn = new BargeInService(Gemini, Log, Audio);
         Memory = new ConversationMemory(Log);
         Agent = new AgentService(Gemini, Secrets, Log, Tools, Tts, BargeIn, Memory);
         MicGemini = new MicGeminiListen(Gemini, Log);
@@ -48,6 +51,7 @@ public sealed class AppServices
         try { BargeIn.AbortPlayback(); } catch { /* */ }
         try { await MicGemini.StopAsync(); } catch { /* */ }
         BargeIn.Dispose();
+        Audio.Dispose();
         MicGemini.Dispose();
         Speech.Dispose();
         await Tools.DisposeAsync();

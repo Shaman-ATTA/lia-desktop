@@ -6,18 +6,20 @@ using NAudio.Wave.SampleProviders;
 namespace LiaDesktop.Services;
 
 /// <summary>
-/// Keep mic open during Edge TTS playback with software echo-cancel VAD (+ WASAPI
-/// communications endpoints when available). On ≥300ms user speech: stop TTS/lips,
-/// HUD СЛУШАЮ, record utterance, STT, classify interrupt.
+/// Keep mic open during Edge TTS playback with software echo-cancel VAD.
+/// Playback uses default MULTIMEDIA render (never Communications) + WaveOut fallback.
+/// Echo reference = tap of the actual render stream.
 /// </summary>
 public sealed class BargeInService : IDisposable
 {
     readonly GeminiClient _gemini;
     readonly AppLog _log;
+    readonly AudioOutput _audio;
+    readonly bool _ownsAudio;
     readonly EchoCancelVad _vad = new();
 
     CancellationTokenSource? _cts;
-    WasapiOut? _output;
+    IWavePlayer? _output;
     IWaveIn? _capture;
     WaveFormat? _capFormat;
     readonly ConcurrentQueue<float[]> _micQ = new();
@@ -35,6 +37,9 @@ public sealed class BargeInService : IDisposable
 
     public bool IsPlaying => _playing;
     public EchoCancelVad Vad => _vad;
+    public AudioOutput Audio => _audio;
+    public string LastRenderDevice => _audio.LastDeviceFriendlyName;
+    public Role LastRenderRole => _audio.LastRole;
 
     public event Action? Listening;          // СЛУШАЮ
     public event Action? PlaybackStarted;
@@ -43,11 +48,15 @@ public sealed class BargeInService : IDisposable
     public event Action<InterruptKind, string, string, string>? Decision;
     // kind, userText, spokenSoFar, remaining
 
-    public BargeInService(GeminiClient gemini, AppLog log)
+    public BargeInService(GeminiClient gemini, AppLog log, AudioOutput? audio = null)
     {
         _gemini = gemini;
         _log = log;
+        _ownsAudio = audio == null;
+        _audio = audio ?? new AudioOutput(log);
     }
+
+    public void SetPreferredOutputDevice(string? deviceId) => _audio.SetPreferredDeviceId(deviceId);
 
     public void AbortPlayback()
     {
@@ -80,7 +89,7 @@ public sealed class BargeInService : IDisposable
             if (MockPlaybackPcm != null || MockMicPull != null)
                 end = await PlayMockAsync(ct);
             else
-                end = await PlayWasapiAsync(path, ct);
+                end = await PlayRealAsync(path, ct);
         }
         catch (OperationCanceledException)
         {
@@ -145,45 +154,133 @@ public sealed class BargeInService : IDisposable
         return PlayEnd.Completed;
     }
 
-    async Task<PlayEnd> PlayWasapiAsync(string path, CancellationToken ct)
+    async Task<PlayEnd> PlayRealAsync(string path, CancellationToken ct)
     {
         StartCapture();
 
         using var reader = new AudioFileReader(path);
         _playbackTotalBytes = Math.Max(1, reader.Length);
 
-        // Tap mono 16k for echo reference
+        // Tap mono 16k for echo reference (= actual render stream)
         var resampler = new WdlResamplingSampleProvider(reader.ToMono(), EchoCancelVad.SampleRate);
         var tap = new TapSampleProvider(resampler, OnPlaybackSamples);
 
-        try
+        Exception? playEx = null;
+        var stoppedWithError = false;
+
+        void OnStopped(object? s, StoppedEventArgs e)
         {
-            var device = new MMDeviceEnumerator()
-                .GetDefaultAudioEndpoint(DataFlow.Render, Role.Communications);
-            _output = new WasapiOut(device, AudioClientShareMode.Shared, true, 60);
-        }
-        catch
-        {
-            _output = new WasapiOut(AudioClientShareMode.Shared, 60);
+            if (e.Exception != null)
+            {
+                playEx = e.Exception;
+                stoppedWithError = true;
+                _log.Info("PlaybackStopped error: " + e.Exception.Message);
+            }
         }
 
-        _output.Init(tap);
-        _output.Play();
+        // Try Wasapi multimedia; on failure / PlaybackStopped error → WaveOutEvent
+        if (!TryStartPlayer(tap, OnStopped, preferWasapi: true, out var friendly, out var role, out var waveFb))
+        {
+            reader.Position = 0;
+            if (!TryStartPlayer(tap, OnStopped, preferWasapi: false, out friendly, out role, out waveFb))
+                throw new InvalidOperationException("No audio output device available");
+        }
+
+        _log.Info($"TTS → {friendly} (role={role}, waveOut={waveFb})");
+        _log.Info($"BargeIn: WaveIn capture + echo-cancel VAD (render={friendly})");
 
         var barged = false;
-        while (_output.PlaybackState == PlaybackState.Playing && !ct.IsCancellationRequested)
+        while (_output!.PlaybackState == PlaybackState.Playing && !ct.IsCancellationRequested)
         {
+            if (stoppedWithError)
+            {
+                // Hot-swap to WaveOutEvent mid-failure
+                try { _output.PlaybackStopped -= OnStopped; _output.Stop(); _output.Dispose(); } catch { /* */ }
+                _output = null;
+                reader.Position = 0;
+                if (!TryStartPlayer(tap, OnStopped, preferWasapi: false, out friendly, out role, out waveFb))
+                    throw playEx ?? new InvalidOperationException("playback failed");
+                _log.Info($"TTS → {friendly} (fallback after error, role={role})");
+                stoppedWithError = false;
+                playEx = null;
+            }
+
+            if (_audio.DefaultDirty)
+            {
+                // Default multimedia device changed — reopen on new default
+                try { _output.PlaybackStopped -= OnStopped; _output.Stop(); _output.Dispose(); } catch { /* */ }
+                _output = null;
+                var pos = reader.Position;
+                reader.Position = pos;
+                if (!TryStartPlayer(tap, OnStopped, preferWasapi: true, out friendly, out role, out waveFb))
+                {
+                    reader.Position = pos;
+                    TryStartPlayer(tap, OnStopped, preferWasapi: false, out friendly, out role, out waveFb);
+                }
+                _log.Info($"TTS → {friendly} (default device changed, role={role})");
+            }
+
             _playbackBytes = reader.Position;
             DrainMicVad(ref barged, ct);
             if (barged)
             {
-                try { _output.Stop(); } catch { /* */ }
+                try { _output?.Stop(); } catch { /* */ }
                 await HandleBargeInAsync(ct);
                 return PlayEnd.Barged;
             }
             await Task.Delay(20, ct);
         }
+
+        if (_output != null)
+            try { _output.PlaybackStopped -= OnStopped; } catch { /* */ }
+
         return ct.IsCancellationRequested ? PlayEnd.Cancelled : PlayEnd.Completed;
+    }
+
+    bool TryStartPlayer(
+        ISampleProvider tap,
+        EventHandler<StoppedEventArgs> onStopped,
+        bool preferWasapi,
+        out string friendly,
+        out Role role,
+        out bool waveOut)
+    {
+        friendly = "";
+        role = Role.Multimedia;
+        waveOut = false;
+        try
+        {
+            IWavePlayer player;
+            if (preferWasapi)
+            {
+                player = _audio.OpenPlayer(out friendly, out role, out _, out waveOut);
+            }
+            else
+            {
+                player = new WaveOutEvent { DesiredLatency = 100 };
+                friendly = "WAVE_MAPPER (WaveOutEvent)";
+                role = Role.Multimedia;
+                waveOut = true;
+            }
+
+            player.PlaybackStopped += onStopped;
+            // WasapiOut/WaveOutEvent accept ISampleProvider via Init
+            if (player is IWavePlayer wp)
+            {
+                // Convert sample provider → wave provider for Init
+                var wave = tap.ToWaveProvider16();
+                wp.Init(wave);
+                wp.Play();
+                _output = wp;
+                return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _log.Info("TryStartPlayer: " + ex.Message);
+            return false;
+        }
     }
 
     void OnPlaybackSamples(float[] mono16k)
@@ -199,7 +296,6 @@ public sealed class BargeInService : IDisposable
             if (_vad.PushMic(frame))
                 barged = true;
         }
-        // Mock pull path also works alongside
         if (!barged && MockMicPull != null)
         {
             var m = MockMicPull();
@@ -217,7 +313,6 @@ public sealed class BargeInService : IDisposable
         var frac = EchoCancelVad.ClampFrac(_playbackBytes / (double)_playbackTotalBytes);
         var (spoken, remaining) = EchoCancelVad.SplitReply(_activeReply ?? "", frac);
 
-        // Record a bit more until silence (or mock finishes)
         var wav = await CaptureUtteranceAsync(ct);
         string text;
         if (MockStt != null)
@@ -241,7 +336,6 @@ public sealed class BargeInService : IDisposable
         var started = false;
         var idle = 0;
 
-        // Keep collecting ~1.5s after trigger
         while (!ct.IsCancellationRequested && idle < 40)
         {
             float[]? frame = null;
@@ -303,8 +397,6 @@ public sealed class BargeInService : IDisposable
     void StartCapture()
     {
         CleanupCapture();
-        // WaveIn + software echo-VAD. Playback uses WasapiOut Role.Communications so the
-        // OS can still engage communications AEC on duplex devices when available.
         var waveIn = new WaveInEvent
         {
             WaveFormat = new WaveFormat(16000, 16, 1),
@@ -314,7 +406,6 @@ public sealed class BargeInService : IDisposable
         waveIn.DataAvailable += OnCapData;
         waveIn.StartRecording();
         _capture = waveIn;
-        _log.Info("BargeIn: WaveIn capture + echo-cancel VAD (WasapiOut communications render)");
     }
 
     void OnCapData(object? sender, WaveInEventArgs e)
@@ -326,7 +417,6 @@ public sealed class BargeInService : IDisposable
 
     static float[] ToMono16k(WaveFormat fmt, byte[] buffer, int bytes)
     {
-        // PCM 16-bit path
         if (fmt.Encoding != WaveFormatEncoding.Pcm || fmt.BitsPerSample != 16)
             return Array.Empty<float>();
 
@@ -347,7 +437,6 @@ public sealed class BargeInService : IDisposable
         }
 
         if (srcRate == EchoCancelVad.SampleRate) return mono;
-        // Linear resample
         var outLen = (int)(frames * (EchoCancelVad.SampleRate / (double)srcRate));
         if (outLen <= 0) return Array.Empty<float>();
         var dst = new float[outLen];
@@ -385,9 +474,9 @@ public sealed class BargeInService : IDisposable
         AbortPlayback();
         CleanupCapture();
         _output?.Dispose();
+        if (_ownsAudio) _audio.Dispose();
     }
 
-    /// <summary>Sample provider that forwards audio and copies mono 16k taps to a callback.</summary>
     sealed class TapSampleProvider : ISampleProvider
     {
         readonly ISampleProvider _source;
@@ -418,14 +507,13 @@ public sealed class BargeInService : IDisposable
                 _acc.Add(m);
             }
 
-            // Resample accumulated source-rate mono → 16k in ~20ms chunks
             var srcRate = WaveFormat.SampleRate;
             var need = (int)(0.02 * srcRate);
             while (_acc.Count >= need)
             {
                 var chunk = _acc.GetRange(0, need);
                 _acc.RemoveRange(0, need);
-                var outN = EchoCancelVad.SampleRate / 50; // 20ms
+                var outN = EchoCancelVad.SampleRate / 50;
                 var dst = new float[outN];
                 for (var i = 0; i < outN; i++)
                 {

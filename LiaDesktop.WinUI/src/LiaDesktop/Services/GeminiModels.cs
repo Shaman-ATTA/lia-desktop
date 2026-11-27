@@ -221,8 +221,10 @@ public static class GeminiModels
         if (status == 0 || Regex.IsMatch(detail, @"fetch failed|ECONNREFUSED|ENOTFOUND|network|ETIMEDOUT|сете|HttpRequestException", RegexOptions.IgnoreCase))
             return new(GeminiErrorKind.Network, "Нет связи с Gemini. Проверьте интернет.", detail, status);
 
-        if (status is 401 or 403 || (status == 400 && Regex.IsMatch(detail, @"API key|API_KEY|not valid", RegexOptions.IgnoreCase)) ||
-            Regex.IsMatch(detail, @"API key not valid|API_KEY_INVALID|PERMISSION_DENIED", RegexOptions.IgnoreCase))
+        // Auth only on hard 401/403 or explicit key-invalid codes — not every 400 that mentions "API"
+        if (status is 401 or 403 ||
+            Regex.IsMatch(detail, @"API[_ ]?key not valid|API_KEY_INVALID|API_KEY_INVALID_ARGUMENT|PERMISSION_DENIED|UNAUTHENTICATED",
+                RegexOptions.IgnoreCase))
             return new(GeminiErrorKind.Auth, "Ключ API отклонён. Проверьте ключ в Настройках (aistudio.google.com).", detail, status);
 
         if (IsOverload(detail, status))

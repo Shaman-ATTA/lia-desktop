@@ -210,6 +210,16 @@
                     Style="{StaticResource HudGhostButton}"/>
           </Grid>
           <TextBlock x:Name="ModelsHint" Foreground="{StaticResource LiaMuted}" FontSize="11"/>
+          <TextBlock Text="УСТРОЙСТВО ВЫВОДА" Style="{StaticResource HudLabel}"/>
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <ComboBox x:Name="AudioOutBox" HorizontalAlignment="Stretch"/>
+            <Button Grid.Column="1" Content="ПРОВЕРИТЬ ГОЛОС" Margin="8,0,0,0" Click="TestVoice_Click"
+                    Style="{StaticResource HudGhostButton}"/>
+          </Grid>
           <TextBlock Text="РАБОЧАЯ ПАПКА" Style="{StaticResource HudLabel}"/>
           <TextBox x:Name="WorkspaceBox" Style="{StaticResource HudLineInput}"/>
           <CheckBox x:Name="AutostartBox" Content="Запускать вместе с Windows (в трее, ждать «Лиа»)"

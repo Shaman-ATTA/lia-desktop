@@ -1,11 +1,12 @@
 # Changelog
 
-## v0.7.2 — Vision + dialog memory
+## v0.7.2 — Vision + dialog memory + audible Multimedia TTS
 
-- **Vision:** `look_at_screen` + `screenshot` capture primary monitor (DPI-aware physical resolution), downscale long side ≤1600, return JPEG/PNG to Gemini as `inline_data` in the functionResponse user turn. System prompt: look first for «что на экране» / «посмотри» / «нажми на …». Ollama without vision refuses gracefully.
-- **Click map:** `mouse_click` x/y are image-space pixels from the last shot; runtime maps to physical screen (DPI 100–300%).
-- **Dialog memory:** session history (tools included), strip old images keep latest, ~20 turns / soft char budget + summarize; persist `%LOCALAPPDATA%\LiaDesktop\session.json`. Commands «забудь» / «новый разговор» + HUD **НОВЫЙ РАЗГОВОР**. Barge-in stores truncated spoken text.
-- **Selftest:** `vision_live`, `click_map`, `memory_live` / `memory_clear` / `memory_persist` plus prior layout/TTS/barge gates. Release asset `vision_test.png`.
+- **Field fix (inaudible TTS):** playback uses default **Multimedia/Console** render (never Communications); follow default-device changes; WasapiOut → WaveOutEvent fallback; log `TTS → <device>`. Settings: output device picker + **ПРОВЕРИТЬ ГОЛОС**.
+- **Edge TTS:** abrupt WebSocket close without handshake is SUCCESS if audio bytes (or turn.end) already received.
+- **Vision:** `look_at_screen` / `screenshot` → Gemini `inline_data`; DPI click map.
+- **Dialog memory:** session persist, «забудь» / НОВЫЙ РАЗГОВОР, barge truncated spoken.
+- **Selftest:** `render_role`, `render_nondefault_comm`, `playback_rms`, `ws_close_handshake`, `vision_live`, `click_map`, `memory_*` + prior gates.
 
 ## v0.7.1 — Barge-in / natural interruption + real SAPI
 

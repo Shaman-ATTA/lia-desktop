@@ -65,7 +65,7 @@ public sealed class GeminiClient
         CancellationToken ct = default)
     {
         var cfg = _secrets.Load();
-        if (string.IsNullOrWhiteSpace(cfg.ApiKey))
+        if (string.IsNullOrWhiteSpace(cfg.ApiKey?.Trim()))
             throw new HttpRequestException("Нет ключа Gemini. Введите ключ в Настройках.", null, System.Net.HttpStatusCode.Unauthorized);
 
         IReadOnlyList<GeminiModelInfo> listed;
