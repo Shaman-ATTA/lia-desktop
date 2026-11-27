@@ -61,7 +61,12 @@ public partial class App : Application
             var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
             var appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
             var (w, h) = SelfTestRunner.IsSelfTest ? (1024, 720) : ParseSmokeSize();
-            appWindow.Resize(new Windows.Graphics.SizeInt32(w, h));
+            if (appWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter op)
+            {
+                op.IsResizable = true;
+                op.IsMaximizable = true;
+            }
+            appWindow.MoveAndResize(new Windows.Graphics.RectInt32(0, 0, w, h));
             // Maximize / DPI: recreate DX buffers after XAML layout catches up (100% scale TVs)
             appWindow.Changed += (_, e) =>
             {
@@ -73,7 +78,14 @@ public partial class App : Application
                 ScheduleNotify(mw, 400);
             };
             appWindow.Show();
-            Program.BootLog($"AppWindow.Show done size={w}x{h}");
+            Program.BootLog($"AppWindow.Show done size={w}x{h} actual={appWindow.Size.Width}x{appWindow.Size.Height}");
+
+            // CI / field-test: launch small then jump to target (simulates maximize on a TV)
+            if (TryParseSmokeResizeAfter(out var rw, out var rh) && MainWindowInstance is MainWindow main)
+            {
+                Program.BootLog($"smoke-resize-after scheduled → {rw}x{rh}");
+                ScheduleResizeAfter(main, appWindow, rw, rh, 2000);
+            }
         }
         catch (Exception ex)
         {
@@ -90,6 +102,52 @@ public partial class App : Application
         t.Tick += (_, _) =>
         {
             try { mw.NotifyStageResized(); }
+            finally { t.Stop(); }
+        };
+        t.Start();
+    }
+
+    /// <summary>Parse --smoke-resize-after=1920x1080 (jump size after launch).</summary>
+    public static bool TryParseSmokeResizeAfter(out int w, out int h)
+    {
+        w = h = 0;
+        foreach (var a in Environment.GetCommandLineArgs())
+        {
+            if (!a.StartsWith("--smoke-resize-after=", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var parts = a["--smoke-resize-after=".Length..].Split('x', 'X');
+            if (parts.Length == 2
+                && int.TryParse(parts[0], out w) && int.TryParse(parts[1], out h)
+                && w >= 640 && h >= 480)
+                return true;
+        }
+        return false;
+    }
+
+    static void ScheduleResizeAfter(
+        MainWindow mw,
+        Microsoft.UI.Windowing.AppWindow appWindow,
+        int w, int h, int delayMs)
+    {
+        var t = mw.DispatcherQueue.CreateTimer();
+        t.IsRepeating = false;
+        t.Interval = TimeSpan.FromMilliseconds(delayMs);
+        t.Tick += (_, _) =>
+        {
+            try
+            {
+                appWindow.MoveAndResize(new Windows.Graphics.RectInt32(0, 0, w, h));
+                Program.BootLog(
+                    $"smoke-resize-after applied {w}x{h} → AppWindow={appWindow.Size.Width}x{appWindow.Size.Height}");
+                mw.NotifyStageResized();
+                ScheduleNotify(mw, 150);
+                ScheduleNotify(mw, 400);
+                ScheduleNotify(mw, 800);
+            }
+            catch (Exception ex)
+            {
+                Program.BootLog("smoke-resize-after FAILED: " + ex.Message);
+            }
             finally { t.Stop(); }
         };
         t.Start();

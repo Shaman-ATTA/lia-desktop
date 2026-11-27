@@ -145,7 +145,13 @@ public sealed partial class MainWindow : Window
             // Invalidate stage layout so HoloPanel ActualWidth catches up before buffer resize
             StageGrid.InvalidateMeasure();
             StageGrid.InvalidateArrange();
+            UpdateLayout();
             Holo.InvalidateMeasure();
+            Holo.UpdateLayout();
+            Program.BootLog(
+                $"NotifyStageResized root={Root.ActualWidth:0}x{Root.ActualHeight:0} "
+                + $"stage={StageGrid.ActualWidth:0}x{StageGrid.ActualHeight:0} "
+                + $"holo={Holo.ActualWidth:0}x{Holo.ActualHeight:0}");
             Holo.ForceRecreateSwapChain();
         }
         catch (Exception ex) { Program.BootLog("NotifyStageResized: " + ex.Message); }
