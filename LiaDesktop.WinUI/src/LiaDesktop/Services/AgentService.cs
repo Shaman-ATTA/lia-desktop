@@ -276,8 +276,9 @@ public sealed class AgentService
                 var payload = JsonSerializer.Serialize(meta);
                 if (payload.Length > 6000) payload = payload[..6000] + "…";
 
-                // functionResponse-only first (Gemini requires call → response adjacency).
-                // Image follows as sibling parts in the SAME user turn (no extra text-before-FR).
+                // functionResponse must immediately follow the model functionCall turn.
+                // Keep FR parts together; attach vision bytes as sibling inline_data in the
+                // SAME user turn (Gemini accepts this; splitting can break call/response pairing).
                 var fr = new JsonObject
                 {
                     ["functionResponse"] = new JsonObject

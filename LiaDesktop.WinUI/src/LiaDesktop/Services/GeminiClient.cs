@@ -320,13 +320,14 @@ public sealed class GeminiClient
         string? text = null;
         var calls = new List<GeminiFunctionCall>();
         var modelParts = new JsonArray();
+        // Preserve EVERY part verbatim (thought / thoughtSignature / functionCall).
+        // Stripping thought signatures breaks the next generateContent with a 400 about
+        // function-call turn ordering on Gemini 2.x / thinking models.
         foreach (var part in parts.EnumerateArray())
         {
+            modelParts.Add(JsonNode.Parse(part.GetRawText())!);
             if (part.TryGetProperty("text", out var t))
-            {
                 text = (text ?? "") + t.GetString();
-                modelParts.Add(new JsonObject { ["text"] = t.GetString() });
-            }
             if (part.TryGetProperty("functionCall", out var fc))
             {
                 var name = fc.GetProperty("name").GetString() ?? "";
@@ -339,7 +340,6 @@ public sealed class GeminiClient
                             : p.Value.ToString();
                 }
                 calls.Add(new GeminiFunctionCall(name, args));
-                modelParts.Add(JsonNode.Parse(part.GetRawText())!);
             }
         }
 

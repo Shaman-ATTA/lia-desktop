@@ -128,17 +128,22 @@ public sealed class ConversationMemory
         StripOldImagesUnlocked();
 
         while (_contents.Count > MaxTurns * 2) // user+model pairs roughly
-            _contents.RemoveAt(0);
+            DropOldestSafeUnlocked();
 
         // Soft char budget — drop oldest until under budget
         while (EstimateCharsUnlocked() > SoftCharBudget && _contents.Count > 2)
-            _contents.RemoveAt(0);
+        {
+            if (!DropOldestSafeUnlocked()) break;
+        }
 
-        // If still huge, summarize head into one user note
+        // If still huge, summarize head into one user note (never mid tool-exchange)
         if (EstimateCharsUnlocked() > SoftCharBudget && _contents.Count > 4)
         {
             var summary = new StringBuilder("Краткое резюме более раннего разговора: ");
             var take = Math.Min(6, _contents.Count - 2);
+            // Don't cut inside functionCall → functionResponse adjacency
+            while (take > 0 && WouldOrphanToolExchange(take)) take--;
+            if (take <= 0) return;
             for (var i = 0; i < take; i++)
             {
                 var node = _contents[i];
@@ -153,6 +158,73 @@ public sealed class ConversationMemory
                 ["parts"] = new JsonArray(new JsonObject { ["text"] = summary.ToString().Trim() }),
             });
         }
+    }
+
+    /// <summary>
+    /// Drop the oldest content without leaving a model functionCall without its preceding user
+    /// or following functionResponse (Gemini 400: function call turn ordering).
+    /// </summary>
+    bool DropOldestSafeUnlocked()
+    {
+        if (_contents.Count == 0) return false;
+        if (_contents.Count >= 2 && HasFunctionCall(_contents[0]) && HasFunctionResponse(_contents[1]))
+        {
+            // Drop FC + FR together (and the user that preceded FC if present at 0 — rare)
+            _contents.RemoveAt(0);
+            if (_contents.Count > 0 && HasFunctionResponse(_contents[0]))
+                _contents.RemoveAt(0);
+            return true;
+        }
+        if (HasFunctionCall(_contents[0]))
+        {
+            // Orphan FC at head — drop it (broken history)
+            _contents.RemoveAt(0);
+            if (_contents.Count > 0 && HasFunctionResponse(_contents[0]))
+                _contents.RemoveAt(0);
+            return true;
+        }
+        _contents.RemoveAt(0);
+        // If next is model FC, keep dropping until after its FR so we don't start with FC
+        while (_contents.Count > 0 && HasFunctionCall(_contents[0]))
+        {
+            _contents.RemoveAt(0);
+            if (_contents.Count > 0 && HasFunctionResponse(_contents[0]))
+                _contents.RemoveAt(0);
+        }
+        return true;
+    }
+
+    bool WouldOrphanToolExchange(int take)
+    {
+        if (take <= 0 || take >= _contents.Count) return true;
+        // If we cut right after a functionCall model turn, FR would be orphaned at new head
+        if (HasFunctionCall(_contents[take - 1])) return true;
+        if (take < _contents.Count && HasFunctionCall(_contents[take])) return true;
+        return false;
+    }
+
+    static bool HasFunctionCall(JsonNode? node)
+    {
+        if (node is not JsonObject obj) return false;
+        if (obj["parts"] is not JsonArray parts) return false;
+        foreach (var p in parts)
+        {
+            if (p is JsonObject po && (po["functionCall"] != null || po["function_call"] != null))
+                return true;
+        }
+        return false;
+    }
+
+    static bool HasFunctionResponse(JsonNode? node)
+    {
+        if (node is not JsonObject obj) return false;
+        if (obj["parts"] is not JsonArray parts) return false;
+        foreach (var p in parts)
+        {
+            if (p is JsonObject po && (po["functionResponse"] != null || po["function_response"] != null))
+                return true;
+        }
+        return false;
     }
 
     void StripOldImagesUnlocked()
