@@ -291,9 +291,18 @@ public sealed class GeminiClient
             Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
         };
 
-        // Per-attempt ~25s (abort CT still cancels immediately).
+        // Per-attempt ~25s; vision turns with inline_data need more headroom.
+        var attemptLimit = AttemptTimeout;
+        try
+        {
+            var blob = contents.ToJsonString();
+            if (blob.Contains("inline_data", StringComparison.OrdinalIgnoreCase) ||
+                blob.Contains("inlineData", StringComparison.OrdinalIgnoreCase))
+                attemptLimit = TimeSpan.FromSeconds(60);
+        }
+        catch { /* keep default */ }
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(AttemptTimeout);
+        timeoutCts.CancelAfter(attemptLimit);
         using var res = await _http.SendAsync(req, timeoutCts.Token);
         var json = await res.Content.ReadAsStringAsync(ct);
         if (!res.IsSuccessStatusCode)

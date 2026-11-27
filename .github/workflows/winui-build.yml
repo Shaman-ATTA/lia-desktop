@@ -103,11 +103,11 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command 7z -ErrorAction SilentlyContinue) {
-            7z a -tzip -mx=9 LiaDesktop-0.7.1-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
+            7z a -tzip -mx=9 LiaDesktop-0.7.2-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
           } else {
-            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.1-win-x64.zip -CompressionLevel Optimal -Force
+            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.2-win-x64.zip -CompressionLevel Optimal -Force
           }
-          Get-Item LiaDesktop-0.7.1-win-x64.zip | Format-List Name,Length
+          Get-Item LiaDesktop-0.7.2-win-x64.zip | Format-List Name,Length
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -120,10 +120,10 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found" }
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           & $iscc /Q installer\LiaDesktop.iss
-          $setup = Get-Item artifacts\LiaDesktop-0.7.1-setup.exe
-          Copy-Item $setup.FullName .\LiaDesktop-0.7.1-setup.exe -Force
+          $setup = Get-Item artifacts\LiaDesktop-0.7.2-setup.exe
+          Copy-Item $setup.FullName .\LiaDesktop-0.7.2-setup.exe -Force
           $setup | Format-List Name,Length
-          $zip = Get-Item LiaDesktop-0.7.1-win-x64.zip
+          $zip = Get-Item LiaDesktop-0.7.2-win-x64.zip
           Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
 
       - name: E2E selftest (mock Gemini + optional live key)
@@ -159,11 +159,11 @@ jobs:
               '--smoke-size=1024x720'
             )
             $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
-            $deadline = (Get-Date).AddMinutes(8)
+            $deadline = (Get-Date).AddMinutes(14)
             while (-not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2; $p.Refresh() }
             if (-not $p.HasExited) {
               try { $p.Kill($true) } catch {}
-              throw "selftest timed out (>8min)"
+              throw "selftest timed out (>14min)"
             }
             if (Test-Path $out) { Get-Content $out | Out-Host } else { Write-Warning "selftest.txt missing" }
             if ($p.ExitCode -ne 0) { throw "selftest exit $($p.ExitCode)" }
@@ -172,8 +172,21 @@ jobs:
             if ($txt -notmatch 'SELFTEST PASS') { throw "selftest.txt missing PASS marker" }
             if ($txt -notmatch 'tts_ws_only: PASS') { throw "selftest missing tts_ws_only PASS" }
             if ($txt -notmatch 'tts_sapi: PASS') { throw "selftest missing tts_sapi PASS" }
+            if ($txt -notmatch 'click_map: PASS') { throw "selftest missing click_map PASS" }
+            if ($txt -notmatch 'PASS memory_live') { throw "selftest missing memory_live PASS" }
+            if ($txt -notmatch 'PASS memory_clear') { throw "selftest missing memory_clear PASS" }
+            if ($txt -notmatch 'memory_persist: PASS') { throw "selftest missing memory_persist PASS" }
+            if ($hasLive) {
+              if ($txt -notmatch 'PASS vision_live') { throw "selftest missing vision_live PASS (live key present)" }
+            } else {
+              if ($txt -notmatch 'vision_live: SKIP') { Write-Warning "vision_live skipped (no key)" }
+            }
             if ($txt -match 'operation was canceled') { throw "selftest reported canceled" }
-            Write-Host "selftest ok (incl. tts_ws_only + tts_sapi)"
+            Write-Host "selftest ok (tts + barge + vision/memory gates)"
+            $vt = Join-Path (Split-Path $exe) 'vision_test.png'
+            if (Test-Path $vt) { Copy-Item $vt (Join-Path $PWD 'vision_test.png') -Force; Write-Host "copied vision_test.png" }
+            elseif (Test-Path (Join-Path $PWD 'vision_test.png')) { Write-Host "vision_test.png already in cwd" }
+            else { Write-Warning "vision_test.png missing after selftest" }
           }
           finally {
             try { Stop-Process -Id $mock.Id -Force -ErrorAction SilentlyContinue } catch {}
@@ -540,7 +553,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $PWD 'LiaDesktop-0.7.1-setup.exe'
+          $setup = Join-Path $PWD 'LiaDesktop-0.7.2-setup.exe'
           if (-not (Test-Path $setup)) { throw "setup missing" }
           $dir = Join-Path $env:LOCALAPPDATA 'LiaDesktop-smoke'
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
@@ -566,8 +579,8 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.7.1-win-x64.zip
-            LiaDesktop-0.7.1-setup.exe
+            LiaDesktop-0.7.2-win-x64.zip
+            LiaDesktop-0.7.2-setup.exe
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_profile.png
@@ -580,6 +593,7 @@ jobs:
             layout_*.png
             layout_window_max.png
             selftest.txt
+            vision_test.png
             tasklist_before.txt
             tasklist_after.txt
           if-no-files-found: warn
@@ -593,13 +607,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.1** — Barge-in + real SAPI TTS + layout_window_max
+          Lia Desktop **v0.7.2** — Vision (look_at_screen) + dialog memory
 
-          - Mic stays open while speaking: WASAPI communications AEC + echo-cancel VAD (≥300ms)
-          - Backchannel resume / stop / new-request with spoken-so-far context; HUD СЛУШАЮ
-          - Edge TTS ru-RU-SvetlanaNeural; offline System.Speech/SAPI with ≥10KB audible PCM gate
-          - Live maximized HWND shot `layout_window_max.png` + exact 1920/4K offscreen dumps
-          - E2E `--selftest`: tts_ws_only, tts_sapi (RMS), barge_*; see selftest.txt
+          - `look_at_screen` / `screenshot` return DPI-aware capture to Gemini as inline_data
+          - mouse_click maps downscaled image coords → physical pixels (DPI 100–300%)
+          - Session dialog memory (%LOCALAPPDATA%), «забудь»/НОВЫЙ РАЗГОВОР, barge truncated spoken
+          - Selftest: vision_live, click_map, memory_live/clear/persist + prior TTS/barge/layout gates
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -607,11 +620,11 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           fi
-          for f in LiaDesktop-0.7.1-win-x64.zip LiaDesktop-0.7.1-setup.exe \
+          for f in LiaDesktop-0.7.2-win-x64.zip LiaDesktop-0.7.2-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
                    desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt \
-                   tasklist_before.txt tasklist_after.txt layout_*.png; do
+                   tasklist_before.txt tasklist_after.txt vision_test.png layout_*.png; do
             for m in $f; do
               if [ -f "$m" ]; then
                 gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber
@@ -624,25 +637,25 @@ jobs:
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      - name: Mirror + publish Latest v0.7.1 on main pushes
+      - name: Mirror + publish Latest v0.7.2 on main pushes
         if: success() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.7.1
+          TAG=v0.7.2
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.1** — Barge-in + real SAPI TTS + layout_window_max
+          Lia Desktop **v0.7.2** — Vision (look_at_screen) + dialog memory
 
-          - Mic open while speaking (WASAPI AEC + echo-VAD); backchannel / stop / new-request
-          - System.Speech/SAPI audible PCM gate (≥10KB + RMS); Edge SvetlanaNeural
-          - layout_window_max.png + exact 1920/4K dumps; selftest.txt
+          - Screen vision via Gemini inline_data; DPI-aware click mapping
+          - Dialog memory persist + «забудь» / HUD НОВЫЙ РАЗГОВОР
+          - Selftest: vision_live, click_map, memory_*; layout + TTS + barge retained
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES" || true
-          for f in LiaDesktop-0.7.1-win-x64.zip LiaDesktop-0.7.1-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt layout_*.png; do
+          for f in LiaDesktop-0.7.2-win-x64.zip LiaDesktop-0.7.2-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt vision_test.png layout_*.png; do
             for m in $f; do
               [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
             done

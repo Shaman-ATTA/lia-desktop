@@ -101,6 +101,8 @@
                  AcceptsReturn="False" KeyDown="CommandBox_KeyDown"/>
         <Button Content="ОТПРАВИТЬ" Click="Send_Click" Style="{StaticResource HudGhostButton}"
                 HorizontalAlignment="Stretch"/>
+        <Button Content="НОВЫЙ РАЗГОВОР" Click="ClearMemory_Click" Style="{StaticResource HudGhostButton}"
+                HorizontalAlignment="Stretch" Margin="0,4,0,0"/>
         <Border Height="1" Background="{StaticResource LiaHairline}" Margin="0,6,0,2"/>
         <TextBlock Text="СИСТЕМА" Style="{StaticResource HudLabel}"/>
         <TextBlock x:Name="SysPanel" Style="{StaticResource HudMono}" TextWrapping="Wrap"/>

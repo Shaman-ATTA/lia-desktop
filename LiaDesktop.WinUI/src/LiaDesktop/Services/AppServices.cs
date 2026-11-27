@@ -13,6 +13,7 @@ public sealed class AppServices
     public SpeechListen Speech { get; } = new();
     public MicGeminiListen MicGemini { get; private set; } = null!;
     public BargeInService BargeIn { get; private set; } = null!;
+    public ConversationMemory Memory { get; private set; } = null!;
     public LiaConfig Config { get; private set; } = new();
 
     /// <summary>True when Windows ru-RU speech works; otherwise Gemini mic is the default.</summary>
@@ -26,7 +27,8 @@ public sealed class AppServices
         Tts = new EdgeTts(Log);
         Tools = new ToolHost(Log, () => Secrets.Load().WorkspacePath);
         BargeIn = new BargeInService(Gemini, Log);
-        Agent = new AgentService(Gemini, Secrets, Log, Tools, Tts, BargeIn);
+        Memory = new ConversationMemory(Log);
+        Agent = new AgentService(Gemini, Secrets, Log, Tools, Tts, BargeIn, Memory);
         MicGemini = new MicGeminiListen(Gemini, Log);
         _ = Gemini.EnsureModelAsync();
         _ = InitSpeechAsync();

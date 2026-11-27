@@ -40,6 +40,7 @@ public static class Program
                 var dir = Path.Combine(Path.GetTempPath(), "LiaDesktop-selftest-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(dir);
                 SecretsStore.ConfigDirOverride = dir;
+                ConversationMemory.PathOverride = Path.Combine(dir, "session.json");
                 BootLog($"selftest config dir={dir}");
                 BootLog($"gemini base={GeminiEndpoints.Base}");
             }

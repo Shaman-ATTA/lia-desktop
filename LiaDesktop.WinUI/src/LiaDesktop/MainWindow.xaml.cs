@@ -790,6 +790,12 @@ public sealed partial class MainWindow : Window
     }
 
     void Send_Click(object sender, RoutedEventArgs e) => _ = SendAsync();
+    void ClearMemory_Click(object sender, RoutedEventArgs e)
+    {
+        StatusCaption.Text = "ОЖИДАНИЕ";
+        Subtitle.Text = "Новый разговор — память очищена";
+        _ = _s.Agent.RunAsync("забудь");
+    }
     void CommandBox_KeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key == Windows.System.VirtualKey.Enter) _ = SendAsync();

@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Playwright;
@@ -13,6 +11,9 @@ public sealed class ToolHost : IAsyncDisposable
     readonly Func<string> _workspace;
     IPlaywright? _pw;
     IBrowserContext? _browser;
+
+    /// <summary>Last look_at_screen / screenshot — used to map image coords → physical.</summary>
+    public ScreenShot? LastShot { get; private set; }
 
     public ToolHost(AppLog log, Func<string> workspace)
     {
@@ -28,13 +29,15 @@ public sealed class ToolHost : IAsyncDisposable
             "read_file" => ReadFile(args.GetValueOrDefault("path") ?? ""),
             "write_file" => WriteFile(args.GetValueOrDefault("path") ?? "", args.GetValueOrDefault("content") ?? ""),
             "run_powershell" => await RunPsAsync(args.GetValueOrDefault("command") ?? "", ct),
-            "screenshot" => Screenshot(args.GetValueOrDefault("path")),
+            "screenshot" => CaptureScreen(args.GetValueOrDefault("path")),
+            "look_at_screen" => CaptureScreen(args.GetValueOrDefault("path")),
             "browser_open" => await BrowserOpenAsync(args.GetValueOrDefault("url") ?? "about:blank"),
             "browser_close" => await BrowserCloseAsync(),
             "type_text" => TypeText(args.GetValueOrDefault("text") ?? ""),
             "mouse_click" => MouseClick(
                 int.TryParse(args.GetValueOrDefault("x"), out var x) ? x : 0,
-                int.TryParse(args.GetValueOrDefault("y"), out var y) ? y : 0),
+                int.TryParse(args.GetValueOrDefault("y"), out var y) ? y : 0,
+                args.GetValueOrDefault("physical")),
             _ => new { error = "unknown tool" },
         };
     }
@@ -97,18 +100,16 @@ public sealed class ToolHost : IAsyncDisposable
         };
     }
 
-    object Screenshot(string? path)
+    ScreenShot CaptureScreen(string? path)
     {
-        path ??= Path.Combine(_workspace(), $"shot-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+        path ??= Path.Combine(_workspace(), $"shot-{DateTime.Now:yyyyMMdd-HHmmss}.jpg");
         path = Resolve(path);
-        var w = GetSystemMetrics(0);
-        var h = GetSystemMetrics(1);
-        using var bmp = new Bitmap(w, h);
-        using (var g = Graphics.FromImage(bmp))
-            g.CopyFromScreen(0, 0, 0, 0, new Size(w, h));
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        bmp.Save(path, ImageFormat.Png);
-        return new { ok = true, path };
+        // Prefer JPEG for Gemini size; keep .png if caller asked for png
+        var jpeg = !path.EndsWith(".png", StringComparison.OrdinalIgnoreCase);
+        var shot = ScreenCapture.CapturePrimary(path, jpeg);
+        LastShot = shot;
+        _log.Info($"screen {shot.PhysicalWidth}x{shot.PhysicalHeight}@{shot.Dpi}dpi → {shot.ImageWidth}x{shot.ImageHeight}");
+        return shot;
     }
 
     async Task<object> BrowserOpenAsync(string url)
@@ -149,12 +150,20 @@ public sealed class ToolHost : IAsyncDisposable
         return new { ok = true, len = text.Length };
     }
 
-    object MouseClick(int x, int y)
+    object MouseClick(int x, int y, string? physicalFlag)
     {
-        SetCursorPos(x, y);
+        var forcePhysical = string.Equals(physicalFlag, "1", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(physicalFlag, "true", StringComparison.OrdinalIgnoreCase);
+        int px = x, py = y;
+        if (!forcePhysical && LastShot != null)
+        {
+            px = LastShot.ImageToPhysicalX(x);
+            py = LastShot.ImageToPhysicalY(y);
+        }
+        SetCursorPos(px, py);
         mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
         mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-        return new { ok = true, x, y };
+        return new { ok = true, image_x = x, image_y = y, physical_x = px, physical_y = py };
     }
 
     string Resolve(string path)
@@ -177,7 +186,6 @@ public sealed class ToolHost : IAsyncDisposable
         SendInput(2, inputs, Marshal.SizeOf<INPUT>());
     }
 
-    [DllImport("user32.dll")] static extern int GetSystemMetrics(int nIndex);
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
     [DllImport("user32.dll")] static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);

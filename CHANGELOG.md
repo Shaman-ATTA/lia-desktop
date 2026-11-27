@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.2 — Vision + dialog memory
+
+- **Vision:** `look_at_screen` + `screenshot` capture primary monitor (DPI-aware physical resolution), downscale long side ≤1600, return JPEG/PNG to Gemini as `inline_data` in the functionResponse user turn. System prompt: look first for «что на экране» / «посмотри» / «нажми на …». Ollama without vision refuses gracefully.
+- **Click map:** `mouse_click` x/y are image-space pixels from the last shot; runtime maps to physical screen (DPI 100–300%).
+- **Dialog memory:** session history (tools included), strip old images keep latest, ~20 turns / soft char budget + summarize; persist `%LOCALAPPDATA%\LiaDesktop\session.json`. Commands «забудь» / «новый разговор» + HUD **НОВЫЙ РАЗГОВОР**. Barge-in stores truncated spoken text.
+- **Selftest:** `vision_live`, `click_map`, `memory_live` / `memory_clear` / `memory_persist` plus prior layout/TTS/barge gates. Release asset `vision_test.png`.
+
 ## v0.7.1 — Barge-in / natural interruption + real SAPI
 
 - **Mic open while speaking:** WASAPI communications capture (OS AEC) + software echo-cancel VAD; ≥300ms user speech barges in.

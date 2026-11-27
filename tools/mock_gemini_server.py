@@ -8,7 +8,7 @@ Endpoints:
   GET  /_control/health
 
 Scenarios:
-  normal       — 200 with Russian reply
+  normal       — 200 with Russian reply (memory-aware)
   overload503  — 503 once, then 200 (matches client: retry once)
   retry429     — 429 + Retry-After: 1, then 200
   slow20       — sleep 20s, then 200
@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18765
 STATE = {"scenario": "normal", "hits": 0}
@@ -62,22 +62,151 @@ MODELS = {
     ]
 }
 
-OK_REPLY = {
-    "candidates": [
-        {
-            "content": {
-                "role": "model",
-                "parts": [{"text": "Привет! Я Лиа, на связи. Чем помочь?"}],
-            }
-        }
-    ]
-}
-
 
 def set_scenario(name: str) -> None:
     with LOCK:
         STATE["scenario"] = name
         STATE["hits"] = 0
+
+
+def extract_texts(body: dict) -> list[str]:
+    out: list[str] = []
+    for c in body.get("contents") or []:
+        for p in c.get("parts") or []:
+            t = p.get("text")
+            if isinstance(t, str) and t.strip():
+                out.append(t)
+            fr = p.get("functionResponse") or {}
+            resp = fr.get("response") or {}
+            content = resp.get("content")
+            if isinstance(content, str) and content.strip():
+                out.append(content)
+    return out
+
+
+def has_inline_image(body: dict) -> bool:
+    for c in body.get("contents") or []:
+        for p in c.get("parts") or []:
+            if p.get("inline_data") or p.get("inlineData"):
+                return True
+    return False
+
+
+def last_user_text(body: dict) -> str:
+    texts = []
+    for c in body.get("contents") or []:
+        if (c.get("role") or "") != "user":
+            continue
+        for p in c.get("parts") or []:
+            t = p.get("text")
+            if isinstance(t, str) and t.strip() and not t.startswith("Изображение экрана"):
+                texts.append(t)
+    return texts[-1] if texts else ""
+
+
+def smart_reply(body: dict) -> dict:
+    """Memory + vision-aware reply for normal scenario."""
+    all_text = " ".join(extract_texts(body))
+    last = last_user_text(body)
+    low = last.lower()
+    blob = all_text.lower()
+
+    # Vision: ask to look → functionCall first; after image → read marker
+    vision_ask = any(
+        k in low
+        for k in (
+            "что на экране",
+            "посмотри",
+            "что написано",
+            "написано на экране",
+        )
+    )
+    if vision_ask and not has_inline_image(body):
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "look_at_screen",
+                                    "args": {},
+                                }
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+    if vision_ask and has_inline_image(body):
+        # Live OCR not available in mock — if marker leaked via prior text, echo it;
+        # otherwise a generic screen description (vision_live uses real Gemini).
+        marker = "7429" if "7429" in all_text else "экран"
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "text": f"На экране вижу тест: ЛИА ТЕСТ {marker}."
+                                if marker == "7429"
+                                else "На экране вижу рабочий стол."
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+
+    # Memory recall
+    if ("как меня зовут" in low) or ("какое число" in low) or (
+        "зовут" in low and "число" in low
+    ):
+        if "слава" in blob and "58" in blob and "[прервано" not in low:
+            # After clear, history should not contain both — but also check turn count
+            # Prefer: if user asked to forget earlier and no remember after
+            forgot = "забудь" in blob or "новый разговор" in blob or "память очищена" in blob
+            # Find last remember vs forget
+            remember_idx = max(blob.rfind("меня зовут"), blob.rfind("запомни"))
+            forget_idx = max(blob.rfind("забудь"), blob.rfind("новый разговор"))
+            if forget_idx > remember_idx >= 0:
+                text = "Не помню — память очищена, числа нет."
+            elif "слава" in blob and "58" in all_text:
+                text = "Тебя зовут Слава, число 58."
+            else:
+                text = "Не помню имени и числа."
+        else:
+            text = "Не помню — память пуста."
+        return {
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": text}]}}
+            ]
+        }
+
+    if "меня зовут" in low or "запомни" in low:
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Запомнила, Слава, число 58."}],
+                    }
+                }
+            ]
+        }
+
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Привет! Я Лиа, на связи. Чем помочь?"}],
+                }
+            }
+        ]
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -112,7 +241,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         length = int(self.headers.get("Content-Length", "0") or 0)
-        _ = self.rfile.read(length) if length else b""
+        raw = self.rfile.read(length) if length else b""
+        body: dict = {}
+        if raw:
+            try:
+                body = json.loads(raw.decode("utf-8", errors="replace"))
+            except Exception:
+                body = {}
 
         m = re.match(r"^/_control/scenario/([\w\-]+)$", path)
         if m:
@@ -166,7 +301,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         # normal / after retries / slow20 / badmodel fallback complete
-        self._json(200, OK_REPLY)
+        self._json(200, smart_reply(body))
 
 
 def main() -> None:

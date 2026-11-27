@@ -11,9 +11,18 @@ public sealed class AgentService
     public const string SystemPrompt =
         "Ты — Лиа, женский голосовой ИИ-ассистент ATTA CORP (N-33). Отвечай коротко по-русски, тёплым живым тоном, женский род. " +
         "Ты управляешь ПК пользователя (личное некоммерческое использование). Кратко озвучивай действия. " +
-        "Когда нужно — вызывай инструменты (файлы, PowerShell, браузер, скриншот, мышь/клавиатура).";
+        "Когда нужно — вызывай инструменты (файлы, PowerShell, браузер, экран, мышь/клавиатура). " +
+        "Если пользователь спрашивает «что на экране», «посмотри», «нажми на …» — сначала вызови look_at_screen " +
+        "(или screenshot), дождись изображения, опиши экран и кликай mouse_click по координатам ЭТОГО изображения. " +
+        "Помни факты из текущего разговора, пока пользователь не скажет «забудь» / «новый разговор».";
 
     static readonly Regex StopRe = new(@"лиа[,\s]+стоп", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex ClearMemRe = new(
+        @"^\s*(забудь|новый\s+разговор|новый\s+диалог|очисти\s+память)\s*[.!]?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.IgnorePatternWhitespace);
+    static readonly Regex VisionAskRe = new(
+        @"что\s+на\s+экране|посмотри|нажми\s+на|что\s+написано",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     readonly GeminiClient _gemini;
     readonly SecretsStore _secrets;
@@ -21,6 +30,7 @@ public sealed class AgentService
     readonly ToolHost _tools;
     readonly EdgeTts _tts;
     readonly BargeInService _barge;
+    readonly ConversationMemory _memory;
     CancellationTokenSource? _cts;
     string? _activeReply;
 
@@ -31,6 +41,7 @@ public sealed class AgentService
     public event Action? BargeInEnded;
 
     public string? ActiveReply => _activeReply;
+    public ConversationMemory Memory => _memory;
 
     public AgentService(
         GeminiClient gemini,
@@ -38,7 +49,8 @@ public sealed class AgentService
         AppLog log,
         ToolHost tools,
         EdgeTts tts,
-        BargeInService barge)
+        BargeInService barge,
+        ConversationMemory? memory = null)
     {
         _gemini = gemini;
         _secrets = secrets;
@@ -46,6 +58,7 @@ public sealed class AgentService
         _tools = tools;
         _tts = tts;
         _barge = barge;
+        _memory = memory ?? new ConversationMemory(log);
 
         _barge.MouthStop += () => Mouth?.Invoke(0, 0, 0);
         _barge.Listening += () => BargeInListening?.Invoke();
@@ -61,13 +74,29 @@ public sealed class AgentService
         _log.Info("Остановлено.");
     }
 
+    public void ClearMemory()
+    {
+        _memory.Clear();
+        _log.Info("Память очищена (HUD/команда).");
+    }
+
     public static bool IsStopPhrase(string text) => StopRe.IsMatch(text);
+    public static bool IsClearMemoryPhrase(string text) => ClearMemRe.IsMatch(text?.Trim() ?? "");
 
     public async Task RunAsync(string userText)
     {
         if (IsStopPhrase(userText))
         {
             Abort();
+            return;
+        }
+
+        if (IsClearMemoryPhrase(userText))
+        {
+            ClearMemory();
+            _cts?.Cancel();
+            _cts = new CancellationTokenSource();
+            await SpeakReplyAsync("Хорошо, начинаем новый разговор.", _cts.Token);
             return;
         }
 
@@ -159,6 +188,8 @@ public sealed class AgentService
             {
                 case InterruptKind.Stop:
                     _log.Info("Barge-in: стоп — молчу.");
+                    if (!string.IsNullOrWhiteSpace(spoken))
+                        _memory.AppendSpokenTruncated(spoken);
                     _activeReply = null;
                     _cts?.Cancel();
                     BargeInEnded?.Invoke();
@@ -180,6 +211,8 @@ public sealed class AgentService
                 case InterruptKind.NewRequest:
                 default:
                     _log.Info("Barge-in: новый запрос.");
+                    if (!string.IsNullOrWhiteSpace(spoken))
+                        _memory.AppendSpokenTruncated(spoken);
                     _activeReply = null;
                     _cts?.Cancel();
                     var ctx =
@@ -202,14 +235,8 @@ public sealed class AgentService
 
     async Task<string> GeminiAgentLoopAsync(string userText, CancellationToken ct)
     {
-        var contents = new JsonArray
-        {
-            new JsonObject
-            {
-                ["role"] = "user",
-                ["parts"] = new JsonArray(new JsonObject { ["text"] = userText }),
-            },
-        };
+        _memory.AppendUserText(userText);
+        var contents = _memory.Snapshot();
 
         for (var step = 0; step < 8; step++)
         {
@@ -217,13 +244,13 @@ public sealed class AgentService
             var turn = await _gemini.GenerateTurnAsync(SystemPrompt, contents, ToolDefs.Declarations, ct);
 
             if (turn.Calls.Count == 0)
-                return string.IsNullOrWhiteSpace(turn.Text) ? "Готово." : turn.Text;
-
-            contents.Add(new JsonObject
             {
-                ["role"] = "model",
-                ["parts"] = turn.ModelParts.DeepClone(),
-            });
+                var text = string.IsNullOrWhiteSpace(turn.Text) ? "Готово." : turn.Text;
+                _memory.AppendModelParts(new JsonArray(new JsonObject { ["text"] = text }));
+                return text;
+            }
+
+            _memory.AppendModelParts(turn.ModelParts);
 
             var responseParts = new JsonArray();
             foreach (var call in turn.Calls)
@@ -238,7 +265,10 @@ public sealed class AgentService
                 {
                     result = new { error = ex.Message };
                 }
-                var payload = JsonSerializer.Serialize(result);
+
+                ScreenShot? shot = result as ScreenShot;
+                object meta = shot?.Meta() ?? result;
+                var payload = JsonSerializer.Serialize(meta);
                 if (payload.Length > 6000) payload = payload[..6000] + "…";
                 responseParts.Add(new JsonObject
                 {
@@ -252,12 +282,29 @@ public sealed class AgentService
                         },
                     },
                 });
+
+                // Vision: send captured image as inline_data in the same user turn
+                if (shot != null && !string.IsNullOrEmpty(shot.Base64))
+                {
+                    responseParts.Add(new JsonObject
+                    {
+                        ["text"] =
+                            $"Изображение экрана ({shot.ImageWidth}x{shot.ImageHeight}, " +
+                            $"physical {shot.PhysicalWidth}x{shot.PhysicalHeight} @{shot.Dpi}dpi). " +
+                            "Координаты для mouse_click — в пикселях этого изображения.",
+                    });
+                    responseParts.Add(new JsonObject
+                    {
+                        ["inline_data"] = new JsonObject
+                        {
+                            ["mime_type"] = shot.MimeType,
+                            ["data"] = shot.Base64,
+                        },
+                    });
+                }
             }
-            contents.Add(new JsonObject
-            {
-                ["role"] = "user",
-                ["parts"] = responseParts,
-            });
+            _memory.AppendUserParts(responseParts);
+            contents = _memory.Snapshot();
         }
 
         return "Готово (лимит шагов агента).";
@@ -283,21 +330,46 @@ public sealed class AgentService
 
     async Task<string> OllamaChatAsync(LiaConfig cfg, string userText, CancellationToken ct)
     {
+        if (VisionAskRe.IsMatch(userText))
+        {
+            return "Сейчас я на Ollama без зрения — экран не вижу. Переключись на Gemini, и посмотрю.";
+        }
+
+        // Keep short local history for Ollama too (text-only)
+        _memory.AppendUserText(userText);
+        var hist = _memory.Snapshot();
+        var messages = new List<object> { new { role = "system", content = SystemPrompt } };
+        foreach (var node in hist)
+        {
+            if (node is not JsonObject obj) continue;
+            var role = obj["role"]?.GetValue<string>() ?? "user";
+            var text = "";
+            if (obj["parts"] is JsonArray parts)
+            {
+                foreach (var p in parts)
+                {
+                    if (p is JsonObject po && po["text"] is JsonValue tv)
+                        text += tv.GetValue<string>() + " ";
+                }
+            }
+            text = text.Trim();
+            if (string.IsNullOrWhiteSpace(text)) continue;
+            messages.Add(new { role = role == "model" ? "assistant" : "user", content = text });
+        }
+
         using var http = new HttpClient { BaseAddress = new Uri(cfg.BaseUrl.TrimEnd('/') + "/") };
         var body = new
         {
             model = string.IsNullOrWhiteSpace(cfg.Model) ? "qwen2.5-vl" : cfg.Model,
-            messages = new object[]
-            {
-                new { role = "system", content = SystemPrompt },
-                new { role = "user", content = userText },
-            },
+            messages,
             stream = false,
         };
         using var res = await http.PostAsJsonAsync("chat/completions", body, ct);
         res.EnsureSuccessStatusCode();
         using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
-        return doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
+        var reply = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
                ?? "Готово.";
+        _memory.AppendModelParts(new JsonArray(new JsonObject { ["text"] = reply }));
+        return reply;
     }
 }

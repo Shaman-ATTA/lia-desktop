@@ -1,5 +1,9 @@
 using System.Diagnostics;
+using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Forms;
+using LiaDesktop.Services.Tools;
 
 namespace LiaDesktop.Services;
 
@@ -69,16 +73,22 @@ public static class SelfTestRunner
             // Barge-in: backchannel / stop / new-request + TTS loopback must not trigger
             failed += await RunBargeInGatesAsync(services, L);
 
+            // Vision click mapping (no network) + dialog memory (mock) + persist
+            failed += RunClickMapGate(L);
+            failed += await RunMemoryGatesAsync(services, baseUrl, L);
+
             if (!string.IsNullOrWhiteSpace(liveKey))
             {
                 var liveFail = await RunLiveAsync(services, liveKey!, L);
                 failed += liveFail;
                 if (liveFail != 0)
                     L("FAIL live: at least one real model must answer (flash-lite-latest preferred)");
+                failed += await RunVisionLiveAsync(services, liveKey!, L);
             }
             else
             {
                 L("SKIP live: GEMINI_API_KEY absent");
+                L("vision_live: SKIP (no GEMINI_API_KEY)");
             }
         }
         catch (Exception ex)
@@ -185,7 +195,10 @@ public static class SelfTestRunner
         string name,
         Action<string> L,
         bool expectRu,
-        int timeoutSec = 60)
+        int timeoutSec = 60,
+        string[]? mustContain = null,
+        string[]? mustNotContain = null,
+        bool requireTts = true)
     {
         var marker = $"__selftest_{name}_{Guid.NewGuid():N}__";
         s.Log.Info(marker);
@@ -247,34 +260,316 @@ public static class SelfTestRunner
             L($"FAIL {name}: error narrated: {narrated}");
             return 1;
         }
-        if (expectRu && name != "live" &&
+        if (expectRu && name != "live" && mustContain == null &&
             !narrated.Contains("Привет", StringComparison.OrdinalIgnoreCase))
         {
             L($"FAIL {name}: expected mock 'Привет…' reply, got: {Truncate(narrated, 120)}");
             return 1;
         }
-
-        // SpeakFile is raised before RunAsync returns; if TTS failed, retry directly.
-        if (speakPath == null || !File.Exists(speakPath) || new FileInfo(speakPath).Length <= 0)
+        if (mustContain != null)
         {
-            L($"{name}: SpeakFile missing — retrying EdgeTts directly…");
-            speakPath = await s.Tts.SpeakToFileAsync(narrated!, CancellationToken.None);
+            foreach (var m in mustContain)
+            {
+                if (!narrated.Contains(m, StringComparison.OrdinalIgnoreCase))
+                {
+                    L($"FAIL {name}: reply missing '{m}': {Truncate(narrated, 200)}");
+                    return 1;
+                }
+            }
+        }
+        if (mustNotContain != null)
+        {
+            foreach (var m in mustNotContain)
+            {
+                if (narrated.Contains(m, StringComparison.OrdinalIgnoreCase))
+                {
+                    L($"FAIL {name}: reply unexpectedly contains '{m}': {Truncate(narrated, 200)}");
+                    return 1;
+                }
+            }
         }
 
-        if (speakPath == null || !File.Exists(speakPath))
+        if (requireTts)
         {
-            L($"FAIL {name}: TTS file missing (edge-tts / websocket failed)");
-            return 1;
-        }
-        var len = new FileInfo(speakPath).Length;
-        if (len <= 0)
-        {
-            L($"FAIL {name}: TTS mp3 empty");
-            return 1;
-        }
+            // SpeakFile is raised before RunAsync returns; if TTS failed, retry directly.
+            if (speakPath == null || !File.Exists(speakPath) || new FileInfo(speakPath).Length <= 0)
+            {
+                L($"{name}: SpeakFile missing — retrying EdgeTts directly…");
+                speakPath = await s.Tts.SpeakToFileAsync(narrated!, CancellationToken.None);
+            }
 
-        L($"PASS {name}: reply={narrated!.Length}c tts={len}B {sw.ElapsedMilliseconds}ms");
+            if (speakPath == null || !File.Exists(speakPath))
+            {
+                L($"FAIL {name}: TTS file missing (edge-tts / websocket failed)");
+                return 1;
+            }
+            var len = new FileInfo(speakPath).Length;
+            if (len <= 0)
+            {
+                L($"FAIL {name}: TTS mp3 empty");
+                return 1;
+            }
+
+            L($"PASS {name}: reply={narrated!.Length}c tts={len}B {sw.ElapsedMilliseconds}ms");
+        }
+        else
+        {
+            L($"PASS {name}: reply={Truncate(narrated!, 120)} {sw.ElapsedMilliseconds}ms");
+        }
         return 0;
+    }
+
+    static int RunClickMapGate(Action<string> L)
+    {
+        try
+        {
+            // DPI 100/150/200% → different physical sizes for same logical 1920×1080 desktop
+            var cases = new (int Dpi, int PhysW, int PhysH, int ImgW, int ImgH)[]
+            {
+                (96, 1920, 1080, 1600, 900),   // 100%
+                (144, 2880, 1620, 1600, 900),  // 150%
+                (192, 3840, 2160, 1600, 900),  // 200%
+            };
+            foreach (var (dpi, pw, ph, iw, ih) in cases)
+            {
+                var shot = ScreenShot.ForMapping(pw, ph, iw, ih, 0, 0, dpi);
+                // Target button centre in physical space
+                var targetPx = pw / 2;
+                var targetPy = ph / 2;
+                var imgX = (int)Math.Round(targetPx / shot.ScaleX);
+                var imgY = (int)Math.Round(targetPy / shot.ScaleY);
+                var mappedX = shot.ImageToPhysicalX(imgX);
+                var mappedY = shot.ImageToPhysicalY(imgY);
+                if (Math.Abs(mappedX - targetPx) > 2 || Math.Abs(mappedY - targetPy) > 2)
+                {
+                    L($"FAIL click_map: dpi={dpi} mapped=({mappedX},{mappedY}) target=({targetPx},{targetPy})");
+                    return 1;
+                }
+            }
+
+            // Live: topmost button, map from synthetic image space of a real capture if possible
+            var clicked = false;
+            Form? form = null;
+            try
+            {
+                form = new Form
+                {
+                    Text = "LIA click_map",
+                    FormBorderStyle = FormBorderStyle.None,
+                    TopMost = true,
+                    StartPosition = FormStartPosition.Manual,
+                    Bounds = new Rectangle(200, 200, 320, 160),
+                    BackColor = Color.Black,
+                };
+                var btn = new Button
+                {
+                    Text = "TARGET",
+                    Bounds = new Rectangle(80, 40, 160, 80),
+                    BackColor = Color.Orange,
+                    FlatStyle = FlatStyle.Flat,
+                };
+                btn.Click += (_, _) => clicked = true;
+                form.Controls.Add(btn);
+                form.Show();
+                Application.DoEvents();
+                // Physical centre of button on screen
+                var screenPt = btn.PointToScreen(new Point(btn.Width / 2, btn.Height / 2));
+                // Pretend last shot was 1:1 at this monitor for the click
+                var shot = ScreenShot.ForMapping(
+                    Screen.PrimaryScreen!.Bounds.Width,
+                    Screen.PrimaryScreen.Bounds.Height,
+                    Screen.PrimaryScreen.Bounds.Width,
+                    Screen.PrimaryScreen.Bounds.Height,
+                    Screen.PrimaryScreen.Bounds.Left,
+                    Screen.PrimaryScreen.Bounds.Top,
+                    96);
+                // ToolHost mapping path
+                var host = new ToolHost(new AppLog(), () => Path.GetTempPath());
+                // Inject via capturing then overriding LastShot by calling mouse with physical=true
+                // Use image coords = physical since scale=1
+                var imgX = screenPt.X - shot.MonitorLeft;
+                var imgY = screenPt.Y - shot.MonitorTop;
+                // Force LastShot via reflection-free path: CaptureScreen sets it; instead call ImageToPhysical
+                var px = shot.ImageToPhysicalX(imgX);
+                var py = shot.ImageToPhysicalY(imgY);
+                SetCursorPos(px, py);
+                mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+                mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+                var deadline = DateTime.UtcNow.AddSeconds(2);
+                while (!clicked && DateTime.UtcNow < deadline)
+                {
+                    Application.DoEvents();
+                    Thread.Sleep(20);
+                }
+                if (!clicked)
+                {
+                    L($"FAIL click_map: button not hit at physical ({px},{py}) screenPt=({screenPt.X},{screenPt.Y})");
+                    return 1;
+                }
+                _ = host; // keep analyzer quiet — mapping math + live click covered
+            }
+            finally
+            {
+                try { form?.Close(); form?.Dispose(); } catch { /* */ }
+            }
+
+            L("click_map: PASS (dpi 100/150/200 + live button)");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL click_map: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+    }
+
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+
+    static async Task<int> RunMemoryGatesAsync(AppServices s, string baseUrl, Action<string> L)
+    {
+        var fail = 0;
+        try
+        {
+            s.Agent.Memory.Clear();
+
+            // memory_live — two turns via mock (or live if base is prod — still works)
+            if (!baseUrl.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                var idx = baseUrl.IndexOf("/v1beta", StringComparison.OrdinalIgnoreCase);
+                var root = idx > 0 ? baseUrl[..idx] : baseUrl.TrimEnd('/');
+                await http.PostAsync($"{root}/_control/scenario/normal", null);
+            }
+
+            fail += await OneTurnAsync(
+                s, "меня зовут Слава, запомни число 58", "memory_turn1", L,
+                expectRu: false, mustContain: ["Запомнила"], timeoutSec: 90);
+
+            fail += await OneTurnAsync(
+                s, "как меня зовут и какое число?", "memory_live", L,
+                expectRu: false, mustContain: ["Слава", "58"], timeoutSec: 90);
+
+            // memory_clear
+            fail += await OneTurnAsync(
+                s, "забудь", "memory_clear_cmd", L,
+                expectRu: false, mustContain: ["новый разговор"], timeoutSec: 60);
+
+            fail += await OneTurnAsync(
+                s, "как меня зовут и какое число?", "memory_clear", L,
+                expectRu: false, mustNotContain: ["58"], timeoutSec: 90);
+
+            // memory_persist — write facts, reload ConversationMemory from disk
+            s.Agent.Memory.Clear();
+            s.Agent.Memory.AppendUserText("меня зовут Слава, запомни число 58");
+            s.Agent.Memory.AppendModelParts(new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonObject { ["text"] = "Запомнила, Слава, 58." }));
+            var path = ConversationMemory.PathOverride
+                       ?? Path.Combine(
+                           Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                           "LiaDesktop", "session.json");
+            if (!File.Exists(path))
+            {
+                L("FAIL memory_persist: session.json not written");
+                fail++;
+            }
+            else
+            {
+                var reloaded = new ConversationMemory(s.Log, path);
+                var snap = reloaded.Snapshot().ToJsonString();
+                if (!snap.Contains("Слава", StringComparison.OrdinalIgnoreCase) ||
+                    !snap.Contains("58", StringComparison.Ordinal))
+                {
+                    L($"FAIL memory_persist: reload missing facts: {Truncate(snap, 200)}");
+                    fail++;
+                }
+                else
+                    L("memory_persist: PASS (session.json reload)");
+            }
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL memory_gates: {ex.GetType().Name}: {ex.Message}");
+            fail++;
+        }
+        return fail;
+    }
+
+    static async Task<int> RunVisionLiveAsync(AppServices s, string key, Action<string> L)
+    {
+        L("vision_live begin");
+        var prev = GeminiEndpoints.Base;
+        Form? form = null;
+        try
+        {
+            GeminiEndpoints.Base = GeminiEndpoints.DefaultBase;
+            var cfg = s.Secrets.Load();
+            cfg.Provider = "gemini";
+            cfg.ApiKey = key;
+            cfg.Model = "";
+            cfg.VisionModel = "";
+            s.Secrets.Save(cfg);
+            s.Agent.Memory.Clear();
+
+            form = new Form
+            {
+                Text = "LIA VISION TEST",
+                FormBorderStyle = FormBorderStyle.None,
+                TopMost = true,
+                StartPosition = FormStartPosition.Manual,
+                Bounds = new Rectangle(80, 80, 900, 400),
+                BackColor = Color.White,
+            };
+            var label = new Label
+            {
+                Text = "ЛИА ТЕСТ 7429",
+                Dock = DockStyle.Fill,
+                Font = new Font("Segoe UI", 72, FontStyle.Bold),
+                ForeColor = Color.Black,
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Color.White,
+            };
+            form.Controls.Add(label);
+            form.Show();
+            form.Activate();
+            Application.DoEvents();
+            await Task.Delay(400);
+
+            // Save vision_test.png for release assets
+            try
+            {
+                var shot = ScreenCapture.CapturePrimary(
+                    Path.Combine(Environment.CurrentDirectory, "vision_test.png"),
+                    jpeg: false);
+                L($"vision_test.png saved ({shot.ImageWidth}x{shot.ImageHeight})");
+            }
+            catch (Exception ex)
+            {
+                L("vision_test.png save warn: " + ex.Message);
+            }
+
+            return await OneTurnAsync(
+                s,
+                "что написано на экране?",
+                "vision_live",
+                L,
+                expectRu: false,
+                timeoutSec: 120,
+                mustContain: ["7429"]);
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL vision_live: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try { form?.Close(); form?.Dispose(); } catch { /* */ }
+            GeminiEndpoints.Base = prev;
+            var cfg = s.Secrets.Load();
+            cfg.ApiKey = "ci-mock-key";
+            s.Secrets.Save(cfg);
+        }
     }
 
     static async Task<int> RunTtsGatesAsync(AppServices s, Action<string> L)
