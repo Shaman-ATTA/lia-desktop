@@ -120,6 +120,7 @@ public sealed partial class MainWindow : Window
         foreach (var (line, detail) in _s.Log.Lines) AddLog(line, detail);
 
         var smoke = ApplySmokeOverrides();
+        var virtualSmoke = TryScheduleVirtualSmokeDump();
         DispatcherQueue.TryEnqueue(() => InitTrayAndAutostart());
         if (SelfTestRunner.IsSelfTest)
         {
@@ -131,7 +132,7 @@ public sealed partial class MainWindow : Window
                 await SelfTestRunner.RunAndExitAsync(_s);
             });
         }
-        else if (smoke)
+        else if (smoke || virtualSmoke)
             BootOverlay.Visibility = Visibility.Collapsed;
         else
             DispatcherQueue.TryEnqueue(async () => await RunBootSequenceAsync());
@@ -588,6 +589,154 @@ public sealed partial class MainWindow : Window
             }
         }
         return yaw.HasValue || jaw.HasValue || eyesCloseup || ringsShowcase || hudShowcase;
+    }
+
+    /// <summary>
+    /// Offscreen exact-size dumps: --smoke-virtual-size=WxH [--smoke-virtual-resize-after=WxH]
+    /// --smoke-dump=path.png. Centre-column oversized swapchain → full-window navy composite.
+    /// </summary>
+    bool TryScheduleVirtualSmokeDump()
+    {
+        if (!TryParseArgSize("--smoke-virtual-size=", out var vw, out var vh) &&
+            !TryParseEnvSize("LIA_SMOKE_VIRTUAL_SIZE", out vw, out vh))
+            return false;
+        if (!TryParseArgPath("--smoke-dump=", out var dumpPath) &&
+            string.IsNullOrWhiteSpace(dumpPath = Environment.GetEnvironmentVariable("LIA_SMOKE_DUMP")))
+        {
+            Program.BootLog("smoke-virtual-size set but no --smoke-dump= path");
+            return false;
+        }
+
+        TryParseArgSize("--smoke-virtual-resize-after=", out var rw, out var rh);
+        Program.BootLog(
+            $"smoke-virtual scheduled {vw}x{vh}"
+            + (rw > 0 ? $" → resize-after {rw}x{rh}" : "")
+            + $" dump={dumpPath}");
+
+        // Small→large: virtual-size=SMALL, resize-after=LARGE. Already-max: virtual-size=target.
+        var startW = vw;
+        var startH = vh;
+        var finalW = rw > 0 ? rw : vw;
+        var finalH = rh > 0 ? rh : vh;
+
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            try
+            {
+                await Task.Delay(1200);
+                ApplyVirtualWindowSize(startW, startH);
+                await Task.Delay(1800);
+                if (rw > 0)
+                {
+                    Program.BootLog($"smoke-virtual-resize-after → {finalW}x{finalH}");
+                    ApplyVirtualWindowSize(finalW, finalH);
+                    await Task.Delay(2500);
+                }
+                else
+                    await Task.Delay(800);
+
+                // A few frames so scene color is current
+                for (var i = 0; i < 4; i++)
+                {
+                    Holo.Renderer.Tick(0.016f);
+                    await Task.Delay(40);
+                }
+
+                DumpVirtualComposite(dumpPath!, finalW, finalH);
+                Program.BootLog("smoke-dump ok, exiting 0");
+                Environment.Exit(0);
+            }
+            catch (Exception ex)
+            {
+                Program.BootLog("smoke-dump FAILED: " + ex);
+                Environment.Exit(2);
+            }
+        });
+        return true;
+    }
+
+    void ApplyVirtualWindowSize(int winW, int winH)
+    {
+        // StageGrid: Margin 0,36,0,120 — centre column 0.56 of width
+        var stageH = Math.Max(2, winH - 36 - 120);
+        var colW = Math.Max(2, winW * 0.56);
+        try
+        {
+            Root.Width = winW;
+            Root.Height = winH;
+            Root.UpdateLayout();
+        }
+        catch { /* */ }
+        Holo.SetVirtualDipSize(colW, stageH);
+        NotifyStageResized();
+        Program.BootLog(
+            $"ApplyVirtualWindowSize win={winW}x{winH} holoDip={colW:0}x{stageH}");
+    }
+
+    void DumpVirtualComposite(string path, int winW, int winH)
+    {
+        var tmp = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"lia_holo_dump_{Environment.ProcessId}.png");
+        try
+        {
+            Holo.Renderer.SaveBackbufferPng(tmp);
+            using var holo = new System.Drawing.Bitmap(tmp);
+            using var full = new System.Drawing.Bitmap(winW, winH);
+            using var g = System.Drawing.Graphics.FromImage(full);
+            g.Clear(System.Drawing.Color.FromArgb(255, 5, 7, 12));
+            var stageTop = 36f;
+            var stageH = winH - 36f - 120f;
+            var colX = (float)(winW * 0.22);
+            var colW = (float)(winW * 0.56);
+            g.DrawImage(holo, colX, stageTop, colW, stageH);
+            var dir = System.IO.Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            full.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            Program.BootLog($"DumpVirtualComposite {winW}x{winH} (holo {holo.Width}x{holo.Height}) → {path}");
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* */ }
+        }
+    }
+
+    static bool TryParseArgSize(string prefix, out int w, out int h)
+    {
+        w = h = 0;
+        foreach (var a in Environment.GetCommandLineArgs())
+        {
+            if (!a.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            var parts = a[prefix.Length..].Split('x', 'X');
+            if (parts.Length == 2
+                && int.TryParse(parts[0], out w) && int.TryParse(parts[1], out h)
+                && w >= 640 && h >= 480)
+                return true;
+        }
+        return false;
+    }
+
+    static bool TryParseEnvSize(string env, out int w, out int h)
+    {
+        w = h = 0;
+        var s = Environment.GetEnvironmentVariable(env);
+        if (string.IsNullOrWhiteSpace(s)) return false;
+        var parts = s.Split('x', 'X');
+        return parts.Length == 2
+               && int.TryParse(parts[0], out w) && int.TryParse(parts[1], out h)
+               && w >= 640 && h >= 480;
+    }
+
+    static bool TryParseArgPath(string prefix, out string? path)
+    {
+        path = null;
+        foreach (var a in Environment.GetCommandLineArgs())
+        {
+            if (!a.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            path = a[prefix.Length..].Trim('"');
+            return !string.IsNullOrWhiteSpace(path);
+        }
+        return false;
     }
 
     void OnActivated(object sender, WindowActivatedEventArgs args)

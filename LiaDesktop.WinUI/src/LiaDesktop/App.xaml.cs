@@ -80,6 +80,18 @@ public partial class App : Application
             appWindow.Show();
             Program.BootLog($"AppWindow.Show done size={w}x{h} actual={appWindow.Size.Width}x{appWindow.Size.Height}");
 
+            // Already-maximized launch (field case: start maximized on a TV)
+            if (HasFlag("--smoke-maximize") &&
+                appWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter maxOp &&
+                MainWindowInstance is MainWindow maxMain)
+            {
+                maxOp.Maximize();
+                Program.BootLog("smoke-maximize applied");
+                ScheduleNotify(maxMain, 150);
+                ScheduleNotify(maxMain, 500);
+                ScheduleNotify(maxMain, 1000);
+            }
+
             // CI / field-test: launch small then jump to target (simulates maximize on a TV)
             if (TryParseSmokeResizeAfter(out var rw, out var rh) && MainWindowInstance is MainWindow main)
             {
@@ -105,6 +117,16 @@ public partial class App : Application
             finally { t.Stop(); }
         };
         t.Start();
+    }
+
+    static bool HasFlag(string flag)
+    {
+        foreach (var a in Environment.GetCommandLineArgs())
+        {
+            if (a.Equals(flag, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>Parse --smoke-resize-after=1920x1080 (jump size after launch).</summary>

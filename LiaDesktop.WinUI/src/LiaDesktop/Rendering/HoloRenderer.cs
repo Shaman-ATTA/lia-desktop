@@ -729,6 +729,79 @@ public sealed class HoloRenderer : IDisposable
         _swap.Present(2, PresentFlags.None);
     }
 
+    /// <summary>
+    /// Copy the resolved scene (or swapchain) to a PNG — offscreen CI dumps at exact WxH.
+    /// Prefers _sceneColor so flip-model Present does not race the read.
+    /// </summary>
+    public unsafe void SaveBackbufferPng(string path)
+    {
+        if (_device == null || _ctx == null || _width < 2 || _height < 2)
+            throw new InvalidOperationException("renderer not ready for dump");
+
+        ID3D11Texture2D src;
+        ID3D11Texture2D? bbOwned = null;
+        if (_sceneColor != null)
+            src = _sceneColor;
+        else if (_swap != null)
+        {
+            bbOwned = _swap.GetBuffer<ID3D11Texture2D>(0);
+            src = bbOwned;
+        }
+        else
+            throw new InvalidOperationException("no scene/backbuffer to dump");
+
+        try
+        {
+            var desc = src.Description;
+            desc.Usage = ResourceUsage.Staging;
+            desc.BindFlags = BindFlags.None;
+            desc.CPUAccessFlags = CpuAccessFlags.Read;
+            desc.MiscFlags = ResourceOptionFlags.None;
+            desc.SampleDescription = new SampleDescription(1, 0);
+            using var staging = _device.CreateTexture2D(desc);
+            _ctx.CopyResource(staging, src);
+
+            var mapped = _ctx.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+            try
+            {
+                using var bmp = new Bitmap(
+                    _width, _height, PixelFormat.Format32bppArgb);
+                var data = bmp.LockBits(
+                    new Rectangle(0, 0, _width, _height),
+                    ImageLockMode.WriteOnly,
+                    PixelFormat.Format32bppArgb);
+                try
+                {
+                    var srcPitch = (int)mapped.RowPitch;
+                    var dstPitch = data.Stride;
+                    var rowBytes = _width * 4;
+                    for (var y = 0; y < _height; y++)
+                    {
+                        Buffer.MemoryCopy(
+                            (void*)(mapped.DataPointer + y * srcPitch),
+                            (void*)(data.Scan0 + y * dstPitch),
+                            dstPitch,
+                            rowBytes);
+                    }
+                }
+                finally { bmp.UnlockBits(data); }
+
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                bmp.Save(path, ImageFormat.Png);
+                Program.BootLog($"SaveBackbufferPng {_width}x{_height} → {path}");
+            }
+            finally
+            {
+                _ctx.Unmap(staging, 0);
+            }
+        }
+        finally
+        {
+            bbOwned?.Dispose();
+        }
+    }
+
     void DrawBackgroundArcs()
     {
         if (_ctx == null || _psHudArcs == null || _vsFxaa == null || _fxaaCb == null ||

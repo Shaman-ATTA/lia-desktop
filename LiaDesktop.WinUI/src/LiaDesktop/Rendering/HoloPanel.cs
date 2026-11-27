@@ -23,8 +23,20 @@ public sealed class HoloPanel : SwapChainPanel
     double? _forceScale;
     int _settlePassesLeft;
     double _pendingDipW, _pendingDipH;
+    double? _virtualDipW, _virtualDipH;
 
     public HoloRenderer Renderer => _renderer;
+
+    /// <summary>
+    /// Offscreen/oversized layout DIPs for CI (exact 1920×1080 / 3840×2160 centre column),
+    /// independent of HWND clamp on the runner.
+    /// </summary>
+    public void SetVirtualDipSize(double? width, double? height)
+    {
+        _virtualDipW = width is > 2 ? width : null;
+        _virtualDipH = height is > 2 ? height : null;
+        RequestSwapChain(force: true, settle: true);
+    }
 
     public HoloPanel()
     {
@@ -178,6 +190,10 @@ public sealed class HoloPanel : SwapChainPanel
 
     (double W, double H) ReadDipSize()
     {
+        // Virtual DIPs win — exact TV resolutions for offscreen CI dumps
+        if (_virtualDipW is > 2 && _virtualDipH is > 2)
+            return (_virtualDipW.Value, _virtualDipH.Value);
+
         // Prefer SizeChanged NewSize when fresher; else live Actual*
         var w = ActualWidth;
         var h = ActualHeight;
@@ -212,6 +228,10 @@ public sealed class HoloPanel : SwapChainPanel
     {
         if (_forceScale is { } f)
             return (f, f);
+
+        // Exact TV dumps: virtual DIPs are already 100%-scale layout pixels
+        if (_virtualDipW is > 2 && _virtualDipH is > 2)
+            return (1.0, 1.0);
 
         // CompositionScaleX/Y are float; RasterizationScale is double — keep everything double
         double sx = CompositionScaleX;

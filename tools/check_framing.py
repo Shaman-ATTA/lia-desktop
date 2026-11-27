@@ -478,6 +478,26 @@ def assert_center_column(path: Path, label: str | None = None, drift_limit: floa
     return 0
 
 
+def _expected_exact_size(path: Path) -> tuple[int, int] | None:
+    """Exact offscreen TV dumps must be 1920×1080 or 3840×2160."""
+    n = path.name
+    if n in (
+        "desktop_winui_front_1080.png",
+        "layout_1080_100_windowed.png",
+        "layout_1080_100_max.png",
+        "layout_1080_100_maxlaunch.png",
+    ):
+        return 1920, 1080
+    if n in (
+        "desktop_winui_front_4k.png",
+        "layout_4k_100_windowed.png",
+        "layout_4k_100_max.png",
+        "layout_4k_100_maxlaunch.png",
+    ):
+        return 3840, 2160
+    return None
+
+
 def assert_layout_shot(path: Path, label: str | None = None) -> int:
     """Strict layout gate for DPI/maximize matrix: face in column, ±5% of arcs, no grey box."""
     name = label or path.name
@@ -485,6 +505,14 @@ def assert_layout_shot(path: Path, label: str | None = None) -> int:
         print(f"FAIL: missing {name}", file=sys.stderr)
         return 1
     fail = 0
+    exp = _expected_exact_size(path)
+    if exp is not None:
+        with Image.open(path) as im:
+            got = im.size
+        print(f"{name} size={got[0]}x{got[1]} expect={exp[0]}x{exp[1]}")
+        if got != exp:
+            print(f"FAIL: {name} size {got[0]}x{got[1]} != {exp[0]}x{exp[1]}", file=sys.stderr)
+            fail = 1
     if assert_center_column(path, name, drift_limit=0.05) != 0:
         fail = 1
     inside, lm, rm = face_inside_center_column(path)
@@ -627,20 +655,20 @@ def main() -> int:
             )
             return 1
 
-    # HiDPI / large-TV front shots (also accept as argv)
+    # Exact TV / layout argv shots (strict layout gate + size)
     for p in extra or [
         Path("desktop_winui_front_1080.png"),
         Path("desktop_winui_front_4k.png"),
     ]:
         if not p.is_file():
             continue
-        if p.name.startswith("layout_"):
+        if p.name.startswith("layout_") or _expected_exact_size(p) is not None:
             if assert_layout_shot(p) != 0:
                 return 1
         elif assert_center_column(p) != 0:
             return 1
 
-    # All layout_<res>_<scale>_<windowed|max>.png in CWD
+    # All layout_<res>_<scale>_<windowed|max|maxlaunch>.png in CWD
     for p in sorted(Path(".").glob("layout_*.png")):
         if assert_layout_shot(p) != 0:
             return 1

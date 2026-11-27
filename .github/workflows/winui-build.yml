@@ -322,9 +322,92 @@ jobs:
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_eyes.png') @('--smoke-eyes','--smoke-yaw=0') 12
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_rings.png') @('--smoke-rings','--smoke-yaw=-48') 12
           Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_hud.png') @('--smoke-hud','--smoke-yaw=8') 12
-          # Large-window framing (clamped to usable desktop on GHA)
-          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_1080.png') @('--smoke-yaw=5') 10 $t1080W $t1080H
-          Invoke-SmokeShot (Join-Path $PWD 'desktop_winui_front_4k.png') @('--smoke-yaw=5') 12 $t4kW $t4kH
+
+          # Exact TV dumps via oversized/offscreen swapchain (independent of GHA HWND clamp).
+          # Covers real 1920×1080 @100% maximize and 3840×2160 framing.
+          function Invoke-VirtualDump([string]$shotPath, [int]$finalW, [int]$finalH, [string]$mode) {
+            $bootLog = Join-Path $env:LOCALAPPDATA 'LiaDesktop\boot.log'
+            if (Test-Path $bootLog) { Remove-Item $bootLog -Force }
+            if (Test-Path $shotPath) { Remove-Item $shotPath -Force }
+            $dumpArg = "--smoke-dump=$shotPath"
+            if ($mode -eq 'max') {
+              # small → large (TV maximize repro) through virtual path
+              $smallW = 1024; $smallH = 720
+              $args = @(
+                '--smoke-yaw=5',
+                "--smoke-size=${smallW}x${smallH}",
+                "--smoke-virtual-size=${smallW}x${smallH}",
+                "--smoke-virtual-resize-after=${finalW}x${finalH}",
+                $dumpArg
+              )
+            } elseif ($mode -eq 'maxlaunch') {
+              # launched already maximized; virtual size forces exact centre-column dump
+              $args = @(
+                '--smoke-yaw=5', '--smoke-maximize',
+                "--smoke-size=${finalW}x${finalH}",
+                "--smoke-virtual-size=${finalW}x${finalH}",
+                $dumpArg
+              )
+            } else {
+              $args = @(
+                '--smoke-yaw=5',
+                "--smoke-size=1280x800",
+                "--smoke-virtual-size=${finalW}x${finalH}",
+                $dumpArg
+              )
+            }
+            Write-Host "virtual-dump $($args -join ' ')"
+            $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WorkingDirectory (Split-Path $exe)
+            $deadline = (Get-Date).AddSeconds(90)
+            while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
+              Start-Sleep -Seconds 2
+              $p.Refresh()
+              if (Test-Path $shotPath) {
+                # give exit a moment after dump
+                Start-Sleep -Seconds 2
+                $p.Refresh()
+                break
+              }
+            }
+            if (-not $p.HasExited) {
+              if (Test-Path $bootLog) { Get-Content $bootLog | Select-Object -Last 40 | Out-Host }
+              try { $p.Kill($true) } catch {}
+              throw "virtual-dump timeout $shotPath"
+            }
+            if ($p.ExitCode -ne 0) {
+              if (Test-Path $bootLog) { Get-Content $bootLog | Select-Object -Last 40 | Out-Host }
+              throw "virtual-dump exit $($p.ExitCode) $shotPath"
+            }
+            if (-not (Test-Path $shotPath)) { throw "virtual-dump missing $shotPath" }
+            $len = (Get-Item $shotPath).Length
+            if ($len -lt 40000) { throw "virtual-dump too small $shotPath ($len)" }
+            Add-Type -AssemblyName System.Drawing
+            $bmp = [System.Drawing.Bitmap]::FromFile($shotPath)
+            try {
+              if ($bmp.Width -ne $finalW -or $bmp.Height -ne $finalH) {
+                throw "virtual-dump size $($bmp.Width)x$($bmp.Height) != ${finalW}x${finalH}"
+              }
+            } finally { $bmp.Dispose() }
+            if (Test-Path $bootLog) {
+              Write-Host "=== BOOT virtual $shotPath ==="
+              Get-Content $bootLog | Select-String -Pattern 'SwapChain|smoke-virtual|DumpVirtual|ApplyVirtual' | Select-Object -Last 24 | Out-Host
+              if ($mode -eq 'max') {
+                $widths = @(Get-Content $bootLog | ForEach-Object {
+                  if ($_ -match 'SwapChain (\d+)x(\d+)') { [int]$Matches[1] }
+                })
+                if ($widths.Count -ge 2) {
+                  $grew = (($widths | Measure-Object -Maximum).Maximum -ge (($widths[0]) + 40))
+                  if (-not $grew) {
+                    throw "$shotPath virtual max did not grow swapchain (widths=$($widths -join ','))"
+                  }
+                }
+              }
+            }
+            Write-Host "virtual-dump ok $shotPath ($len bytes) ${finalW}x${finalH} mode=$mode"
+          }
+
+          Invoke-VirtualDump (Join-Path $PWD 'desktop_winui_front_1080.png') 1920 1080 'windowed'
+          Invoke-VirtualDump (Join-Path $PWD 'desktop_winui_front_4k.png') 3840 2160 'windowed'
 
           # Layout matrix: 100% MUST reproduce small→maximize (field bug) + already-maximized.
           # Higher scales keep force-scale + windowed/max. Assert via check_framing assert_layout_shot.
@@ -405,17 +488,14 @@ jobs:
             Write-Host "layout ok $shotPath ($len bytes) near=$near grew=$grew"
           }
 
-          # 100% scale first — field-test failure mode (small → maximize)
-          foreach ($pair in @(
-            @{ Name='1080'; W=$t1080W; H=$t1080H },
-            @{ Name='4k'; W=$t4kW; H=$t4kH }
-          )) {
-            $rw = [int]$pair.W; $rh = [int]$pair.H; $rname = [string]$pair.Name
-            Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_100_windowed.png") $rw $rh 1.0 'windowed'
-            Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_100_max.png") $rw $rh 1.0 'max'
-            Invoke-LayoutShot (Join-Path $PWD "layout_${rname}_100_maxlaunch.png") $rw $rh 1.0 'maxlaunch'
-          }
-          # Remaining DPI scales (force-scale simulates CompositionScale; windowed + small→max)
+          # 100% exact TV sizes via offscreen path (real 1920×1080 / 3840×2160 maximize cases)
+          Invoke-VirtualDump (Join-Path $PWD 'layout_1080_100_windowed.png') 1920 1080 'windowed'
+          Invoke-VirtualDump (Join-Path $PWD 'layout_1080_100_max.png') 1920 1080 'max'
+          Invoke-VirtualDump (Join-Path $PWD 'layout_1080_100_maxlaunch.png') 1920 1080 'maxlaunch'
+          Invoke-VirtualDump (Join-Path $PWD 'layout_4k_100_windowed.png') 3840 2160 'windowed'
+          Invoke-VirtualDump (Join-Path $PWD 'layout_4k_100_max.png') 3840 2160 'max'
+          Invoke-VirtualDump (Join-Path $PWD 'layout_4k_100_maxlaunch.png') 3840 2160 'maxlaunch'
+          # Remaining DPI scales: HWND clamped to usable_desktop (force-scale + windowed/max)
           foreach ($sc in @(1.5, 2.0, 2.5, 3.0)) {
             $tag = ([int]($sc * 100)).ToString()
             foreach ($pair in @(
@@ -529,7 +609,7 @@ jobs:
 
           - C# Edge TTS WebSocket with Sec-MS-GEC v2 (edge-tts 7.3.1 DRM) + clock-skew retry; no Python
           - Offline SAPI/OneCore voice fallback; journal errors collapsed to one line (full log under %LOCALAPPDATA%)
-          - SwapChainPanel HiDPI: physical buffers + inverse MatrixTransform; layout matrix 1080/4K × 100–300% × windowed/max
+          - Maximize/HiDPI: physical buffers + MatrixTransform + settle; exact 1920/4K offscreen dumps (virtual swapchain)
           - E2E `--selftest` requires `tts_ws_only` + `tts_sapi` + live Gemini; see selftest.txt
 
 
