@@ -46,4 +46,18 @@ public static class WakeText
         var s = NormalizeAsrWake(text);
         return StripLeadingWake.Replace(s, "").Trim();
     }
+
+    /// <summary>
+    /// True when the post-wake remnant looks like a real inline command
+    /// («открой блокнот»), not ASR crumbs («лет», «ли»).
+    /// </summary>
+    public static bool IsLikelyInlineCommand(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return false;
+        var c = command.Trim().ToLowerInvariant();
+        if (c.Length < 5) return false;
+        // Single short token without a verb-like length → crumb
+        if (!c.Contains(' ') && c.Length < 8) return false;
+        return true;
+    }
 }

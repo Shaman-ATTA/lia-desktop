@@ -181,7 +181,8 @@ public sealed partial class MainWindow : Window
                 ? "Лиа · слушаю…"
                 : $"Лиа · {command}";
 
-            if (!string.IsNullOrWhiteSpace(command))
+            // Inline only for real commands — ignore ASR crumbs after wake («лет», «ли»)
+            if (WakeText.IsLikelyInlineCommand(command))
             {
                 // One breath: «Лиа, открой блокнот» → NewRequest with command text
                 CommandBox.Text = command;
@@ -198,7 +199,9 @@ public sealed partial class MainWindow : Window
                                || _s.MicGemini.MockCapturePull != null;
                 if (forceMic || !_s.WindowsSpeechOk)
                 {
-                    if (string.IsNullOrWhiteSpace(_s.Secrets.Load().ApiKey))
+                    // Selftest mock Gemini accepts any key; production needs a real one.
+                    var key = _s.Secrets.Load().ApiKey;
+                    if (string.IsNullOrWhiteSpace(key) && !SelfTestRunner.EnableWakeFollowUp)
                     {
                         _s.Log.Info("wake follow-up: нет ключа Gemini для MicGemini");
                         OnMicGeminiTimedOut();

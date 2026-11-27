@@ -50,4 +50,15 @@ public class WakeTextTests
     [InlineData("лиа, привет")]
     public void ContainsWake_positives(string text) =>
         Assert.True(WakeText.ContainsWake(text));
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("лет", false)]
+    [InlineData("ли", false)]
+    [InlineData("привет", false)]
+    [InlineData("открой блокнот", true)]
+    [InlineData("какая сейчас погода", true)]
+    public void IsLikelyInlineCommand_cases(string? cmd, bool expect) =>
+        Assert.Equal(expect, WakeText.IsLikelyInlineCommand(cmd));
 }

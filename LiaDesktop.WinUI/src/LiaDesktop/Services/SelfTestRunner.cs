@@ -1963,18 +1963,24 @@ public static class SelfTestRunner
             s.Wake.Start(mode);
             var used = s.Wake.LastCaptureMode;
             L($"wake_cpu: mode={used} WaveIn.DeviceCount={WaveIn.DeviceCount}");
+            if (WaveIn.DeviceCount > 0 && used != "wavein")
+            {
+                L($"FAIL wake_cpu: capture device present but mode={used} (need wavein)");
+                return 1;
+            }
 
             var proc = Process.GetCurrentProcess();
             proc.Refresh();
             var cpu0 = proc.TotalProcessorTime;
             var wall0 = Stopwatch.StartNew();
-            // Idle listen ~5s; also push near-silence so PushPcm-only path still exercises grammar
+            // Idle listen ~5s. WaveIn: real capture only. PushOnly: light silence feed.
             var silence = new byte[WakeWordService.SampleRate * 2 / 10]; // 100ms
             var end = DateTime.UtcNow.AddSeconds(5);
             while (DateTime.UtcNow < end)
             {
-                s.Wake.PushPcm(silence);
-                await Task.Delay(100);
+                if (used == "pushonly")
+                    s.Wake.PushPcm(silence);
+                await Task.Delay(used == "wavein" ? 200 : 100);
             }
             wall0.Stop();
             proc.Refresh();

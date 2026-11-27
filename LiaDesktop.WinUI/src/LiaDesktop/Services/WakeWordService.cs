@@ -138,8 +138,10 @@ public sealed class WakeWordService : IDisposable
                 return;
             }
 
+            var device = PickWaveInDevice();
             _waveIn = new WaveInEvent
             {
+                DeviceNumber = device.Index,
                 WaveFormat = new WaveFormat(SampleRate, 16, 1),
                 BufferMilliseconds = 100,
             };
@@ -149,16 +151,61 @@ public sealed class WakeWordService : IDisposable
                 _waveIn.StartRecording();
                 _running = true;
                 LastCaptureMode = "wavein";
-                _log.Info($"wake: listening (ОЖИДАНИЕ) WaveIn devices={WaveIn.DeviceCount}");
+                _log.Info($"wake: listening (ОЖИДАНИЕ) WaveIn device={device.Index}/{device.Name} devices={WaveIn.DeviceCount}");
             }
             catch (Exception ex)
             {
-                _log.Info("wake: WaveIn start fail — " + ex.Message);
+                _log.Info($"wake: WaveIn start fail device={device.Index}/{device.Name} — {ex.Message}");
                 CleanupCapture_NoLock();
+                // Retry other devices before falling back
+                for (var i = 0; i < WaveIn.DeviceCount; i++)
+                {
+                    if (i == device.Index) continue;
+                    try
+                    {
+                        var name = SafeWaveInName(i);
+                        _waveIn = new WaveInEvent
+                        {
+                            DeviceNumber = i,
+                            WaveFormat = new WaveFormat(SampleRate, 16, 1),
+                            BufferMilliseconds = 100,
+                        };
+                        _waveIn.DataAvailable += OnData;
+                        _waveIn.StartRecording();
+                        _running = true;
+                        LastCaptureMode = "wavein";
+                        _log.Info($"wake: listening WaveIn fallback device={i}/{name}");
+                        return;
+                    }
+                    catch (Exception ex2)
+                    {
+                        _log.Info($"wake: WaveIn device {i} fail — {ex2.Message}");
+                        CleanupCapture_NoLock();
+                    }
+                }
                 _running = true;
                 LastCaptureMode = "pushonly";
             }
         }
+    }
+
+    static (int Index, string Name) PickWaveInDevice()
+    {
+        // Prefer VB-CABLE Output (capture of virtual render) on CI runners
+        for (var i = 0; i < WaveIn.DeviceCount; i++)
+        {
+            var name = SafeWaveInName(i);
+            if (name.Contains("CABLE", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase))
+                return (i, name);
+        }
+        return (0, SafeWaveInName(0));
+    }
+
+    static string SafeWaveInName(int i)
+    {
+        try { return WaveIn.GetCapabilities(i).ProductName ?? $"#{i}"; }
+        catch { return $"#{i}"; }
     }
 
     public void Stop()
@@ -220,11 +267,12 @@ public sealed class WakeWordService : IDisposable
         full = ""; command = ""; conf = 0;
         if (_model == null || pcm16le.Length < 3200) return false;
 
-        // Grammar first — matches production DETECT for short «Лиа»
-        var (gText, gConf) = GrammarDecodeUtterance(pcm16le);
-        gText = WakeText.NormalizeAsrWake(gText);
+        // Free-form first (trustworthy for mid-sentence «могу ли я»). Grammar alone
+        // only for short wake-only clips — restricted vocab otherwise hallucinates «лия».
         var (fText, fConf) = FreeFormDecode(pcm16le);
         fText = WakeText.NormalizeAsrWake(fText);
+        var (gText, gConf) = GrammarDecodeUtterance(pcm16le);
+        gText = WakeText.NormalizeAsrWake(gText);
 
         string text;
         float c;
@@ -233,17 +281,23 @@ public sealed class WakeWordService : IDisposable
             text = fText;
             c = fConf;
         }
+        else if (!string.IsNullOrWhiteSpace(fText))
+        {
+            // Freeform heard real speech without a leading wake — do NOT promote grammar «лия»
+            full = fText;
+            conf = fConf;
+            RejectCount++;
+            return false;
+        }
         else if (WakeText.ContainsWake(gText))
         {
-            // Grammar heard wake; keep free-form tail as command when present
-            var tail = WakeText.StripWake(fText);
-            text = string.IsNullOrWhiteSpace(tail) ? gText : (gText + " " + tail).Trim();
+            text = gText;
             c = gConf;
         }
         else
         {
-            full = string.IsNullOrWhiteSpace(fText) ? gText : fText;
-            conf = string.IsNullOrWhiteSpace(fText) ? gConf : fConf;
+            full = gText;
+            conf = gConf;
             RejectCount++;
             return false;
         }
