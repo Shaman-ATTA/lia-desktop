@@ -189,10 +189,11 @@ public sealed class EdgeTts
 
     async Task<string?> ViaSapiAsync(string text, CancellationToken ct)
     {
-        // Prefer classic System.Speech → real PCM WAV (WinRT path often wrote header-only 46B files on GHA).
+        // Prefer classic System.Speech on an STA thread → real PCM WAV.
+        // (Task.Run/MTA yields empty/missing files; WinRT DataReader+Size was the 46B false pass.)
         try
         {
-            var path = await Task.Run(() => SpeakSystemSpeechToWav(text), ct);
+            var path = await SpeakSystemSpeechStaAsync(text, ct);
             if (TtsAudioGate.TryValidate(path, out _, out _, out var ok))
             {
                 _log.Info($"TTS: System.Speech ({ok})");
@@ -204,10 +205,33 @@ public sealed class EdgeTts
         catch (Exception ex)
         {
             _log.Info($"TTS System.Speech: {OneLine(ex.Message)}");
+            AppLog.WriteCrash("tts-system-speech", ex);
         }
 
         ct.ThrowIfCancellationRequested();
         return await SpeakWinRtToWavAsync(text, ct);
+    }
+
+    static Task<string> SpeakSystemSpeechStaAsync(string text, CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var th = new Thread(() =>
+        {
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                tcs.TrySetResult(SpeakSystemSpeechToWav(text));
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        });
+        th.IsBackground = true;
+        th.SetApartmentState(ApartmentState.STA);
+        th.Name = "lia-sapi-sta";
+        th.Start();
+        return tcs.Task.WaitAsync(ct);
     }
 
     static string SpeakSystemSpeechToWav(string text)
@@ -239,8 +263,10 @@ public sealed class EdgeTts
         try { synth.Speak(text); }
         finally { try { synth.SetOutputToNull(); } catch { /* */ } }
 
-        if (!File.Exists(outPath))
-            throw new InvalidOperationException("System.Speech produced no file");
+        var len = File.Exists(outPath) ? new FileInfo(outPath).Length : 0;
+        if (len <= 0)
+            throw new InvalidOperationException(
+                $"System.Speech produced no file (voice={pick.VoiceInfo.Name} culture={pick.VoiceInfo.Culture.Name} voices={installed.Count})");
         return outPath;
     }
 
@@ -266,10 +292,19 @@ public sealed class EdgeTts
         var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-winrt-{Guid.NewGuid():N}.wav");
         try
         {
-            // Copy full stream (not stream.Size via DataReader — that produced 46B header-only WAVs)
-            await using var input = stream.AsStreamForRead();
+            // Drain the full IRandomAccessStream in chunks (don't trust stream.Size alone)
             await using var fs = File.Create(outPath);
-            await input.CopyToAsync(fs, ct);
+            using var input = stream.GetInputStreamAt(0);
+            using var reader = new Windows.Storage.Streams.DataReader(input);
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                var n = await reader.LoadAsync(64 * 1024);
+                if (n == 0) break;
+                var chunk = new byte[n];
+                reader.ReadBytes(chunk);
+                await fs.WriteAsync(chunk, ct);
+            }
             await fs.FlushAsync(ct);
         }
         finally
