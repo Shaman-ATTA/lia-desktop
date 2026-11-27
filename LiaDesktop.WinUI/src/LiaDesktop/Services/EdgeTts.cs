@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Net.WebSockets;
@@ -168,10 +169,23 @@ public sealed class EdgeTts
         }
     }
 
-    /// <summary>SAPI-only path for CI gate — throws with detail if all offline backends fail.</summary>
+    /// <summary>
+    /// SAPI-only path for CI gate — throws with detail if all offline backends fail.
+    /// Always bounded (≤25s) so a wedged COM/STA cannot hang selftest forever.
+    /// </summary>
     public async Task<string> SpeakSapiOnlyAsync(string text, CancellationToken ct = default)
     {
-        var path = await ViaSapiAsync(text, ct);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        linked.CancelAfter(TimeSpan.FromSeconds(25));
+        string? path;
+        try
+        {
+            path = await ViaSapiAsync(text, linked.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException("SAPI-only timed out (>25s)");
+        }
         if (!TtsAudioGate.TryValidate(path, out _, out _, out var detail))
             throw new InvalidOperationException("SAPI-only produced no audible audio: " + detail);
         return path!;
@@ -423,25 +437,42 @@ public sealed class EdgeTts
         }
     }
 
-    static Task<string> RunStaAsync(Func<string> work, CancellationToken ct)
+    // One persistent STA thread — spawning a new STA per Speak wedged System.Speech/COM
+    // on CI after a handful of calls (render_role onward saw "missing file").
+    static readonly BlockingCollection<(Func<string> Work, TaskCompletionSource<string> Tcs)> SapiStaQueue = new();
+    static int _sapiStaStarted;
+
+    static void EnsureSapiSta()
     {
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (Interlocked.CompareExchange(ref _sapiStaStarted, 1, 0) != 0) return;
         var th = new Thread(() =>
         {
-            try
+            foreach (var item in SapiStaQueue.GetConsumingEnumerable())
             {
-                ct.ThrowIfCancellationRequested();
-                tcs.TrySetResult(work());
+                try { item.Tcs.TrySetResult(item.Work()); }
+                catch (Exception ex) { item.Tcs.TrySetException(ex); }
             }
-            catch (Exception ex)
-            {
-                tcs.TrySetException(ex);
-            }
-        });
-        th.IsBackground = true;
+        })
+        {
+            IsBackground = true,
+            Name = "lia-sapi-sta",
+        };
         th.SetApartmentState(ApartmentState.STA);
-        th.Name = "lia-sapi-sta";
         th.Start();
+    }
+
+    static Task<string> RunStaAsync(Func<string> work, CancellationToken ct)
+    {
+        EnsureSapiSta();
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            SapiStaQueue.Add((work, tcs), ct);
+        }
+        catch (OperationCanceledException)
+        {
+            tcs.TrySetCanceled(ct);
+        }
         return tcs.Task.WaitAsync(ct);
     }
 

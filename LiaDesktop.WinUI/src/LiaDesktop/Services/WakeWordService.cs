@@ -18,8 +18,13 @@ public sealed class WakeWordService : IDisposable
     const int RingSeconds = 4;
     const int PostWakeMs = 2200;
 
+    // Also match ASR-split «ли я» (vosk freeform often inserts a space).
     static readonly Regex WakeRe = new(
-        @"(^|[\s,.:;!?])(лиа|лия)($|[\s,.:;!?])",
+        @"(^|[\s,.:;!?])(лиа|лия|ли\s+я)($|[\s,.:;!?])",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    static readonly Regex AsrSplitWake = new(
+        @"\bли\s+я\b",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     readonly AppLog _log;
@@ -217,21 +222,44 @@ public sealed class WakeWordService : IDisposable
     }
 
     /// <summary>
-    /// Selftest helper: decode a whole utterance offline (free-form + wake strip).
+    /// Selftest / offline helper: grammar (live path) + free-form confirm, same strip rules.
     /// Returns true if wake word detected. Also raises Woken.
     /// </summary>
     public bool ProcessUtterance(byte[] pcm16le, out string full, out string command, out float conf)
     {
         full = ""; command = ""; conf = 0;
         if (_model == null || pcm16le.Length < 3200) return false;
-        var (text, c) = FreeFormDecode(pcm16le);
-        full = text;
-        conf = c;
-        if (!ContainsWake(text))
+
+        // Grammar first — matches production DETECT for short «Лиа»
+        var (gText, gConf) = GrammarDecodeUtterance(pcm16le);
+        gText = NormalizeAsrWake(gText);
+        var (fText, fConf) = FreeFormDecode(pcm16le);
+        fText = NormalizeAsrWake(fText);
+
+        string text;
+        float c;
+        if (ContainsWake(fText))
         {
+            text = fText;
+            c = fConf;
+        }
+        else if (ContainsWake(gText))
+        {
+            // Grammar heard wake; keep free-form tail as command when present
+            var tail = StripWake(fText);
+            text = string.IsNullOrWhiteSpace(tail) ? gText : (gText + " " + tail).Trim();
+            c = gConf;
+        }
+        else
+        {
+            full = string.IsNullOrWhiteSpace(fText) ? gText : fText;
+            conf = string.IsNullOrWhiteSpace(fText) ? gConf : fConf;
             RejectCount++;
             return false;
         }
+
+        full = text;
+        conf = c;
         var floor = ConfidenceFloor();
         if (c < floor * 0.85f) // slightly softer for offline batch
         {
@@ -309,6 +337,7 @@ public sealed class WakeWordService : IDisposable
     void ConfirmWakeFromPcm(byte[] pcm)
     {
         var (text, conf) = FreeFormDecode(pcm);
+        text = NormalizeAsrWake(text);
         lock (_gate)
         {
             if (!ContainsWake(text))
@@ -362,6 +391,49 @@ public sealed class WakeWordService : IDisposable
         }
     }
 
+    /// <summary>One-shot grammar decode (same vocabulary as live WaveIn path).</summary>
+    (string Text, float Conf) GrammarDecodeUtterance(byte[] pcm)
+    {
+        Model? model;
+        lock (_gate) model = _model;
+        if (model == null || pcm.Length == 0) return ("", 0);
+        IntPtr grm = IntPtr.Zero;
+        try
+        {
+            var grammar = "[\"лиа\",\"лия\",\"[unk]\"]";
+            var bytes = Encoding.UTF8.GetBytes(grammar + "\0");
+            var pin = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+            try
+            {
+                grm = vosk_recognizer_new_grm(GetHandle(model), SampleRate, pin.AddrOfPinnedObject());
+            }
+            finally { pin.Free(); }
+            if (grm == IntPtr.Zero) return ("", 0);
+            vosk_recognizer_set_words(grm, 1);
+            const int chunk = 8000;
+            var limit = Math.Min(pcm.Length, SampleRate * 2 * 25 / 10);
+            for (var i = 0; i < limit; i += chunk)
+            {
+                var n = Math.Min(chunk, limit - i);
+                var slice = new byte[n];
+                Buffer.BlockCopy(pcm, i, slice, 0, n);
+                vosk_recognizer_accept_waveform(grm, slice, n);
+            }
+            var json = PtrToUtf8(vosk_recognizer_final_result(grm));
+            return ParseResult(json);
+        }
+        catch (Exception ex)
+        {
+            _log.Info("wake grammar-utt: " + ex.Message);
+            return ("", 0);
+        }
+        finally
+        {
+            if (grm != IntPtr.Zero)
+                try { vosk_recognizer_free(grm); } catch { /* */ }
+        }
+    }
+
     static (string Text, float Conf) ParseResult(string json)
     {
         try
@@ -395,9 +467,17 @@ public sealed class WakeWordService : IDisposable
 
     float ConfidenceFloor() => 0.15f + _sensitivity * 0.7f;
 
+    /// <summary>Collapse vosk freeform «ли я» → «лиа» before wake match.</summary>
+    public static string NormalizeAsrWake(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        return AsrSplitWake.Replace(text.Trim().ToLowerInvariant(), "лиа");
+    }
+
     static bool ContainsWake(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return false;
+        text = NormalizeAsrWake(text);
         if (text is "лиа" or "лия") return true;
         return WakeRe.IsMatch(text);
     }
@@ -405,8 +485,8 @@ public sealed class WakeWordService : IDisposable
     public static string StripWake(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return "";
-        var s = Regex.Replace(text.Trim().ToLowerInvariant(),
-            @"^\s*(лиа|лия)\s*[,.:;!]?\s*", "", RegexOptions.CultureInvariant);
+        var s = NormalizeAsrWake(text);
+        s = Regex.Replace(s, @"^\s*(лиа|лия)\s*[,.:;!]?\s*", "", RegexOptions.CultureInvariant);
         return s.Trim();
     }
 
@@ -546,6 +626,9 @@ public sealed class WakeWordService : IDisposable
 
     [DllImport("libvosk", CallingConvention = CallingConvention.Cdecl)]
     static extern IntPtr vosk_recognizer_result(IntPtr recognizer);
+
+    [DllImport("libvosk", CallingConvention = CallingConvention.Cdecl)]
+    static extern IntPtr vosk_recognizer_final_result(IntPtr recognizer);
 
     [DllImport("libvosk", CallingConvention = CallingConvention.Cdecl)]
     static extern void vosk_recognizer_set_words(IntPtr recognizer, int words);

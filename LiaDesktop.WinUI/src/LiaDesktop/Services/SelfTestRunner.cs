@@ -1284,7 +1284,7 @@ public static class SelfTestRunner
 
             // --- wake_offline ---
             L("wake_offline: starting…");
-            fail += GateWakeOffline(s, L);
+            fail += await GateWakeOfflineAsync(s, L);
 
             // --- wake_cpu ---
             L("wake_cpu: starting…");
@@ -1307,9 +1307,32 @@ public static class SelfTestRunner
         return fail;
     }
 
+    /// <summary>
+    /// Audible fixture for wake gates: SAPI (bounded) then Edge. Never hangs; never silent-skip.
+    /// </summary>
+    static async Task<(string Path, string Backend)> SynthAudibleAsync(
+        AppServices s, string text, Action<string>? L = null, int timeoutSec = 30)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Min(timeoutSec, 25)));
+            var path = await s.Tts.SpeakSapiOnlyAsync(text, cts.Token);
+            return (path, "sapi");
+        }
+        catch (Exception ex)
+        {
+            L?.Invoke($"synth: SAPI fail ({ex.GetType().Name}: {ex.Message}) — Edge fallback");
+        }
+        using var cts2 = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec));
+        var edge = await s.Tts.SpeakWebSocketOnlyAsync(text, cts2.Token);
+        if (edge == null || !File.Exists(edge))
+            throw new InvalidOperationException("synth failed SAPI+Edge for: " + text);
+        return (edge, "edge");
+    }
+
     static async Task<int> GateWakePositiveAsync(AppServices s, Action<string> L)
     {
-        // Several voices: SAPI first (offline), then Edge if reachable — cap Edge samples for CI time.
+        // Several voices: SAPI first (offline), then Edge — both must yield audible samples.
         var phrases = new[] { "Лиа", "Лиа.", "Лия", "Лиа, привет", "Эй, Лиа" };
         var hits = 0;
         var total = 0;
@@ -1319,7 +1342,7 @@ public static class SelfTestRunner
             foreach (var phrase in set)
             {
                 string? path = null;
-                try { path = await synth(phrase); } catch { /* */ }
+                try { path = await synth(phrase); } catch (Exception ex) { L($"wake_positive synth fail backend={name} phrase=\"{phrase}\": {ex.Message}"); }
                 if (path == null || !File.Exists(path)) continue;
                 byte[] pcm;
                 try { pcm = LoadPcm16kMono(path); }
@@ -1332,26 +1355,30 @@ public static class SelfTestRunner
                     L($"wake_positive sample ok backend={name} phrase=\"{phrase}\" conf={conf:F2} text=\"{full}\"");
                 }
                 else
-                    L($"wake_positive MISS backend={name} phrase=\"{phrase}\"");
+                    L($"wake_positive MISS backend={name} phrase=\"{phrase}\" text=\"{full}\"");
             }
         }
 
         await TryBackend("sapi", async t =>
         {
-            try { return await s.Tts.SpeakSapiOnlyAsync(t, CancellationToken.None); }
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+                return await s.Tts.SpeakSapiOnlyAsync(t, cts.Token);
+            }
             catch { return null; }
         }, phrases);
 
-        // Edge: 3 samples (enough multi-voice without burning minutes)
+        // Edge: all 5 phrases (multi-voice + recovery if SAPI wedged)
         await TryBackend("edge", async t =>
         {
             try
             {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 return await s.Tts.SpeakWebSocketOnlyAsync(t, cts.Token);
             }
             catch { return null; }
-        }, phrases.Take(3));
+        }, phrases);
 
         if (total < 5)
         {
@@ -1374,14 +1401,9 @@ public static class SelfTestRunner
         string? path = null;
         try
         {
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                path = await s.Tts.SpeakWebSocketOnlyAsync(phrase, cts.Token);
-            }
-            catch { /* */ }
-            if (path == null)
-                path = await s.Tts.SpeakSapiOnlyAsync(phrase, CancellationToken.None);
+            var synth = await SynthAudibleAsync(s, phrase, L, 30);
+            path = synth.Path;
+            L($"wake_command_inline: synth={synth.Backend}");
 
             var pcm = LoadPcm16kMono(path);
             string? gotCmd = null;
@@ -1528,13 +1550,14 @@ public static class SelfTestRunner
         var cached = new List<byte[]>();
         var synthFail = 0;
 
-        // Synth once, cache PCM (SAPI) — fail hard if any phrase missing
+        // Synth once, cache PCM (SAPI→Edge) — fail hard if any phrase missing
         foreach (var phrase in phrases)
         {
             string? path = null;
             try
             {
-                path = await s.Tts.SpeakSapiOnlyAsync(phrase, CancellationToken.None);
+                var synth = await SynthAudibleAsync(s, phrase, L, 30);
+                path = synth.Path;
                 if (path == null || !File.Exists(path))
                 {
                     synthFail++;
@@ -1616,7 +1639,7 @@ public static class SelfTestRunner
         return 0;
     }
 
-    static int GateWakeOffline(AppServices s, Action<string> L)
+    static async Task<int> GateWakeOfflineAsync(AppServices s, Action<string> L)
     {
         try
         {
@@ -1625,32 +1648,29 @@ public static class SelfTestRunner
                 L("FAIL wake_offline: model not on disk");
                 return 1;
             }
-            // Block outbound HTTP for this check — detection must not need network
+            // Fixture audio may use Edge if SAPI is wedged; detection itself is local-model only.
             var old = ServicePointManager.Expect100Continue;
+            string? path = null;
             try
             {
-                // Synthesize a simple tone+silence is useless; use already-cached SAPI file from memory
-                // Build a minimal spoken sample via SAPI (local) then detect with network "blocked"
-                // by ensuring EnsureModelAsync is not called and ProcessUtterance only uses disk model.
-                var path = s.Tts.SpeakSapiOnlyAsync("Лиа", CancellationToken.None).GetAwaiter().GetResult();
+                var synth = await SynthAudibleAsync(s, "Лиа", L, 25);
+                path = synth.Path;
                 var pcm = LoadPcm16kMono(path);
-                try { File.Delete(path); } catch { /* */ }
+                try { File.Delete(path); path = null; } catch { /* */ }
 
-                // Point DNS-sensitive downloads at invalid host for any accidental fetch
-                var prevOverride = VoskModelStore.ModelRootOverride;
-                // Keep model root as-is (local). Detection:
                 var ok = s.Wake.ProcessUtterance(pcm, out var full, out _, out var conf);
                 if (!ok)
                 {
                     L($"FAIL wake_offline: no detect offline text=\"{full}\"");
                     return 1;
                 }
-                L($"wake_offline: PASS conf={conf:F2} text=\"{full}\" (local model, no download)");
+                L($"wake_offline: PASS conf={conf:F2} text=\"{full}\" synth={synth.Backend} (local model, no download)");
                 return 0;
             }
             finally
             {
                 ServicePointManager.Expect100Continue = old;
+                try { if (path != null) File.Delete(path); } catch { /* */ }
             }
         }
         catch (Exception ex)
@@ -1706,8 +1726,11 @@ public static class SelfTestRunner
                 return 1;
             }
 
-            wakePath = await s.Tts.SpeakSapiOnlyAsync("Лиа", CancellationToken.None);
-            followPath = await s.Tts.SpeakSapiOnlyAsync(followText, CancellationToken.None);
+            var wakeSynth = await SynthAudibleAsync(s, "Лиа", L, 25);
+            wakePath = wakeSynth.Path;
+            var followSynth = await SynthAudibleAsync(s, followText, L, 30);
+            followPath = followSynth.Path;
+            L($"wake_e2e: synth wake={wakeSynth.Backend} follow={followSynth.Backend}");
             var wakePcm = LoadPcm16kMono(wakePath);
             var followPcm = LoadPcm16kMono(followPath);
 
@@ -1807,7 +1830,9 @@ public static class SelfTestRunner
         try
         {
             s.MicGemini.TimedOut += OnTo;
-            wakePath = await s.Tts.SpeakSapiOnlyAsync("Лиа", CancellationToken.None);
+            var wakeSynth = await SynthAudibleAsync(s, "Лиа", L, 25);
+            wakePath = wakeSynth.Path;
+            L($"wake_timeout: synth={wakeSynth.Backend}");
             var wakePcm = LoadPcm16kMono(wakePath);
             var ok = s.Wake.ProcessUtterance(wakePcm, out var full, out _, out _);
             if (!ok)
