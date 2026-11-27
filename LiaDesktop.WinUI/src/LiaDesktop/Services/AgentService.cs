@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -30,6 +31,7 @@ public sealed class AgentService
     readonly ToolHost _tools;
     readonly EdgeTts _tts;
     readonly BargeInService _barge;
+    readonly StreamingTtsService _streamTts;
     readonly ConversationMemory _memory;
     CancellationTokenSource? _cts;
     string? _activeReply;
@@ -43,6 +45,7 @@ public sealed class AgentService
 
     public string? ActiveReply => _activeReply;
     public ConversationMemory Memory => _memory;
+    public StreamingTtsService StreamTts => _streamTts;
 
     public AgentService(
         GeminiClient gemini,
@@ -60,6 +63,10 @@ public sealed class AgentService
         _tts = tts;
         _barge = barge;
         _memory = memory ?? new ConversationMemory(log);
+        _streamTts = new StreamingTtsService(tts, barge, log);
+        _streamTts.SpeakFile += p => SpeakFile?.Invoke(p);
+        _streamTts.Mouth += (j, f, w) => Mouth?.Invoke(j, f, w);
+        _streamTts.PipelineEnded += () => BargeInEnded?.Invoke();
 
         _barge.MouthStop += () => Mouth?.Invoke(0, 0, 0);
         _barge.Listening += () => BargeInListening?.Invoke();
@@ -69,6 +76,7 @@ public sealed class AgentService
     public void Abort()
     {
         _cts?.Cancel();
+        _streamTts.Cancel();
         _tts.Stop();
         _barge.AbortPlayback();
         _activeReply = null;
@@ -108,6 +116,10 @@ public sealed class AgentService
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
         _log.Info($"→ {userText}");
+        var turnOrigin = Stopwatch.GetTimestamp();
+        _streamTts.TurnOriginTimestamp = turnOrigin;
+        // Warm Edge WS while Gemini thinks
+        _ = _tts.WarmAsync(ct);
 
         try
         {
@@ -150,31 +162,23 @@ public sealed class AgentService
         Narrate?.Invoke(reply);
         _log.Info(reply.Length > 160 ? reply[..160] + "…" : reply);
 
-        _ = DriveMouthWhileSpeakAsync(reply, ct);
-        var path = await _tts.SpeakToFileAsync(reply, ct);
-        if (path == null || !File.Exists(path)) return;
-
-        SpeakFile?.Invoke(path);
-        // Playback + barge-in run async so RunAsync can return after TTS file is ready
-        // (selftest / UI). Decision handler owns resume/stop/new-request.
-        _ = MonitorPlaybackAsync(path, reply, ct);
-    }
-
-    async Task MonitorPlaybackAsync(string path, string reply, CancellationToken ct)
-    {
+        // Sentence pipeline: synth+play sentence 1 ASAP, prefetch the rest (ordered).
+        // Returns after pipeline completes or is barged/cancelled.
         try
         {
-            var end = await _barge.PlayFileAsync(path, reply, ct);
-            if (end == BargeInService.PlayEnd.Completed)
-            {
-                if (_activeReply == reply) _activeReply = null;
-                BargeInEnded?.Invoke();
-            }
+            await _streamTts.SpeakAsync(reply, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            /* aborted */
         }
         catch (Exception ex)
         {
-            _log.Info("playback monitor: " + ex.Message);
-            BargeInEnded?.Invoke();
+            _log.Info("tts pipeline: " + ex.Message);
+        }
+        finally
+        {
+            if (_activeReply == reply) _activeReply = null;
         }
     }
 
@@ -308,24 +312,6 @@ public sealed class AgentService
         }
 
         return "Готово (лимит шагов агента).";
-    }
-
-    async Task DriveMouthWhileSpeakAsync(string text, CancellationToken ct)
-    {
-        try
-        {
-            var vowels = text.Where(c => "аеёиоуыэюяaeiouАЕЁИОУЫЭЮЯ".Contains(c)).ToArray();
-            if (vowels.Length == 0) vowels = ['а'];
-            for (var i = 0; i < Math.Max(12, vowels.Length) && !ct.IsCancellationRequested; i++)
-            {
-                var shape = Visemes.FromChar(vowels[i % vowels.Length]);
-                var (j, f, w) = Visemes.Morph(shape, 0.85f);
-                Mouth?.Invoke(j, f, w);
-                await Task.Delay(120, ct);
-            }
-            Mouth?.Invoke(0, 0, 0);
-        }
-        catch (OperationCanceledException) { /* */ }
     }
 
     async Task<string> OllamaChatAsync(LiaConfig cfg, string userText, CancellationToken ct)

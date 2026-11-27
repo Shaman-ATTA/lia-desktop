@@ -103,11 +103,11 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command 7z -ErrorAction SilentlyContinue) {
-            7z a -tzip -mx=9 LiaDesktop-0.7.2-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
+            7z a -tzip -mx=9 LiaDesktop-0.7.3-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
           } else {
-            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.2-win-x64.zip -CompressionLevel Optimal -Force
+            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.3-win-x64.zip -CompressionLevel Optimal -Force
           }
-          Get-Item LiaDesktop-0.7.2-win-x64.zip | Format-List Name,Length
+          Get-Item LiaDesktop-0.7.3-win-x64.zip | Format-List Name,Length
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -120,10 +120,10 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found" }
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           & $iscc /Q installer\LiaDesktop.iss
-          $setup = Get-Item artifacts\LiaDesktop-0.7.2-setup.exe
-          Copy-Item $setup.FullName .\LiaDesktop-0.7.2-setup.exe -Force
+          $setup = Get-Item artifacts\LiaDesktop-0.7.3-setup.exe
+          Copy-Item $setup.FullName .\LiaDesktop-0.7.3-setup.exe -Force
           $setup | Format-List Name,Length
-          $zip = Get-Item LiaDesktop-0.7.2-win-x64.zip
+          $zip = Get-Item LiaDesktop-0.7.3-win-x64.zip
           Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
 
       - name: Install VB-CABLE virtual render (for playback_rms loopback)
@@ -275,6 +275,9 @@ jobs:
             if ($txt -notmatch 'SELFTEST PASS') { throw "selftest.txt missing PASS marker" }
             if ($txt -notmatch 'tts_ws_only: PASS') { throw "selftest missing tts_ws_only PASS" }
             if ($txt -notmatch 'tts_sapi: PASS') { throw "selftest missing tts_sapi PASS" }
+            if ($txt -notmatch 'tts_first_sentence_latency: PASS') { throw "selftest missing tts_first_sentence_latency PASS" }
+            if ($txt -notmatch 'tts_order: PASS') { throw "selftest missing tts_order PASS" }
+            if ($txt -notmatch 'barge_queue_cancel: PASS') { throw "selftest missing barge_queue_cancel PASS" }
             if ($txt -notmatch 'log_file: PASS') { throw "selftest missing log_file PASS" }
             if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }
             if ($txt -notmatch 'render_nondefault_comm: PASS') { throw "selftest missing render_nondefault_comm PASS" }
@@ -664,7 +667,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $PWD 'LiaDesktop-0.7.2-setup.exe'
+          $setup = Join-Path $PWD 'LiaDesktop-0.7.3-setup.exe'
           if (-not (Test-Path $setup)) { throw "setup missing" }
           $dir = Join-Path $env:LOCALAPPDATA 'LiaDesktop-smoke'
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
@@ -690,8 +693,8 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.7.2-win-x64.zip
-            LiaDesktop-0.7.2-setup.exe
+            LiaDesktop-0.7.3-win-x64.zip
+            LiaDesktop-0.7.3-setup.exe
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_profile.png
@@ -719,11 +722,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.2** — Audible Multimedia TTS + vision + memory + persistent logs
+          Lia Desktop **v0.7.3** — Speak from the first sentence (low TTS latency)
 
-          - TTS → Multimedia/Console; WaveOut fallback; device picker + voice check
-          - Persistent logs in %LOCALAPPDATA%\LiaDesktop\logs (sample_log.txt on release)
-          - Vision + dialog memory; selftest render_*/playback_rms/ws_close_handshake/log_file
+          - Sentence-streamed Edge TTS with warm WS; barge cancels the queue
+          - Timings: t_text_ready / t_first_audio_byte / t_playback_start
+          - Selftest: tts_first_sentence_latency, tts_order, barge_queue_cancel + all v0.7.2 gates
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -731,7 +734,7 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           fi
-          for f in LiaDesktop-0.7.2-win-x64.zip LiaDesktop-0.7.2-setup.exe \
+          for f in LiaDesktop-0.7.3-win-x64.zip LiaDesktop-0.7.3-setup.exe \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
                    desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt \
@@ -748,25 +751,25 @@ jobs:
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      - name: Mirror + publish Latest v0.7.2 on main pushes
+      - name: Mirror + publish Latest v0.7.3 on main pushes
         if: success() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.7.2
+          TAG=v0.7.3
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.2** — Audible Multimedia TTS + vision + memory + persistent logs
+          Lia Desktop **v0.7.3** — Speak from the first sentence (low TTS latency)
 
-          - TTS → Multimedia/Console; WaveOut fallback; device picker + voice check
-          - Persistent logs in %LOCALAPPDATA%\LiaDesktop\logs (sample_log.txt on release)
-          - Vision + dialog memory; selftest render_*/playback_rms/ws_close_handshake/log_file
+          - Sentence-streamed Edge TTS with warm WS; barge cancels the queue
+          - Timings: t_text_ready / t_first_audio_byte / t_playback_start
+          - Selftest: tts_first_sentence_latency, tts_order, barge_queue_cancel + all v0.7.2 gates
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES" || true
-          for f in LiaDesktop-0.7.2-win-x64.zip LiaDesktop-0.7.2-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
+          for f in LiaDesktop-0.7.3-win-x64.zip LiaDesktop-0.7.3-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
             for m in $f; do
               [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
             done

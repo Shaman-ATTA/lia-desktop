@@ -33,14 +33,54 @@ public sealed class EdgeTts
     /// <summary>Last successful synthesis backend: edge-ws | sapi | none.</summary>
     public string LastPathChosen { get; private set; } = "none";
 
+    /// <summary>Selftest: artificial per-sentence delay after synth (ms) to prove pipeline overlap.</summary>
+    public static int SelfTestSynthDelayMs { get; set; }
+
     readonly AppLog _log;
     static readonly HttpClient DateProbe = new() { Timeout = TimeSpan.FromSeconds(8) };
+    readonly SemaphoreSlim _wsGate = new(1, 1);
+    ClientWebSocket? _warmWs;
+    CookieContainer? _warmCookies;
 
     public EdgeTts(AppLog log) => _log = log;
 
-    public void Stop() { /* WS/SAPI are per-call; nothing long-lived to kill */ }
+    public void Stop()
+    {
+        try { _warmWs?.Abort(); } catch { /* */ }
+        try { _warmWs?.Dispose(); } catch { /* */ }
+        _warmWs = null;
+    }
 
-    public async Task<string?> SpeakToFileAsync(string text, CancellationToken ct = default)
+    /// <summary>Pre-connect Edge WS (call when user starts speaking / send) to shave handshake.</summary>
+    public async Task WarmAsync(CancellationToken ct = default)
+    {
+        if (DisableWebSocket || SelfTestOfflineAbruptClose) return;
+        await _wsGate.WaitAsync(ct);
+        try
+        {
+            if (_warmWs is { State: WebSocketState.Open }) return;
+            DisposeWarm_NoLock();
+            var (ws, cookies) = await ConnectWsAsync(ct);
+            await SendSpeechConfigAsync(ws, ct);
+            _warmWs = ws;
+            _warmCookies = cookies;
+            _log.Info("edge-tts: warm WS ready");
+        }
+        catch (Exception ex)
+        {
+            DisposeWarm_NoLock();
+            _log.Info("edge-tts warm fail: " + OneLine(ex.Message));
+        }
+        finally
+        {
+            _wsGate.Release();
+        }
+    }
+
+    public async Task<string?> SpeakToFileAsync(
+        string text,
+        CancellationToken ct = default,
+        Action<long>? onFirstAudioByte = null)
     {
         text = Regex.Replace(text, @"\s+", " ").Trim();
         if (string.IsNullOrEmpty(text)) return null;
@@ -54,7 +94,9 @@ public sealed class EdgeTts
                 var outPath = Path.Combine(Path.GetTempPath(), $"lia-tts-{Guid.NewGuid():N}.mp3");
                 try
                 {
-                    await ViaWebSocketAsync(text, outPath, ct);
+                    await ViaWebSocketAsync(text, outPath, ct, onFirstAudioByte);
+                    if (SelfTestSynthDelayMs > 0)
+                        await Task.Delay(SelfTestSynthDelayMs, ct);
                     if (TtsAudioGate.TryValidate(outPath, out _, out _, out _))
                     {
                         LastPathChosen = "edge-ws";
@@ -84,11 +126,17 @@ public sealed class EdgeTts
             try
             {
                 var wav = await ViaSapiAsync(text, ct);
-                if (wav != null && TtsAudioGate.TryValidate(wav, out _, out _, out var sapiOk))
+                if (wav != null)
                 {
-                    LastPathChosen = "sapi";
-                    _log.Info($"tts_path_chosen=sapi ({sapiOk})");
-                    return wav;
+                    if (SelfTestSynthDelayMs > 0)
+                        await Task.Delay(SelfTestSynthDelayMs, ct);
+                    onFirstAudioByte?.Invoke(new FileInfo(wav).Length);
+                    if (TtsAudioGate.TryValidate(wav, out _, out _, out var sapiOk))
+                    {
+                        LastPathChosen = "sapi";
+                        _log.Info($"tts_path_chosen=sapi ({sapiOk})");
+                        return wav;
+                    }
                 }
             }
             catch (Exception ex)
@@ -129,14 +177,17 @@ public sealed class EdgeTts
         return path!;
     }
 
-    async Task ViaWebSocketAsync(string text, string outPath, CancellationToken ct)
+    async Task ViaWebSocketAsync(
+        string text, string outPath, CancellationToken ct, Action<long>? onFirstAudioByte = null)
     {
         if (SelfTestOfflineAbruptClose)
         {
             // Seed audible bytes (SAPI wav), then simulate remote drop without close handshake
             var seed = await ViaSapiAsync(text, ct)
                 ?? throw new InvalidOperationException("selftest abrupt-close: no seed audio");
-            await File.WriteAllBytesAsync(outPath, await File.ReadAllBytesAsync(seed, ct), ct);
+            var bytes = await File.ReadAllBytesAsync(seed, ct);
+            await File.WriteAllBytesAsync(outPath, bytes, ct);
+            onFirstAudioByte?.Invoke(bytes.Length);
             try
             {
                 throw new WebSocketException(
@@ -153,88 +204,152 @@ public sealed class EdgeTts
             }
         }
 
+        using var link = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        link.CancelAfter(TimeSpan.FromSeconds(45));
+
+        ClientWebSocket ws;
+        var tookWarm = false;
+        await _wsGate.WaitAsync(link.Token);
+        try
+        {
+            if (_warmWs is { State: WebSocketState.Open })
+            {
+                ws = _warmWs;
+                _warmWs = null;
+                tookWarm = true;
+            }
+            else
+            {
+                DisposeWarm_NoLock();
+                var conn = await ConnectWsAsync(link.Token);
+                ws = conn.Ws;
+                await SendSpeechConfigAsync(ws, link.Token);
+            }
+        }
+        finally
+        {
+            _wsGate.Release();
+        }
+
+        try
+        {
+            var ssml =
+                $"Content-Type:application/ssml+xml\r\nX-RequestId:{Guid.NewGuid():N}\r\nPath:ssml\r\n\r\n" +
+                $"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ru-RU'>" +
+                $"<voice name='{Voice}'><prosody rate='{Rate}'>{System.Security.SecurityElement.Escape(text)}</prosody></voice></speak>";
+            await ws.SendAsync(Encoding.UTF8.GetBytes(ssml), WebSocketMessageType.Text, true, link.Token);
+
+            await using var fs = new FileStream(
+                outPath, FileMode.Create, FileAccess.Write, FileShare.Read,
+                64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var buf = new byte[256 * 1024];
+            var sawTurnEnd = false;
+            var firstByte = false;
+            try
+            {
+                while (ws.State == WebSocketState.Open)
+                {
+                    using var ms = new MemoryStream();
+                    WebSocketReceiveResult result;
+                    do
+                    {
+                        result = await ws.ReceiveAsync(buf, link.Token);
+                        if (result.MessageType == WebSocketMessageType.Close) break;
+                        ms.Write(buf, 0, result.Count);
+                    } while (!result.EndOfMessage);
+
+                    if (result.MessageType == WebSocketMessageType.Close) break;
+                    var msg = ms.ToArray();
+                    if (result.MessageType == WebSocketMessageType.Binary)
+                    {
+                        if (msg.Length < 2) continue;
+                        var headerLen = (msg[0] << 8) | msg[1];
+                        var dataStart = 2 + headerLen;
+                        if (msg.Length > dataStart)
+                        {
+                            var span = msg.AsMemory(dataStart);
+                            await fs.WriteAsync(span, link.Token);
+                            await fs.FlushAsync(link.Token); // early first-byte mark
+                            if (!firstByte)
+                            {
+                                firstByte = true;
+                                onFirstAudioByte?.Invoke(fs.Length);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var s = Encoding.UTF8.GetString(msg);
+                        if (s.Contains("Path:turn.end", StringComparison.Ordinal))
+                        {
+                            sawTurnEnd = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) when (IsAbruptWsClose(ex))
+            {
+                // Remote closed without close handshake — if we already have audio (or turn.end), SUCCESS
+                if (fs.Length > 0 || sawTurnEnd)
+                {
+                    _log.Info($"edge-tts: abrupt WS close after {fs.Length}B audio — treating as OK");
+                    await fs.FlushAsync(link.Token);
+                    if (fs.Length > 0)
+                    {
+                        if (!firstByte) onFirstAudioByte?.Invoke(fs.Length);
+                        return;
+                    }
+                }
+                throw;
+            }
+            if (fs.Length == 0) throw new InvalidOperationException("Edge TTS returned empty audio");
+            if (!firstByte) onFirstAudioByte?.Invoke(fs.Length);
+        }
+        finally
+        {
+            try { ws.Dispose(); } catch { /* */ }
+            _ = tookWarm;
+        }
+    }
+
+    async Task<(ClientWebSocket Ws, CookieContainer Cookies)> ConnectWsAsync(CancellationToken ct)
+    {
         var connId = Guid.NewGuid().ToString("N");
         var url = EdgeMsDrm.BuildWssUrl(connId);
-        using var ws = new ClientWebSocket();
-        // Cookie via container — SetRequestHeader("Cookie") is rejected by ClientWebSocket
-        ws.Options.Cookies = new CookieContainer();
-        ws.Options.Cookies.Add(
+        var ws = new ClientWebSocket();
+        var cookies = new CookieContainer();
+        ws.Options.Cookies = cookies;
+        cookies.Add(
             new Uri("https://speech.platform.bing.com"),
             new Cookie("muid", EdgeMsDrm.GenerateMuid()));
 
         foreach (var (k, v) in EdgeMsDrm.WssHeadersWithoutCookie())
         {
-            // Sec-WebSocket-* are set by the runtime; Accept-Encoding can break the upgrade
             if (k.StartsWith("Sec-WebSocket", StringComparison.OrdinalIgnoreCase)) continue;
             if (k.Equals("Accept-Encoding", StringComparison.OrdinalIgnoreCase)) continue;
             try { ws.Options.SetRequestHeader(k, v); }
-            catch { /* some headers are restricted */ }
+            catch { /* restricted */ }
         }
 
-        using var link = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        link.CancelAfter(TimeSpan.FromSeconds(45));
-        await ws.ConnectAsync(new Uri(url), link.Token);
+        await ws.ConnectAsync(new Uri(url), ct);
+        return (ws, cookies);
+    }
 
+    static async Task SendSpeechConfigAsync(ClientWebSocket ws, CancellationToken ct)
+    {
         var config =
             "Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n" +
             "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"true\"},\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}\r\n";
-        await ws.SendAsync(Encoding.UTF8.GetBytes(config), WebSocketMessageType.Text, true, link.Token);
+        await ws.SendAsync(Encoding.UTF8.GetBytes(config), WebSocketMessageType.Text, true, ct);
+    }
 
-        var ssml =
-            $"Content-Type:application/ssml+xml\r\nX-RequestId:{Guid.NewGuid():N}\r\nPath:ssml\r\n\r\n" +
-            $"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ru-RU'>" +
-            $"<voice name='{Voice}'><prosody rate='{Rate}'>{System.Security.SecurityElement.Escape(text)}</prosody></voice></speak>";
-        await ws.SendAsync(Encoding.UTF8.GetBytes(ssml), WebSocketMessageType.Text, true, link.Token);
-
-        await using var fs = File.Create(outPath);
-        var buf = new byte[256 * 1024];
-        var sawTurnEnd = false;
-        try
-        {
-            while (ws.State == WebSocketState.Open)
-            {
-                using var ms = new MemoryStream();
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await ws.ReceiveAsync(buf, link.Token);
-                    if (result.MessageType == WebSocketMessageType.Close) break;
-                    ms.Write(buf, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (result.MessageType == WebSocketMessageType.Close) break;
-                var msg = ms.ToArray();
-                if (result.MessageType == WebSocketMessageType.Binary)
-                {
-                    if (msg.Length < 2) continue;
-                    var headerLen = (msg[0] << 8) | msg[1];
-                    var dataStart = 2 + headerLen;
-                    if (msg.Length > dataStart)
-                        await fs.WriteAsync(msg.AsMemory(dataStart), link.Token);
-                }
-                else
-                {
-                    var s = Encoding.UTF8.GetString(msg);
-                    if (s.Contains("Path:turn.end", StringComparison.Ordinal))
-                    {
-                        sawTurnEnd = true;
-                        break;
-                    }
-                }
-            }
-        }
-        catch (Exception ex) when (IsAbruptWsClose(ex))
-        {
-            // Remote closed without close handshake — if we already have audio (or turn.end), SUCCESS
-            if (fs.Length > 0 || sawTurnEnd)
-            {
-                _log.Info($"edge-tts: abrupt WS close after {fs.Length}B audio — treating as OK");
-                await fs.FlushAsync(link.Token);
-                if (fs.Length > 0) return;
-            }
-            throw;
-        }
-        if (fs.Length == 0) throw new InvalidOperationException("Edge TTS returned empty audio");
+    void DisposeWarm_NoLock()
+    {
+        try { _warmWs?.Abort(); } catch { /* */ }
+        try { _warmWs?.Dispose(); } catch { /* */ }
+        _warmWs = null;
+        _warmCookies = null;
     }
 
     static bool IsAbruptWsClose(Exception ex)

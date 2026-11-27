@@ -1,6 +1,6 @@
 ; Inno Setup — per-user install, no admin
 #define MyAppName "Lia Assistant"
-#define MyAppVersion "0.7.2"
+#define MyAppVersion "0.7.3"
 #define MyAppPublisher "ATTA CORP"
 #define MyAppExeName "LiaDesktop.exe"
 

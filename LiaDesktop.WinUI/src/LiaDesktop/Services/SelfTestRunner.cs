@@ -70,6 +70,9 @@ public static class SelfTestRunner
             // TTS gates — must prove C# WebSocket alone (no Python) + SAPI offline
             failed += await RunTtsGatesAsync(services, L);
 
+            // Streaming first-sentence TTS pipeline
+            failed += await RunStreamingTtsGatesAsync(services, L);
+
             // Persistent log file gate
             failed += RunLogFileGate(services, L);
 
@@ -200,7 +203,9 @@ public static class SelfTestRunner
             // Chain may walk preferred models (25s each × 2); lite-latest should answer fast.
             try
             {
-                return await OneTurnAsync(s, "привет", "live", L, expectRu: true, timeoutSec: 120);
+                var rc = await OneTurnAsync(s, "привет", "live", L, expectRu: true, timeoutSec: 120);
+                L($"live latency: t_text_ready={s.Agent.StreamTts.LastTextReadyMs}ms t_first_audio_byte={s.Agent.StreamTts.LastFirstAudioByteMs}ms t_playback_start={s.Agent.StreamTts.LastPlaybackStartMs}ms");
+                return rc;
             }
             finally
             {
@@ -886,6 +891,123 @@ public static class SelfTestRunner
             L($"FAIL playback_rms: {ex.GetType().Name}: {ex.Message}");
             return 1;
         }
+    }
+
+    static async Task<int> RunStreamingTtsGatesAsync(AppServices s, Action<string> L)
+    {
+        var fail = 0;
+        const string fourSentences =
+            "Первое предложение для проверки задержки. " +
+            "Второе предложение продолжается здесь. " +
+            "Третье предложение ещё длиннее для синтеза. " +
+            "Четвёртое предложение завершает тестовый ответ.";
+
+        var prevDelay = EdgeTts.SelfTestSynthDelayMs;
+        EdgeTts.SelfTestSynthDelayMs = 550; // force overlap: first play before all synth done
+        s.Agent.SuspendBargeHandling(true);
+        try
+        {
+            // --- tts_first_sentence_latency ---
+            try
+            {
+                var pipe = s.Agent.StreamTts;
+                pipe.TurnOriginTimestamp = Stopwatch.GetTimestamp();
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+                await pipe.SpeakAsync(fourSentences, cts.Token);
+
+                var firstAudio = pipe.LastFirstAudioByteMs;
+                var playStart = pipe.LastPlaybackStartMs;
+                var fullSynth = pipe.LastFullSynthMs;
+                if (playStart < 0 || fullSynth < 0 || firstAudio < 0)
+                {
+                    L($"FAIL tts_first_sentence_latency: missing timings first={firstAudio} play={playStart} full={fullSynth}");
+                    fail++;
+                }
+                else if (playStart >= fullSynth)
+                {
+                    L($"FAIL tts_first_sentence_latency: play_start={playStart}ms not before full_synth={fullSynth}ms");
+                    fail++;
+                }
+                else if (firstAudio >= fullSynth * 0.5 || firstAudio >= 2500)
+                {
+                    L($"FAIL tts_first_sentence_latency: first_audio={firstAudio}ms full_synth={fullSynth}ms (need <50% and <2500)");
+                    fail++;
+                }
+                else
+                {
+                    L($"tts_first_sentence_latency: PASS first_audio={firstAudio}ms play_start={playStart}ms full_synth={fullSynth}ms");
+                }
+
+                // --- tts_order ---
+                var order = pipe.LastPlayedOrder;
+                var expected = Enumerable.Range(0, Math.Min(4, order.Count)).ToList();
+                if (order.Count < 4 || !order.SequenceEqual(Enumerable.Range(0, 4)))
+                {
+                    L($"FAIL tts_order: got [{string.Join(",", order)}] expected 0,1,2,3");
+                    fail++;
+                }
+                else
+                    L($"tts_order: PASS seq=[{string.Join(",", order)}]");
+            }
+            catch (Exception ex)
+            {
+                L($"FAIL tts_first_sentence_latency/tts_order: {ex.GetType().Name}: {ex.Message}");
+                fail++;
+            }
+
+            // --- barge_queue_cancel ---
+            try
+            {
+                var pipe = s.Agent.StreamTts;
+                pipe.TurnOriginTimestamp = Stopwatch.GetTimestamp();
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+                var speak = pipe.SpeakAsync(fourSentences, cts.Token);
+                // Wait until sentence 0 is playing, then cancel queue
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < deadline && pipe.LastPlaybackStartMs < 0)
+                    await Task.Delay(40);
+                if (pipe.LastPlaybackStartMs < 0)
+                {
+                    L("FAIL barge_queue_cancel: playback never started");
+                    fail++;
+                    cts.Cancel();
+                    try { await speak; } catch { /* */ }
+                }
+                else
+                {
+                    // Barge during sentence 0 — must not advance the queue
+                    pipe.Cancel();
+                    try { await speak; } catch { /* */ }
+                    var order = pipe.LastPlayedOrder;
+                    if (order.Count == 0)
+                    {
+                        L("FAIL barge_queue_cancel: no sentences played before cancel");
+                        fail++;
+                    }
+                    else if (order.Any(i => i > 0))
+                    {
+                        L($"FAIL barge_queue_cancel: queue continued after barge seq=[{string.Join(",", order)}]");
+                        fail++;
+                    }
+                    else
+                        L($"barge_queue_cancel: PASS played=[{string.Join(",", order)}] (rest cancelled)");
+                }
+            }
+            catch (Exception ex)
+            {
+                L($"FAIL barge_queue_cancel: {ex.GetType().Name}: {ex.Message}");
+                fail++;
+            }
+        }
+        finally
+        {
+            EdgeTts.SelfTestSynthDelayMs = prevDelay;
+            s.Agent.SuspendBargeHandling(false);
+            s.Agent.Abort();
+            await Task.Delay(200);
+        }
+
+        return fail;
     }
 
     static async Task<int> RunTtsGatesAsync(AppServices s, Action<string> L)

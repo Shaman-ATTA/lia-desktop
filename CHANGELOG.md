@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.3 — Speak from the first sentence (low TTS latency)
+
+- **Streaming TTS:** split reply on RU `.!?…` / newlines (+ soft ~200-char comma cuts); synthesize sentence 1 immediately and play as soon as ready while prefetching 2+ (ordered).
+- **Edge warm WS:** pre-connect when the user sends; first-audio-byte flush; abrupt close without handshake still OK if audio received.
+- **Barge-in:** abort cancels current playback **and** the rest of the sentence queue; lip sync follows each chunk.
+- **Timings logged:** `t_text_ready`, `t_first_audio_byte`, `t_playback_start` (ms from turn origin).
+- **Selftest:** `tts_first_sentence_latency`, `tts_order`, `barge_queue_cancel`, live latency lines — prior gates remain hard.
+
 ## v0.7.2 — Vision + dialog memory + audible Multimedia TTS + logs
 
 - **Field fix (inaudible TTS):** playback uses default **Multimedia/Console** render (never Communications); follow default-device changes; WasapiOut → WaveOutEvent fallback; log `TTS → <device>`. Settings: output device picker + **ПРОВЕРИТЬ ГОЛОС**.
