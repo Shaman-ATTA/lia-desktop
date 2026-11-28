@@ -69,6 +69,8 @@ public sealed class WakeWordService : IDisposable
     public int DetectCount { get; private set; }
     public int RejectCount { get; private set; }
     public int FalseWakeCount { get; private set; }
+    /// <summary>Last grammar/freeform reject reason for selftest diagnostics.</summary>
+    public string LastRejectDetail { get; private set; } = "";
 
     public bool IsRunning => _running;
     public bool IsReady => _model != null;
@@ -239,13 +241,13 @@ public sealed class WakeWordService : IDisposable
                 try
                 {
                     CleanupCapture_NoLock();
-                    // Sleep-mode (not EventCallback): shared+event fires every device quantum (~10ms)
-                    // and pegs a core on loopback even when we drop the audio. Sleep waits ~buffer/2.
-                    _wasapi = CreateWasapiNoSyncContext(() =>
-                        new WasapiCapture(pick, useEventSync: false, audioBufferMillisecondsLength: CaptureBufferMs)
-                        {
-                            ShareMode = AudioClientShareMode.Shared,
-                        });
+                    // Sleep-mode on THIS thread (not EventCallback): event sync fires every device
+                    // quantum (~10ms) and pegs a core. Do NOT ctor on a worker thread — MMDevice is
+                    // STA/apartment-affine and cross-thread QI → E_NOINTERFACE.
+                    _wasapi = new WasapiCapture(pick, useEventSync: false, audioBufferMillisecondsLength: CaptureBufferMs)
+                    {
+                        ShareMode = AudioClientShareMode.Shared,
+                    };
                     _wasapiFormat = _wasapi.WaveFormat;
                     _wasapi.DataAvailable += OnWasapiData;
                     _wasapi.StartRecording();
@@ -295,8 +297,8 @@ public sealed class WakeWordService : IDisposable
             }
 
             CleanupCapture_NoLock();
-            // Sleep sync + no SynchronizationContext (avoid UI Post on every packet)
-            _wasapi = CreateWasapiNoSyncContext(() => new WakeLoopbackCapture(render, CaptureBufferMs));
+            // Sleep sync, same-thread ctor (MMDevice apartment). EventCallback was ~28% idle_avg.
+            _wasapi = new WakeLoopbackCapture(render, CaptureBufferMs);
             _wasapiFormat = _wasapi.WaveFormat;
             _wasapi.DataAvailable += OnWasapiData;
             _wasapi.StartRecording();
@@ -428,30 +430,6 @@ public sealed class WakeWordService : IDisposable
         {
             _log.Info("wake wasapi resample: " + ex.Message);
         }
-    }
-
-    /// <summary>
-    /// Construct WasapiCapture on a thread with no SynchronizationContext so NAudio does not
-    /// capture a WinUI dispatcher (RecordingStopped Post is harmless; keep ctor clean).
-    /// </summary>
-    static WasapiCapture CreateWasapiNoSyncContext(Func<WasapiCapture> factory)
-    {
-        WasapiCapture? cap = null;
-        Exception? err = null;
-        var t = new Thread(() =>
-        {
-            try
-            {
-                SynchronizationContext.SetSynchronizationContext(null);
-                cap = factory();
-            }
-            catch (Exception ex) { err = ex; }
-        })
-        { IsBackground = true, Name = "wake-wasapi-ctor" };
-        t.Start();
-        t.Join();
-        if (err != null) throw err;
-        return cap ?? throw new InvalidOperationException("wasapi ctor produced null");
     }
 
     /// <summary>Lock-free peek: skip FloatMix on digital silence; noise EMA only.</summary>
@@ -803,6 +781,17 @@ public sealed class WakeWordService : IDisposable
         }
     }
 
+    /// <summary>Whole-utterance AGC copy for offline/confirm decodes (peak → ~-6 dBFS, ≤×10).</summary>
+    static byte[] NormalizeUtteranceForVosk(byte[] pcm)
+    {
+        if (pcm.Length < 4) return pcm;
+        var gain = ComputeAgcGain(pcm, pcm.Length);
+        if (gain <= 1.01f) return pcm;
+        var dst = new byte[pcm.Length];
+        ApplyGainTo(pcm, pcm.Length, gain, dst);
+        return dst;
+    }
+
     /// <summary>
     /// Selftest / offline helper: grammar (live path) + free-form confirm, same strip rules.
     /// Returns true if wake word detected. Also raises Woken.
@@ -870,13 +859,17 @@ public sealed class WakeWordService : IDisposable
         lock (_gate)
         {
             confirmPcm = _capturingPost ? TakePostCapturePcm_NoLock() : null;
-            if (!_capturingPost && _grmNative != IntPtr.Zero)
+            if (confirmPcm == null && _grmNative != IntPtr.Zero)
             {
                 try
                 {
                     var json = PtrToUtf8(vosk_recognizer_final_result(_grmNative));
                     ResetGrammar_NoLock();
                     TryHandleGrammarFinal_NoLock(json);
+                    // Forced final may open post-capture with no more audio arriving — confirm now
+                    // from ring pre-roll (quiet «Лиа» + AGC in FreeFormDecode).
+                    if (_capturingPost)
+                        confirmPcm = TakePostCapturePcm_NoLock();
                 }
                 catch { /* */ }
             }
@@ -892,17 +885,20 @@ public sealed class WakeWordService : IDisposable
         if (string.IsNullOrWhiteSpace(text) || text == "[unk]")
         {
             RejectCount++;
+            LastRejectDetail = $"grammar empty/unk conf={conf:F2}";
             return;
         }
         if (!WakeText.ContainsWake(text))
         {
             RejectCount++;
+            LastRejectDetail = $"grammar no-wake text=\"{text}\" conf={conf:F2}";
             return;
         }
         var floor = ConfidenceFloor();
         if (conf < floor)
         {
             RejectCount++;
+            LastRejectDetail = $"grammar conf={conf:F2} < floor={floor:F2} text={text}";
             _log.Info($"wake: reject conf={conf:F2} < {floor:F2} text={text}");
             return;
         }
@@ -935,6 +931,7 @@ public sealed class WakeWordService : IDisposable
 
     void ConfirmWakeFromPcm(byte[] pcm)
     {
+        // Ring/post PCM is raw capture level — AGC inside FreeFormDecode so quiet «Лиа» confirms.
         var (text, conf) = FreeFormDecode(pcm);
         text = WakeText.NormalizeAsrWake(text);
         lock (_gate)
@@ -943,6 +940,7 @@ public sealed class WakeWordService : IDisposable
             {
                 RejectCount++;
                 FalseWakeCount++;
+                LastRejectDetail = $"post no-wake text=\"{text}\" conf={conf:F2}";
                 _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(1200);
                 _log.Info($"wake: post reject (no wake in freeform) text=\"{text}\" conf={conf:F2}");
                 return;
@@ -951,12 +949,14 @@ public sealed class WakeWordService : IDisposable
             if (conf < floor * 0.7f)
             {
                 RejectCount++;
+                LastRejectDetail = $"post conf={conf:F2} < {floor * 0.7f:F2} text={text}";
                 _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(800);
                 _log.Info($"wake: post reject conf={conf:F2} text={text}");
                 return;
             }
             var cmd = WakeText.StripWake(text);
             DetectCount++;
+            LastRejectDetail = "";
             _log.Info($"wake: DETECT conf={conf:F2} text=\"{text}\" cmd=\"{cmd}\"");
             RaiseWoken(text, cmd, conf);
         }
@@ -969,6 +969,8 @@ public sealed class WakeWordService : IDisposable
         if (model == null || pcm.Length == 0) return ("", 0);
         try
         {
+            // Utterance AGC before Vosk (quiet wake / confirm path)
+            pcm = NormalizeUtteranceForVosk(pcm);
             using var rec = new VoskRecognizer(model, SampleRate);
             rec.SetWords(true);
             const int chunk = 8000; // 0.25s
@@ -999,6 +1001,7 @@ public sealed class WakeWordService : IDisposable
         IntPtr grm = IntPtr.Zero;
         try
         {
+            pcm = NormalizeUtteranceForVosk(pcm);
             var grammar = "[\"лиа\",\"лия\",\"[unk]\"]";
             var bytes = Encoding.UTF8.GetBytes(grammar + "\0");
             var pin = GCHandle.Alloc(bytes, GCHandleType.Pinned);

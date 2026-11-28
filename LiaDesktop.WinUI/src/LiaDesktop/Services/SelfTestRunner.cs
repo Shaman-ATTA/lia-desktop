@@ -2020,7 +2020,7 @@ public static class SelfTestRunner
 
             if (!detected)
             {
-                L($"FAIL wake_quiet: no DETECT at -20 dBFS peak_dbfs={peakDb:F1} rms={rms:F0} sensitivity={s.Wake.Sensitivity:F2} vad={s.Wake.VadOpen} reject={s.Wake.RejectCount}");
+                L($"FAIL wake_quiet: no DETECT at -20 dBFS peak_dbfs={peakDb:F1} rms={rms:F0} sensitivity={s.Wake.Sensitivity:F2} vad={s.Wake.VadOpen} reject={s.Wake.RejectCount} detail={s.Wake.LastRejectDetail}");
                 return 1;
             }
             L($"wake_quiet: PASS text=\"{got}\" conf={gotConf:F2} peak_dbfs={peakDb:F1} rms={rms:F0} sensitivity={s.Wake.Sensitivity:F2}");
