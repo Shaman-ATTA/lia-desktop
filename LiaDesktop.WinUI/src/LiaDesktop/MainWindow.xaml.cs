@@ -74,6 +74,37 @@ public sealed partial class MainWindow : Window
     }
 
     public void SaveHoloPng(string path) => Holo.Renderer.SaveBackbufferPng(path);
+
+    /// <summary>
+    /// Parity / framing dumps: hologram composited into a 1024×720 window chrome plate
+    /// (title + dock + centre column) so check_framing viewport/arc bands match smoke shots.
+    /// </summary>
+    public void SaveParityWindowPng(string path, int winW = 1024, int winH = 720)
+    {
+        var tmp = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"lia_parity_holo_{Environment.ProcessId}.png");
+        try
+        {
+            Holo.Renderer.SaveBackbufferPng(tmp);
+            using var holo = new System.Drawing.Bitmap(tmp);
+            using var full = new System.Drawing.Bitmap(winW, winH);
+            using var g = System.Drawing.Graphics.FromImage(full);
+            g.Clear(System.Drawing.Color.FromArgb(255, 5, 7, 12));
+            var stageTop = 36f;
+            var stageH = winH - 36f - 120f;
+            var colX = (float)(winW * 0.22);
+            var colW = (float)(winW * 0.56);
+            g.DrawImage(holo, colX, stageTop, colW, stageH);
+            var dir = System.IO.Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            full.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* */ }
+        }
+    }
     public string VoiceStatusText => VoiceLine.Text ?? "";
     public void NotifyMicUnavailable() => OnMicUnavailable();
 

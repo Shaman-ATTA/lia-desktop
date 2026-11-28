@@ -2327,7 +2327,8 @@ public static class SelfTestRunner
             await Task.Delay(500);
             await UiAsync(mw, () => mw.PinHoloAnimTime(1.0f));
             await Task.Delay(200);
-            await UiAsync(mw, () => mw.SaveHoloPng(activePath));
+            // Composite into window chrome so check_framing arc/viewport bands match smoke
+            await UiAsync(mw, () => mw.SaveParityWindowPng(activePath));
 
             // Idle frame (real default economy — arcs/hair must still be present)
             await UiAsync(mw, () =>
@@ -2338,7 +2339,7 @@ public static class SelfTestRunner
             await Task.Delay(700);
             await UiAsync(mw, () => mw.PinHoloAnimTime(1.0f));
             await Task.Delay(250);
-            await UiAsync(mw, () => mw.SaveHoloPng(idlePath));
+            await UiAsync(mw, () => mw.SaveParityWindowPng(idlePath));
 
             await UiAsync(mw, () =>
             {
