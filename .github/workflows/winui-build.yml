@@ -229,6 +229,19 @@ jobs:
           }
           Write-Host 'VB-CABLE ready — app will use default Multimedia for playback_rms'
 
+          # Desktop mic consent so WasapiCapture/WaveIn can open CABLE Output (wake_cpu).
+          # Loopback still works without this; real capture needs Allow.
+          foreach ($root in @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone',
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone')) {
+            New-Item -Path $root -Force | Out-Null
+            Set-ItemProperty -Path $root -Name Value -Value Allow -Force
+            $np = Join-Path $root 'NonPackaged'
+            New-Item -Path $np -Force | Out-Null
+            Set-ItemProperty -Path $np -Name Value -Value Allow -Force
+          }
+          Write-Host 'Microphone ConsentStore → Allow (machine + user, NonPackaged)'
+
       - name: Cache / download Vosk small-ru model (wake word)
         shell: pwsh
         run: |

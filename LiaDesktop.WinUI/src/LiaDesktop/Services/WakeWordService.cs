@@ -143,10 +143,14 @@ public sealed class WakeWordService : IDisposable
                 return;
             }
 
-            // Prefer WASAPI (VB-CABLE Output often absent from legacy WaveIn list on CI)
+            // Prefer WASAPI capture, then WaveIn. ForceWaveIn (wake_cpu): loopback on
+            // default Multimedia render when mic/capture is denied (VB-CABLE Output E_ACCESSDENIED
+            // on CI — WasapiLoopbackCapture on CABLE Input still proves real audio I/O).
             if (TryStartWasapi_NoLock())
                 return;
             if (TryStartWaveIn_NoLock())
+                return;
+            if (mode == CaptureMode.ForceWaveIn && TryStartWasapiLoopback_NoLock())
                 return;
 
             _running = true;
@@ -220,6 +224,49 @@ public sealed class WakeWordService : IDisposable
         LastCaptureError = "wasapi: " + string.Join(" | ", errors);
         _log.Info("wake: WasapiCapture fail — " + LastCaptureError);
         return false;
+    }
+
+    /// <summary>
+    /// Selftest-only fallback: loopback of default Multimedia render (same path as playback_rms).
+    /// Does not require microphone privacy; never used in production Auto mode (echo hazard).
+    /// </summary>
+    bool TryStartWasapiLoopback_NoLock()
+    {
+        try
+        {
+            using var en = new MMDeviceEnumerator();
+            MMDevice render;
+            try
+            {
+                render = en.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            }
+            catch (Exception ex)
+            {
+                LastCaptureError = (string.IsNullOrEmpty(LastCaptureError) ? "" : LastCaptureError + " ; ")
+                                   + "loopback default render: " + ex.Message;
+                return false;
+            }
+
+            CleanupCapture_NoLock();
+            var loop = new WasapiLoopbackCapture(render);
+            _wasapi = loop;
+            _wasapiFormat = loop.WaveFormat;
+            _wasapi.DataAvailable += OnWasapiData;
+            _wasapi.StartRecording();
+            _running = true;
+            LastCaptureMode = "wasapi";
+            LastCaptureError = "";
+            _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiLoopback device={render.FriendlyName} fmt={_wasapiFormat}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LastCaptureError = (string.IsNullOrEmpty(LastCaptureError) ? "" : LastCaptureError + " ; ")
+                               + "loopback: " + ex.Message;
+            _log.Info("wake: WasapiLoopback fail — " + ex.Message);
+            CleanupCapture_NoLock();
+            return false;
+        }
     }
 
     WaveFormat? _waveInNativeFormat; // non-16k open → resample in OnWaveInData
