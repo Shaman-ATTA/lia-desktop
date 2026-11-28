@@ -103,5 +103,5 @@ begin
   Result := True;
 end;
 
-{ Closing: CloseApplications (+ /FORCECLOSEAPPLICATIONS) only targets processes
-  that hold files under {app}. A portable/selftest copy from another folder stays up. }
+(* Closing: CloseApplications (+ /FORCECLOSEAPPLICATIONS) only targets processes
+   that hold files under the install dir. A portable/selftest copy elsewhere stays up. *)
