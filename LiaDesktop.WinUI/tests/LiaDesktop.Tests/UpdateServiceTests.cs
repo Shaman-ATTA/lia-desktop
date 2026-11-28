@@ -1,4 +1,5 @@
 using LiaDesktop.Services;
+using Xunit;
 
 namespace LiaDesktop.Tests;
 
