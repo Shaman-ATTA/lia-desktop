@@ -163,6 +163,10 @@ public sealed partial class MainWindow : Window
 
         var smoke = ApplySmokeOverrides();
         var virtualSmoke = TryScheduleVirtualSmokeDump();
+        // Smoke screenshots need full Active pass (arcs/hair/MSAA). Idle economy skips those
+        // for CPU — fine for ОЖИДАНИЕ, wrong for product framing gates.
+        if (smoke || virtualSmoke)
+            _renderPaceOverride = HoloPanel.RenderPace.Active;
         DispatcherQueue.TryEnqueue(() => InitTrayAndAutostart());
         DispatcherQueue.TryEnqueue(RefreshRenderPace);
         if (SelfTestRunner.IsSelfTest)
