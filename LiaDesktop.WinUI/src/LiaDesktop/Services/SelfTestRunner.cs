@@ -1243,7 +1243,8 @@ public static class SelfTestRunner
         var fail = 0;
         var wake = s.Wake;
         wake.ChimeEnabled = false;
-        wake.Sensitivity = 0.45f; // CI voices vary
+        // Shipped default from settings — same for positive / quiet / negative (no test-only soften).
+        wake.Sensitivity = s.Config.WakeWordSensitivity;
         EnableWakeFollowUp = false;
 
         try
@@ -1257,41 +1258,42 @@ public static class SelfTestRunner
                 return 1;
             }
             L($"wake: model ready path={VoskModelStore.ModelPath()}");
+            L($"wake: sensitivity={wake.Sensitivity:F2} (settings default, DefaultSensitivity={WakeWordService.DefaultSensitivity:F2})");
 
             // --- wake_positive ---
-            L("wake_positive: starting…");
+            L($"wake_positive: starting… sensitivity={wake.Sensitivity:F2}");
             fail += await GateWakePositiveAsync(s, L);
 
-            // --- wake_quiet: «Лиа» at -20 dBFS still passes energy VAD ---
-            L("wake_quiet: starting…");
+            // --- wake_quiet: «Лиа» at -20 dBFS still passes energy VAD + AGC at default sensitivity ---
+            L($"wake_quiet: starting… sensitivity={wake.Sensitivity:F2}");
             fail += await GateWakeQuietAsync(s, L);
 
             // --- wake_command_inline ---
-            L("wake_command_inline: starting…");
+            L($"wake_command_inline: starting… sensitivity={wake.Sensitivity:F2}");
             fail += await GateWakeCommandInlineAsync(s, L);
 
             // --- wake_own_tts ---
-            L("wake_own_tts: starting…");
+            L($"wake_own_tts: starting… sensitivity={wake.Sensitivity:F2}");
             fail += await GateWakeOwnTtsAsync(s, L);
 
             // --- wake_negative ---
-            L("wake_negative: starting…");
+            L($"wake_negative: starting… sensitivity={wake.Sensitivity:F2}");
             fail += await GateWakeNegativeAsync(s, L);
 
             // --- wake_e2e: real follow-up path via injectable MicGemini ---
-            L("wake_e2e: starting…");
+            L($"wake_e2e: starting… sensitivity={wake.Sensitivity:F2}");
             fail += await GateWakeE2eAsync(s, baseUrl, L);
 
             // --- wake_timeout: silence after wake → ОЖИДАНИЕ ---
-            L("wake_timeout: starting…");
+            L($"wake_timeout: starting… sensitivity={wake.Sensitivity:F2}");
             fail += await GateWakeTimeoutAsync(s, L);
 
             // --- wake_offline ---
-            L("wake_offline: starting…");
+            L($"wake_offline: starting… sensitivity={wake.Sensitivity:F2}");
             fail += await GateWakeOfflineAsync(s, L);
 
             // --- wake_cpu ---
-            L("wake_cpu: starting…");
+            L($"wake_cpu: starting… sensitivity={wake.Sensitivity:F2}");
             fail += await GateWakeCpuAsync(s, L);
         }
         catch (Exception ex)
@@ -1426,7 +1428,7 @@ public static class SelfTestRunner
             L($"FAIL wake_positive: detect={hits}/{total} ({rate:P0}) need ≥90% voices=[{string.Join(", ", voices)}]");
             return 1;
         }
-        L($"wake_positive: PASS detect={hits}/{total} ({rate:P0}) voices={voices.Count}[{string.Join(", ", voices)}]");
+        L($"wake_positive: PASS detect={hits}/{total} ({rate:P0}) voices={voices.Count}[{string.Join(", ", voices)}] sensitivity={s.Wake.Sensitivity:F2}");
         return 0;
     }
 
@@ -1699,7 +1701,7 @@ public static class SelfTestRunner
             L($"FAIL wake_negative: false_wakes={falseWakes} speech_s={speechS:F1} noise_s={noiseS:F1} wall_s={wall:F0} (need ≤1)");
             return 1;
         }
-        L($"wake_negative: PASS false_wakes={falseWakes} speech_s={speechS:F1} noise_s={noiseS:F1} wall_s={wall:F0} rounds={round}");
+        L($"wake_negative: PASS false_wakes={falseWakes} speech_s={speechS:F1} noise_s={noiseS:F1} wall_s={wall:F0} rounds={round} sensitivity={s.Wake.Sensitivity:F2}");
         return 0;
     }
 
@@ -1956,14 +1958,11 @@ public static class SelfTestRunner
 
     static async Task<int> GateWakeQuietAsync(AppServices s, Action<string> L)
     {
-        // «Лиа» attenuated to -20 dBFS must still open energy VAD and detect (live PushPcm path).
-        var prevSens = s.Wake.Sensitivity;
+        // «Лиа» at -20 dBFS, DEFAULT sensitivity — production AGC must lift conf, not a test-only floor.
         try
         {
             s.Wake.SetEchoGuard(false);
             s.Wake.Stop();
-            // Soft floor so -20 dBFS conf (~0.3–0.5) still counts as DETECT; VAD gate is the point under test.
-            s.Wake.Sensitivity = 0.25f;
             s.Wake.Start(WakeWordService.CaptureMode.PushOnly);
 
             var synth = await SynthAudibleAsync(s, "Лиа", L, 30);
@@ -1979,7 +1978,7 @@ public static class SelfTestRunner
             AttenuatePeakToDbFs(pcm, -20.0);
             var peakDb = PeakDbFs(pcm);
             var rms = PcmRms(pcm);
-            L($"wake_quiet: peak_dbfs={peakDb:F1} rms={rms:F0} backend={synth.Backend} bytes={pcm.Length}");
+            L($"wake_quiet: peak_dbfs={peakDb:F1} rms={rms:F0} backend={synth.Backend} bytes={pcm.Length} sensitivity={s.Wake.Sensitivity:F2}");
 
             var detected = false;
             string got = "";
@@ -1993,7 +1992,6 @@ public static class SelfTestRunner
             s.Wake.Woken += OnWoken;
             try
             {
-                // Small leading silence so noise EMA stays low, then speech, then hangover silence
                 var silence = new byte[WakeWordService.SampleRate * 2 / 10]; // 100ms
                 for (var i = 0; i < 3; i++)
                     s.Wake.PushPcm(silence);
@@ -2022,10 +2020,10 @@ public static class SelfTestRunner
 
             if (!detected)
             {
-                L($"FAIL wake_quiet: no DETECT at -20 dBFS peak_dbfs={peakDb:F1} rms={rms:F0} vad={s.Wake.VadOpen} reject={s.Wake.RejectCount}");
+                L($"FAIL wake_quiet: no DETECT at -20 dBFS peak_dbfs={peakDb:F1} rms={rms:F0} sensitivity={s.Wake.Sensitivity:F2} vad={s.Wake.VadOpen} reject={s.Wake.RejectCount}");
                 return 1;
             }
-            L($"wake_quiet: PASS text=\"{got}\" conf={gotConf:F2} peak_dbfs={peakDb:F1} rms={rms:F0}");
+            L($"wake_quiet: PASS text=\"{got}\" conf={gotConf:F2} peak_dbfs={peakDb:F1} rms={rms:F0} sensitivity={s.Wake.Sensitivity:F2}");
             return 0;
         }
         catch (Exception ex)
@@ -2035,7 +2033,6 @@ public static class SelfTestRunner
         }
         finally
         {
-            try { s.Wake.Sensitivity = prevSens; } catch { /* */ }
             try { s.Wake.Stop(); } catch { /* */ }
         }
     }

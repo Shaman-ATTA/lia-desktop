@@ -306,13 +306,17 @@ jobs:
             if ($txt -notmatch 'tts_first_sentence_latency: PASS') { throw "selftest missing tts_first_sentence_latency PASS" }
             if ($txt -notmatch 'tts_order: PASS') { throw "selftest missing tts_order PASS" }
             if ($txt -notmatch 'barge_queue_cancel: PASS') { throw "selftest missing barge_queue_cancel PASS" }
+            if ($txt -notmatch 'wake: sensitivity=0\.55') { throw "selftest must use shipped default sensitivity=0.55" }
             if ($txt -notmatch 'wake_positive: PASS') { throw "selftest missing wake_positive PASS" }
             if ($txt -notmatch 'wake_positive: PASS.*voices=') { throw "selftest wake_positive missing voices=" }
+            if ($txt -notmatch 'wake_positive: PASS.*sensitivity=0\.55') { throw "selftest wake_positive must run at default sensitivity=0.55" }
             if ($txt -notmatch 'wake_quiet: PASS') { throw "selftest missing wake_quiet PASS" }
+            if ($txt -notmatch 'wake_quiet: PASS.*sensitivity=0\.55') { throw "selftest wake_quiet must run at default sensitivity=0.55" }
             if ($txt -notmatch 'wake_negative: PASS') { throw "selftest missing wake_negative PASS" }
             if ($txt -notmatch 'wake_negative: PASS.*speech_s=') { throw "selftest wake_negative missing speech_s" }
             if ($txt -notmatch 'wake_negative: PASS.*noise_s=') { throw "selftest wake_negative missing noise_s" }
             if ($txt -notmatch 'wake_negative: PASS.*false_wakes=') { throw "selftest wake_negative missing false_wakes" }
+            if ($txt -notmatch 'wake_negative: PASS.*sensitivity=0\.55') { throw "selftest wake_negative must run at default sensitivity=0.55" }
             if ($txt -notmatch 'wake_own_tts: PASS') { throw "selftest missing wake_own_tts PASS" }
             if ($txt -notmatch 'wake_command_inline: PASS') { throw "selftest missing wake_command_inline PASS" }
             if ($txt -notmatch 'wake_e2e: PASS') { throw "selftest missing wake_e2e PASS" }

@@ -27,6 +27,13 @@ public sealed class WakeWordService : IDisposable
     const double VadDigitalSilenceRms = 80.0;
     /// <summary>Min open threshold above silence; -20 dBFS speech RMS is typically ≫ this.</summary>
     const double VadMinThresholdRms = 100.0;
+    /// <summary>Shipped default (SecretsStore.WakeWordSensitivity).</summary>
+    public const float DefaultSensitivity = 0.55f;
+    /// <summary>AGC target ≈ -6 dBFS peak for VAD-open segments fed to Vosk.</summary>
+    const int AgcTargetPeak = 16384;
+    /// <summary>Don't boost below ~-26 dBFS (cable dither / wake_negative noise).</summary>
+    const int AgcMinPeak = 1500;
+    const float AgcMaxGain = 10f;
 
     readonly AppLog _log;
     readonly object _gate = new();
@@ -43,7 +50,8 @@ public sealed class WakeWordService : IDisposable
     bool _running;
     bool _echoGuard;
     bool _enabled = true;
-    float _sensitivity = 0.55f;
+    float _sensitivity = DefaultSensitivity;
+    byte[] _agcScratch = new byte[SampleRate * 2];
     bool _chimeEnabled = true;
     DateTime _grammarCooldownUntilUtc;
 
@@ -744,12 +752,54 @@ public sealed class WakeWordService : IDisposable
     void AcceptWaveform_NoLock(byte[] buffer, int bytes)
     {
         if (_grmNative == IntPtr.Zero || bytes <= 0) return;
-        var ok = vosk_recognizer_accept_waveform(_grmNative, buffer, bytes);
+        // Production AGC: quiet VAD-open speech (e.g. -20 dBFS) → ~-6 dBFS before Vosk.
+        // Cap x10; skip boost for peaks below AgcMinPeak so noise isn't amplified into false wakes.
+        var feed = buffer;
+        var feedBytes = bytes;
+        var gain = ComputeAgcGain(buffer, bytes);
+        if (gain > 1.01f)
+        {
+            EnsureAgcScratch(bytes);
+            ApplyGainTo(buffer, bytes, gain, _agcScratch);
+            feed = _agcScratch;
+            feedBytes = bytes;
+        }
+        var ok = vosk_recognizer_accept_waveform(_grmNative, feed, feedBytes);
         if (ok != 0)
         {
             var json = PtrToUtf8(vosk_recognizer_result(_grmNative));
             ResetGrammar_NoLock();
             TryHandleGrammarFinal_NoLock(json);
+        }
+    }
+
+    void EnsureAgcScratch(int bytes)
+    {
+        if (_agcScratch.Length < bytes)
+            _agcScratch = new byte[bytes];
+    }
+
+    static float ComputeAgcGain(byte[] buffer, int bytes)
+    {
+        var peak = 1;
+        for (var i = 0; i + 1 < bytes; i += 2)
+        {
+            var s = Math.Abs((short)(buffer[i] | (buffer[i + 1] << 8)));
+            if (s > peak) peak = s;
+        }
+        if (peak < AgcMinPeak || peak >= AgcTargetPeak)
+            return 1f;
+        return Math.Min(AgcMaxGain, AgcTargetPeak / (float)peak);
+    }
+
+    static void ApplyGainTo(byte[] src, int bytes, float gain, byte[] dst)
+    {
+        for (var i = 0; i + 1 < bytes; i += 2)
+        {
+            var s = (short)(src[i] | (src[i + 1] << 8));
+            var v = (short)Math.Clamp((int)Math.Round(s * gain), short.MinValue, short.MaxValue);
+            dst[i] = (byte)(v & 0xff);
+            dst[i + 1] = (byte)((v >> 8) & 0xff);
         }
     }
 
