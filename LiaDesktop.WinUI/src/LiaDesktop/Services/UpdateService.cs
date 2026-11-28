@@ -267,20 +267,26 @@ public sealed class UpdateService : IDisposable
             // Leave a pending marker so the relaunched build can confirm e2e / write PASS.
             try { UpdateE2eHook.WritePending(installDir, info.Version); } catch { /* */ }
             var args = UpdateLogic.BuildSilentUpgradeArgs(installDir);
-            var psi = new ProcessStartInfo
-            {
-                FileName = setupPath,
-                Arguments = args,
-                UseShellExecute = true,
-            };
+            // Program.Main puts us in a KillOnClose job — launching setup directly would
+            // get the installer killed when we Environment.Exit. Escape via shell+.cmd.
+            var wrapper = Path.Combine(tmpDir, "lia-run-setup.cmd");
+            File.WriteAllText(wrapper,
+                "@echo off\r\n" +
+                "rem delay so parent can exit and unlock files\r\n" +
+                "ping -n 3 127.0.0.1 >nul\r\n" +
+                "\"" + setupPath + "\" " + args + "\r\n");
             _log.Info($"обновления: запуск установщика {info.SetupName} dir={installDir}");
-            Process.Start(psi);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = wrapper,
+                UseShellExecute = true,
+                WorkingDirectory = tmpDir,
+            });
 
             if (SuppressExitAfterLaunch)
                 return (true, "installing");
 
-            // Give installer a moment to start before we exit (CloseApplications unlocks {app})
-            await Task.Delay(600, ct).ConfigureAwait(false);
+            await Task.Delay(800, ct).ConfigureAwait(false);
             try
             {
                 Environment.Exit(0);

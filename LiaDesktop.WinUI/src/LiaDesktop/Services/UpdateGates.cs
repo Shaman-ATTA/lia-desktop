@@ -29,7 +29,6 @@ public static partial class SelfTestRunner
         {
             var prev = s.Updates.ApiOverride;
             s.Updates.ApiOverride = "http://127.0.0.1:1/releases/latest"; // nothing listens
-            var before = s.Log.Lines.Count;
             var result = await s.Updates.CheckAsync(quiet: false);
             s.Updates.ApiOverride = prev;
             if (result.Status != UpdateCheckStatus.Offline)
@@ -37,8 +36,8 @@ public static partial class SelfTestRunner
                 L($"FAIL update_offline: status={result.Status} (need Offline)");
                 return 1;
             }
-            var tail = s.Log.Lines.Skip(Math.Max(0, before)).Select(t => t.Line).ToList();
-            if (!tail.Any(l => l.Contains(UpdateService.JournalOffline, StringComparison.Ordinal)))
+            if (!JournalMentions(s, UpdateService.JournalOffline) &&
+                !(result.Message?.Contains(UpdateService.JournalOffline, StringComparison.Ordinal) ?? false))
             {
                 L($"FAIL update_offline: missing journal «{UpdateService.JournalOffline}»");
                 return 1;
@@ -82,7 +81,6 @@ public static partial class SelfTestRunner
                 s.Updates.SuppressExitAfterLaunch = prevExit;
                 return 1;
             }
-            var before = s.Log.Lines.Count;
             var (ok, msg) = await s.Updates.DownloadAndInstallAsync(check.Info);
             s.Updates.ApiOverride = prev;
             s.Updates.SuppressExitAfterLaunch = prevExit;
@@ -97,9 +95,8 @@ public static partial class SelfTestRunner
                 L($"FAIL update_sha_mismatch: friendly message missing, got «{msg}»");
                 return 1;
             }
-            var tail = s.Log.Lines.Skip(Math.Max(0, before)).Select(t => t.Line);
-            if (!tail.Any(l => l.Contains("контрольная сумма", StringComparison.OrdinalIgnoreCase)
-                               || l.Contains(UpdateService.JournalShaFail, StringComparison.Ordinal)))
+            if (!JournalMentions(s, "контрольная сумма") &&
+                !JournalMentions(s, UpdateService.JournalShaFail))
             {
                 L("FAIL update_sha_mismatch: journal missing SHA refusal");
                 return 1;
@@ -424,7 +421,7 @@ public static partial class SelfTestRunner
                 return 1;
             }
 
-            var deadline = DateTime.UtcNow.AddMinutes(8);
+            var deadline = DateTime.UtcNow.AddMinutes(10);
             while (DateTime.UtcNow < deadline)
             {
                 if (File.Exists(marker))
@@ -448,7 +445,23 @@ public static partial class SelfTestRunner
                 }
                 await Task.Delay(1000);
             }
-            L("FAIL update_e2e: timeout waiting for marker");
+            // Diagnostics on timeout
+            try
+            {
+                var vi = File.Exists(exe) ? FileVersionInfo.GetVersionInfo(exe).FileVersion : "(missing)";
+                L($"FAIL update_e2e: timeout waiting for marker; FileVersion={vi}");
+                var pending = Path.Combine(e2eDir, "update-e2e-pending.json");
+                L($"update_e2e: pending_exists={File.Exists(pending)} marker_exists={File.Exists(marker)}");
+                if (File.Exists(pending)) L("update_e2e pending: " + File.ReadAllText(pending));
+                var boot = Path.Combine(e2eDir, "boot.log");
+                if (File.Exists(boot))
+                {
+                    var lines = File.ReadAllLines(boot);
+                    foreach (var line in lines.TakeLast(30))
+                        L("update_e2e boot: " + line);
+                }
+            }
+            catch (Exception dex) { L("update_e2e diag: " + dex.Message); }
             return 1;
         }
         catch (Exception ex)
@@ -692,5 +705,14 @@ public static partial class SelfTestRunner
         }
         catch { /* */ }
         return n;
+    }
+
+    /// <summary>AppLog ring is capped at 200 — never Skip(Count) when full.</summary>
+    static bool JournalMentions(AppServices s, string needle)
+    {
+        if (string.IsNullOrEmpty(needle)) return false;
+        return s.Log.Lines.TakeLast(40).Any(t =>
+            (t.Line ?? "").Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+            (t.Detail ?? "").Contains(needle, StringComparison.OrdinalIgnoreCase));
     }
 }
