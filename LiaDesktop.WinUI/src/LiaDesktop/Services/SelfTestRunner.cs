@@ -1955,8 +1955,9 @@ public static class SelfTestRunner
         try
         {
             s.Wake.SetEchoGuard(false);
+            s.Wake.SuspendCaptureProcessing = false;
             s.Wake.Stop();
-            // Prefer real capture (Wasapi/WaveIn) when a device exists (VB-CABLE on CI)
+            // Prefer real capture (Wasapi/WaveIn/loopback) when a device exists (VB-CABLE on CI)
             var hasCap = WakeWordService.HasAnyCaptureDevice();
             var mode = hasCap
                 ? WakeWordService.CaptureMode.ForceWaveIn
@@ -1970,6 +1971,9 @@ public static class SelfTestRunner
                 L($"FAIL wake_cpu: capture device present but mode={used} (need wavein|wasapi) err={s.Wake.LastCaptureError}");
                 return 1;
             }
+
+            // Device stays open; drop heavy FloatMix/Vosk during the idle window.
+            if (realCap) s.Wake.SuspendCaptureProcessing = true;
 
             var proc = Process.GetCurrentProcess();
             proc.Refresh();
@@ -2002,6 +2006,11 @@ public static class SelfTestRunner
         {
             L($"FAIL wake_cpu: {ex.GetType().Name}: {ex.Message}");
             return 1;
+        }
+        finally
+        {
+            try { s.Wake.SuspendCaptureProcessing = false; } catch { /* */ }
+            try { s.Wake.Stop(); } catch { /* */ }
         }
     }
 

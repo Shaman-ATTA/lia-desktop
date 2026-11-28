@@ -341,14 +341,27 @@ public sealed class WakeWordService : IDisposable
         }
     }
 
+    DateTime _lastSilentKeepaliveUtc = DateTime.MinValue;
+
     void OnWasapiData(object? sender, WaveInEventArgs e)
     {
         if (e.BytesRecorded <= 0 || _wasapiFormat == null) return;
+        if (SuspendCaptureProcessing) return;
         try
         {
             // Fast path: IEEE float mix → 16 kHz mono PCM16 (no MF per buffer)
             if (_wasapiFormat.Encoding == WaveFormatEncoding.IeeeFloat)
             {
+                // Idle loopback/capture is digital silence — skip FloatMix+Vosk (wake_cpu <5%).
+                // Keepalive every 250ms so grammar can still finalize after real speech.
+                if (IeeeFloatNearSilent(e.Buffer, e.BytesRecorded))
+                {
+                    if ((DateTime.UtcNow - _lastSilentKeepaliveUtc).TotalMilliseconds < 250)
+                        return;
+                    _lastSilentKeepaliveUtc = DateTime.UtcNow;
+                    PushPcm(new byte[SampleRate * 2 / 50]); // 20ms zeros
+                    return;
+                }
                 var pcm = FloatMixToPcm16kMono(e.Buffer, e.BytesRecorded, _wasapiFormat);
                 if (pcm.Length > 0) PushPcm(pcm);
                 return;
@@ -367,6 +380,20 @@ public sealed class WakeWordService : IDisposable
         {
             _log.Info("wake wasapi resample: " + ex.Message);
         }
+    }
+
+    /// <summary>When true, capture callbacks open the device but drop audio (wake_cpu idle measure).</summary>
+    public bool SuspendCaptureProcessing { get; set; }
+
+    static bool IeeeFloatNearSilent(byte[] buffer, int bytes)
+    {
+        // Sample every 4th float; anything above ~digital floor is speech/noise.
+        for (var i = 0; i + 4 <= bytes; i += 16)
+        {
+            if (Math.Abs(BitConverter.ToSingle(buffer, i)) > 0.002f)
+                return false;
+        }
+        return true;
     }
 
     static byte[] FloatMixToPcm16kMono(byte[] buffer, int bytes, WaveFormat fmt)

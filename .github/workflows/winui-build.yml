@@ -228,19 +228,9 @@ jobs:
             throw "CABLE Input is not the default Multimedia device after Set-AudioDevice"
           }
           Write-Host 'VB-CABLE ready — app will use default Multimedia for playback_rms'
-
-          # Desktop mic consent so WasapiCapture/WaveIn can open CABLE Output (wake_cpu).
-          # Loopback still works without this; real capture needs Allow.
-          foreach ($root in @(
-            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone',
-            'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone')) {
-            New-Item -Path $root -Force | Out-Null
-            Set-ItemProperty -Path $root -Name Value -Value Allow -Force
-            $np = Join-Path $root 'NonPackaged'
-            New-Item -Path $np -Force | Out-Null
-            Set-ItemProperty -Path $np -Name Value -Value Allow -Force
-          }
-          Write-Host 'Microphone ConsentStore → Allow (machine + user, NonPackaged)'
+          # Do NOT flip ConsentStore microphone→Allow: opening CABLE Output lets barge
+          # hear own TTS via the virtual cable and abort tts_order mid-pipeline.
+          # wake_cpu uses WasapiLoopback on Multimedia render when capture is denied.
 
       - name: Cache / download Vosk small-ru model (wake word)
         shell: pwsh
