@@ -2780,9 +2780,8 @@ public static class SelfTestRunner
                 var edit = FindWindowEx(hwnd, IntPtr.Zero, "Edit", null);
                 if (edit == IntPtr.Zero) edit = FindEditChild(hwnd);
                 if (edit == IntPtr.Zero) continue;
-                // WM_SETTEXT
-                var r = SendMessage(edit, 0x000C, IntPtr.Zero, new StringBuilder(text));
-                return r != IntPtr.Zero || true; // SETTEXT returns TRUE
+                SendMessage(edit, 0x000C, IntPtr.Zero, text); // WM_SETTEXT
+                return true;
             }
             catch { /* */ }
             finally { p.Dispose(); }
@@ -2832,6 +2831,9 @@ public static class SelfTestRunner
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, StringBuilder lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
 
     [DllImport("user32.dll")]
     static extern bool GetWindowRect(IntPtr hWnd, out RECT rc);
