@@ -39,7 +39,7 @@ public sealed class WakeWordService : IDisposable
     readonly object _gate = new();
     Model? _model;
     WaveInEvent? _waveIn;
-    WasapiCapture? _wasapi;
+    SleepWasapiCapture? _wasapi;
     WaveFormat? _wasapiFormat;
     IntPtr _grmNative; // grammar recognizer
     // ring buffer of recent PCM (16-bit LE)
@@ -54,6 +54,8 @@ public sealed class WakeWordService : IDisposable
     byte[] _agcScratch = new byte[SampleRate * 2];
     bool _chimeEnabled = true;
     DateTime _grammarCooldownUntilUtc;
+    string _pendingGrammarText = "";
+    float _pendingGrammarConf;
 
     // Energy VAD + pre-roll (shared by live capture and PushPcm injection)
     readonly byte[] _preroll = new byte[PreRollBytes];
@@ -241,20 +243,15 @@ public sealed class WakeWordService : IDisposable
                 try
                 {
                     CleanupCapture_NoLock();
-                    // Sleep-mode on THIS thread (not EventCallback): event sync fires every device
-                    // quantum (~10ms) and pegs a core. Do NOT ctor on a worker thread — MMDevice is
-                    // STA/apartment-affine and cross-thread QI → E_NOINTERFACE.
-                    _wasapi = new WasapiCapture(pick, useEventSync: false, audioBufferMillisecondsLength: CaptureBufferMs)
-                    {
-                        ShareMode = AudioClientShareMode.Shared,
-                    };
+                    // Fixed-sleep pump (NAudio sleep uses BufferSize/2 ≈ 5ms → ~1 core on CI).
+                    _wasapi = new SleepWasapiCapture(pick, CaptureBufferMs, loopback: false);
                     _wasapiFormat = _wasapi.WaveFormat;
                     _wasapi.DataAvailable += OnWasapiData;
                     _wasapi.StartRecording();
                     _running = true;
                     LastCaptureMode = "wasapi";
                     LastCaptureError = "";
-                    _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiCapture device={pick.FriendlyName} buf={CaptureBufferMs}ms sleepSync fmt={_wasapiFormat}");
+                    _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiCapture device={pick.FriendlyName} buf={CaptureBufferMs}ms fixedSleep={CaptureBufferMs / 2}ms fmt={_wasapiFormat}");
                     return true;
                 }
                 catch (Exception ex)
@@ -297,15 +294,15 @@ public sealed class WakeWordService : IDisposable
             }
 
             CleanupCapture_NoLock();
-            // Sleep sync, same-thread ctor (MMDevice apartment). EventCallback was ~28% idle_avg.
-            _wasapi = new WakeLoopbackCapture(render, CaptureBufferMs);
+            // Fixed 100ms sleep pump — NAudio WasapiCapture sleep tracks period (~5ms) not request.
+            _wasapi = new SleepWasapiCapture(render, CaptureBufferMs, loopback: true);
             _wasapiFormat = _wasapi.WaveFormat;
             _wasapi.DataAvailable += OnWasapiData;
             _wasapi.StartRecording();
             _running = true;
             LastCaptureMode = "loopback";
             LastCaptureError = "";
-            _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiLoopback device={render.FriendlyName} buf={CaptureBufferMs}ms sleepSync fmt={_wasapiFormat}");
+            _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiLoopback device={render.FriendlyName} buf={CaptureBufferMs}ms fixedSleep={CaptureBufferMs / 2}ms fmt={_wasapiFormat}");
             return true;
         }
         catch (Exception ex)
@@ -586,17 +583,122 @@ public sealed class WakeWordService : IDisposable
         return need;
     }
 
-    /// <summary>Loopback with sleep-sync buffers (EventCallback quantum is too hot on CI).</summary>
-    sealed class WakeLoopbackCapture : WasapiCapture
+    /// <summary>
+    /// WASAPI capture/loopback with a fixed sleep (bufferMs/2), not NAudio's BufferSize/2.
+    /// Shared-mode period is often ~10ms; NAudio then Sleep(5) and pegs a core on CI (~27%).
+    /// </summary>
+    sealed class SleepWasapiCapture : IDisposable
     {
-        public WakeLoopbackCapture(MMDevice device, int bufferMs)
-            : base(device, useEventSync: false, audioBufferMillisecondsLength: bufferMs)
+        const long ReftimesPerMillisec = 10000;
+        readonly MMDevice _device;
+        readonly bool _loopback;
+        readonly int _bufferMs;
+        readonly int _sleepMs;
+        AudioClient? _client;
+        Thread? _thread;
+        WaveFormat _mixFormat;
+        WaveFormat _waveFormat;
+        byte[] _recordBuffer = Array.Empty<byte>();
+        int _bytesPerFrame;
+        volatile int _state; // 0=stopped 1=starting 2=capturing 3=stopping
+
+        public event EventHandler<WaveInEventArgs>? DataAvailable;
+        public WaveFormat WaveFormat => _waveFormat;
+
+        public SleepWasapiCapture(MMDevice device, int bufferMs, bool loopback)
         {
-            ShareMode = AudioClientShareMode.Shared;
+            _device = device;
+            _loopback = loopback;
+            _bufferMs = Math.Max(50, bufferMs);
+            _sleepMs = Math.Max(50, _bufferMs / 2);
+            _client = device.AudioClient;
+            _mixFormat = _client.MixFormat;
+            _waveFormat = _mixFormat.AsStandardWaveFormat();
         }
 
-        protected override AudioClientStreamFlags GetAudioClientStreamFlags() =>
-            AudioClientStreamFlags.Loopback | base.GetAudioClientStreamFlags();
+        public void StartRecording()
+        {
+            if (_state != 0) throw new InvalidOperationException("already recording");
+            _state = 1;
+            var client = _client ?? throw new ObjectDisposedException(nameof(SleepWasapiCapture));
+            var flags = AudioClientStreamFlags.AutoConvertPcm | AudioClientStreamFlags.SrcDefaultQuality;
+            if (_loopback) flags |= AudioClientStreamFlags.Loopback;
+            var duration = ReftimesPerMillisec * _bufferMs;
+            client.Initialize(AudioClientShareMode.Shared, flags, duration, 0, _mixFormat, Guid.Empty);
+            _mixFormat = client.MixFormat;
+            _waveFormat = _mixFormat.AsStandardWaveFormat();
+            _bytesPerFrame = _waveFormat.Channels * _waveFormat.BitsPerSample / 8;
+            var frames = Math.Max(client.BufferSize, _waveFormat.SampleRate * _bufferMs / 1000);
+            _recordBuffer = new byte[Math.Max(frames * _bytesPerFrame, _bytesPerFrame * 4096)];
+            _thread = new Thread(CaptureThread) { IsBackground = true, Name = "wake-sleep-wasapi" };
+            _thread.Start();
+        }
+
+        public void StopRecording()
+        {
+            if (_state == 2 || _state == 1) _state = 3;
+        }
+
+        void CaptureThread()
+        {
+            var client = _client;
+            if (client == null) { _state = 0; return; }
+            try
+            {
+                var capture = client.AudioCaptureClient;
+                client.Start();
+                if (_state == 1) _state = 2;
+                while (_state == 2)
+                {
+                    Thread.Sleep(_sleepMs);
+                    if (_state != 2) break;
+                    ReadPackets(capture);
+                }
+            }
+            catch { /* stop */ }
+            finally
+            {
+                try { client.Stop(); } catch { /* */ }
+                _state = 0;
+            }
+        }
+
+        void ReadPackets(AudioCaptureClient capture)
+        {
+            var packet = capture.GetNextPacketSize();
+            var offset = 0;
+            while (packet != 0)
+            {
+                var ptr = capture.GetBuffer(out var frames, out var flags);
+                var bytes = frames * _bytesPerFrame;
+                if (offset > 0 && offset + bytes > _recordBuffer.Length)
+                {
+                    DataAvailable?.Invoke(this, new WaveInEventArgs(_recordBuffer, offset));
+                    offset = 0;
+                }
+                if (bytes > _recordBuffer.Length) bytes = _recordBuffer.Length;
+                if ((flags & AudioClientBufferFlags.Silent) != AudioClientBufferFlags.Silent)
+                    Marshal.Copy(ptr, _recordBuffer, offset, bytes);
+                else
+                    Array.Clear(_recordBuffer, offset, bytes);
+                offset += bytes;
+                capture.ReleaseBuffer(frames);
+                packet = capture.GetNextPacketSize();
+            }
+            // Always raise (incl. WASAPI Silent→zeros) so VAD hangover can finalize Vosk.
+            // Idle cost is Sleep(_sleepMs) + PeekWantsConvert, not EventCallback quantum.
+            if (offset > 0)
+                DataAvailable?.Invoke(this, new WaveInEventArgs(_recordBuffer, offset));
+        }
+
+        public void Dispose()
+        {
+            StopRecording();
+            try { _thread?.Join(1000); } catch { /* */ }
+            _thread = null;
+            try { _client?.Dispose(); } catch { /* */ }
+            _client = null;
+        }
     }
 
     public static bool HasAnyCaptureDevice()
@@ -907,6 +1009,8 @@ public sealed class WakeWordService : IDisposable
         _capturingPost = true;
         _wakeStartedUtc = DateTime.UtcNow;
         _postWake = new List<byte>();
+        _pendingGrammarText = text;
+        _pendingGrammarConf = conf;
         _log.Info($"wake: grammar hit conf={conf:F2} text=\"{text}\" — capturing post…");
     }
 
@@ -936,27 +1040,49 @@ public sealed class WakeWordService : IDisposable
         text = WakeText.NormalizeAsrWake(text);
         lock (_gate)
         {
+            var floor = ConfidenceFloor();
             if (!WakeText.ContainsWake(text))
             {
+                // Wake-only: freeform often returns empty after silence hangover. Grammar already
+                // cleared the shipped floor on AGC'd audio — trust it (still reject if freeform
+                // heard a non-wake phrase).
+                if (string.IsNullOrWhiteSpace(text)
+                    && WakeText.ContainsWake(_pendingGrammarText)
+                    && _pendingGrammarConf >= floor)
+                {
+                    var gCmd = WakeText.StripWake(_pendingGrammarText);
+                    DetectCount++;
+                    LastRejectDetail = "";
+                    _log.Info($"wake: DETECT (grammar, freeform silent) conf={_pendingGrammarConf:F2} text=\"{_pendingGrammarText}\" cmd=\"{gCmd}\"");
+                    RaiseWoken(_pendingGrammarText, gCmd, _pendingGrammarConf);
+                    _pendingGrammarText = "";
+                    _pendingGrammarConf = 0;
+                    return;
+                }
                 RejectCount++;
                 FalseWakeCount++;
-                LastRejectDetail = $"post no-wake text=\"{text}\" conf={conf:F2}";
+                LastRejectDetail = $"post no-wake text=\"{text}\" conf={conf:F2} g=\"{_pendingGrammarText}\"";
                 _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(1200);
+                _pendingGrammarText = "";
+                _pendingGrammarConf = 0;
                 _log.Info($"wake: post reject (no wake in freeform) text=\"{text}\" conf={conf:F2}");
                 return;
             }
-            var floor = ConfidenceFloor();
             if (conf < floor * 0.7f)
             {
                 RejectCount++;
                 LastRejectDetail = $"post conf={conf:F2} < {floor * 0.7f:F2} text={text}";
                 _grammarCooldownUntilUtc = DateTime.UtcNow.AddMilliseconds(800);
+                _pendingGrammarText = "";
+                _pendingGrammarConf = 0;
                 _log.Info($"wake: post reject conf={conf:F2} text={text}");
                 return;
             }
             var cmd = WakeText.StripWake(text);
             DetectCount++;
             LastRejectDetail = "";
+            _pendingGrammarText = "";
+            _pendingGrammarConf = 0;
             _log.Info($"wake: DETECT conf={conf:F2} text=\"{text}\" cmd=\"{cmd}\"");
             RaiseWoken(text, cmd, conf);
         }
