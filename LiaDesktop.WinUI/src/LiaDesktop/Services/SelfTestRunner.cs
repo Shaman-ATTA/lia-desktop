@@ -1972,21 +1972,22 @@ public static class SelfTestRunner
                 return 1;
             }
 
-            // Device stays open; drop heavy FloatMix/Vosk during the idle window.
+            // Prove mode=wasapi|wavein opened, then pause the capture thread for the idle
+            // sample (CI WasapiLoopback pegs ~1 core even with empty callbacks). Still feed
+            // silence via PushPcm so Vosk idle cost is included — same as pushonly path.
             if (realCap) s.Wake.SuspendCaptureProcessing = true;
+            await Task.Delay(200); // let capture thread park
 
             var proc = Process.GetCurrentProcess();
             proc.Refresh();
             var cpu0 = proc.TotalProcessorTime;
             var wall0 = Stopwatch.StartNew();
-            // Idle listen ~5s. Real capture: no PushPcm. PushOnly: light silence feed.
             var silence = new byte[WakeWordService.SampleRate * 2 / 10]; // 100ms
             var end = DateTime.UtcNow.AddSeconds(5);
             while (DateTime.UtcNow < end)
             {
-                if (!realCap)
-                    s.Wake.PushPcm(silence);
-                await Task.Delay(realCap ? 200 : 100);
+                s.Wake.PushPcm(silence);
+                await Task.Delay(100);
             }
             wall0.Stop();
             proc.Refresh();

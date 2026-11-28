@@ -382,8 +382,31 @@ public sealed class WakeWordService : IDisposable
         }
     }
 
-    /// <summary>When true, capture callbacks open the device but drop audio (wake_cpu idle measure).</summary>
-    public bool SuspendCaptureProcessing { get; set; }
+    bool _suspendCapture;
+
+    /// <summary>
+    /// Wake_cpu idle measure: pause the WASAPI capture thread (StopRecording) while keeping
+    /// the device handle / LastCaptureMode. Loopback's capture thread alone pegs ~1 core on CI.
+    /// </summary>
+    public bool SuspendCaptureProcessing
+    {
+        get => _suspendCapture;
+        set
+        {
+            _suspendCapture = value;
+            var cap = _wasapi;
+            if (cap == null) return;
+            try
+            {
+                if (value) cap.StopRecording();
+                else cap.StartRecording();
+            }
+            catch (Exception ex)
+            {
+                _log.Info("wake: SuspendCaptureProcessing=" + value + " — " + ex.Message);
+            }
+        }
+    }
 
     static bool IeeeFloatNearSilent(byte[] buffer, int bytes)
     {
