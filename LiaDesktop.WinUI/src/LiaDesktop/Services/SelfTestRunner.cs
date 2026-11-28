@@ -1963,11 +1963,11 @@ public static class SelfTestRunner
                 : WakeWordService.CaptureMode.PushOnly;
             s.Wake.Start(mode);
             var used = s.Wake.LastCaptureMode;
-            L($"wake_cpu: mode={used} WaveIn.DeviceCount={WaveIn.DeviceCount} hasCapture={hasCap}");
+            L($"wake_cpu: mode={used} WaveIn.DeviceCount={WaveIn.DeviceCount} hasCapture={hasCap} err={s.Wake.LastCaptureError}");
             var realCap = used is "wavein" or "wasapi";
             if (hasCap && !realCap)
             {
-                L($"FAIL wake_cpu: capture device present but mode={used} (need wavein|wasapi)");
+                L($"FAIL wake_cpu: capture device present but mode={used} (need wavein|wasapi) err={s.Wake.LastCaptureError}");
                 return 1;
             }
 

@@ -32,11 +32,17 @@ public static class WakeText
         return LeadingAsrSplitWake.Replace(s, "лиа");
     }
 
+    // «эй ли я» / «ей ли я» — interjection + ASR-split wake (not «могу ли я»)
+    static readonly Regex InterjectionAsrWake = new(
+        @"^(эй|ей|ну|а)\s+ли\s+я\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     public static bool ContainsWake(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return false;
         text = NormalizeAsrWake(text);
         if (text is "лиа" or "лия") return true;
+        if (InterjectionAsrWake.IsMatch(text)) return true;
         return WakeRe.IsMatch(text);
     }
 
@@ -44,6 +50,7 @@ public static class WakeText
     {
         if (string.IsNullOrWhiteSpace(text)) return "";
         var s = NormalizeAsrWake(text);
+        if (InterjectionAsrWake.IsMatch(s)) return "";
         return StripLeadingWake.Replace(s, "").Trim();
     }
 
@@ -63,16 +70,22 @@ public static class WakeText
 
     /// <summary>
     /// Freeform ASR that is clearly a non-wake utterance (e.g. «могу ли я…»).
-    /// Sparse crumbs («лет», «ли») are NOT substantial — grammar may still wake.
+    /// Sparse crumbs («лет», «ли») and «эй ли я» are NOT substantial — grammar/wake may apply.
     /// </summary>
     public static bool IsSubstantialNonWake(string? freeform)
     {
         if (string.IsNullOrWhiteSpace(freeform)) return false;
         var t = NormalizeAsrWake(freeform);
         if (ContainsWake(t)) return false;
-        // Mid-sentence «ли я» — the false-wake class we must never promote via grammar
-        if (Regex.IsMatch(t, @"\bли\s+я\b", RegexOptions.CultureInvariant)) return true;
         var words = t.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // Mid «ли я»: question particle only when trailing content or a long word before «ли»
+        // («могу ли я…», «должен ли я») — NOT «эй ли я».
+        if (Regex.IsMatch(t, @"\bли\s+я\b", RegexOptions.CultureInvariant))
+        {
+            if (Regex.IsMatch(t, @"\bли\s+я\b.+\S", RegexOptions.CultureInvariant)) return true;
+            if (words.Length >= 3 && words[0].Length >= 4) return true;
+            return false;
+        }
         if (words.Length >= 4) return true;
         if (t.Length >= 20) return true;
         return false;

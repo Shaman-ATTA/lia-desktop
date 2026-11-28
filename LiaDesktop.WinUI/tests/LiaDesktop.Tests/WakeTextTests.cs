@@ -67,10 +67,18 @@ public class WakeTextTests
     [InlineData("ли", false)]
     [InlineData("ли привет", false)]
     [InlineData("эй ли а", false)]
+    [InlineData("эй ли я", false)] // interjection + ASR wake — not substantial
     [InlineData("могу ли я это сделать", true)]
     [InlineData("правильно ли я понял", true)]
     [InlineData("не знаю, смогу ли я прийти", true)]
     [InlineData("должен ли я звонить", true)]
     public void IsSubstantialNonWake_cases(string text, bool expect) =>
         Assert.Equal(expect, WakeText.IsSubstantialNonWake(text));
+
+    [Fact]
+    public void Ey_li_ya_is_wake()
+    {
+        Assert.True(WakeText.ContainsWake("эй ли я"));
+        Assert.False(WakeText.ContainsWake("могу ли я это сделать"));
+    }
 }
