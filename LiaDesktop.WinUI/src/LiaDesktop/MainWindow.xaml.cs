@@ -235,12 +235,22 @@ public sealed partial class MainWindow : Window
         if (pace == HoloPanel.RenderPace.Paused)
         {
             _hudTimer.Stop();
+            _clock.Stop();
             return;
         }
-        // Idle HUD ~10fps; Active ~20fps — cheap vs DX Present.
-        _hudTimer.Interval = TimeSpan.FromMilliseconds(
-            pace == HoloPanel.RenderPace.Idle ? 100 : 50);
+        // Idle: HUD ~5fps, telemetry every 2.5s. Active: HUD ~20fps, telemetry 1s.
+        if (pace == HoloPanel.RenderPace.Idle)
+        {
+            _hudTimer.Interval = TimeSpan.FromMilliseconds(200);
+            _clock.Interval = TimeSpan.FromMilliseconds(2500);
+        }
+        else
+        {
+            _hudTimer.Interval = TimeSpan.FromMilliseconds(50);
+            _clock.Interval = TimeSpan.FromSeconds(1);
+        }
         if (!_hudTimer.IsEnabled) _hudTimer.Start();
+        if (!_clock.IsEnabled) _clock.Start();
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -591,7 +601,7 @@ public sealed partial class MainWindow : Window
         if (_micUnavailable && !_speaking && !_listening)
             VoiceLine.Text = "ГОЛОС  МИК НЕДОСТ.";
         var fps = Holo.Pace == HoloPanel.RenderPace.Active ? 60
-            : Holo.Pace == HoloPanel.RenderPace.Idle ? 30 : 0;
+            : Holo.Pace == HoloPanel.RenderPace.Idle ? 20 : 0;
         SysPanel.Text = $"ВРЕМЯ  {now:HH:mm:ss}\nДАТА   {now:yyyy.MM.dd}\nМОДЕЛЬ {model}\nКАДРЫ  {fps} · DX11";
         if (ModelLine.Text is null || !ModelLine.Text.Contains(model, StringComparison.Ordinal))
             ModelLine.Text = $"МОДЕЛЬ {model}";

@@ -2205,8 +2205,8 @@ public static class SelfTestRunner
     }
 
     /// <summary>
-    /// Render throttle gate: Idle(~30fps) must drop ≥40% vs Active(~60fps) on the same runner;
-    /// minimized+Paused absolute CPU &lt; 3%.
+    /// Render throttle gate: Idle(~20fps economy) must drop ≥40% vs Active(~60fps) on every adapter
+    /// (incl. WARP); minimized+Paused absolute CPU &lt; 3%.
     /// </summary>
     static async Task<int> GateAppIdleCpuAsync(Action<string> L)
     {
@@ -2232,15 +2232,15 @@ public static class SelfTestRunner
             await Task.Delay(400);
 
             await UiAsync(mw, () => mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Active));
-            await Task.Delay(500);
+            await Task.Delay(600);
             var fps60 = await SampleProcessCpuPctAsync(proc, 8, null);
             L($"app_idle_cpu: fps60_avg={fps60:F2}% (Active PresentInterval=1 / 16ms)");
 
             await UiAsync(mw, () => mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Idle));
-            await Task.Delay(500);
-            var fps30 = await SampleProcessCpuPctAsync(proc, 8, null);
-            var drop = fps60 > 0.01 ? (fps60 - fps30) / fps60 * 100.0 : 0;
-            L($"app_idle_cpu: fps30_avg={fps30:F2}% drop_pct={drop:F1}% (Idle PresentInterval=2 / 33ms)");
+            await Task.Delay(600);
+            var fpsIdle = await SampleProcessCpuPctAsync(proc, 8, null);
+            var drop = fps60 > 0.01 ? (fps60 - fpsIdle) / fps60 * 100.0 : 0;
+            L($"app_idle_cpu: fps_idle_avg={fpsIdle:F2}% drop_pct={drop:F1}% (Idle PresentInterval=3 / 50ms economy)");
 
             await UiAsync(mw, () =>
             {
@@ -2260,24 +2260,19 @@ public static class SelfTestRunner
             });
 
             var fail = 0;
-            // Real GPU: Idle must drop ≥40% vs Active. Software/WARP/Basic Render is Present-light
-            // (WinUI overhead dominates) — require ≥20% drop there, still hard minimized <3%.
-            var softGpu = gpu.Contains("software", StringComparison.OrdinalIgnoreCase)
-                          || gpu.Contains("WARP", StringComparison.OrdinalIgnoreCase)
-                          || gpu.Contains("Basic Render", StringComparison.OrdinalIgnoreCase);
-            var needDrop = softGpu ? 20.0 : 40.0;
+            const double needDrop = 40.0;
             if (drop < needDrop)
             {
-                L($"FAIL app_idle_cpu: drop_pct={drop:F1}% (need ≥{needDrop:F0}% Idle vs Active{(softGpu ? " software-gpu" : "")}) fps60={fps60:F2}% fps30={fps30:F2}% gpu={gpu}");
+                L($"FAIL app_idle_cpu: drop_pct={drop:F1}% (need ≥40% Idle vs Active) fps60_avg={fps60:F2}% fps_idle_avg={fpsIdle:F2}% minimized_avg={minCpu:F2}% gpu={gpu}");
                 fail = 1;
             }
             if (minCpu >= 3.0)
             {
-                L($"FAIL app_idle_cpu: minimized_avg={minCpu:F2}% (need <3%) gpu={gpu}");
+                L($"FAIL app_idle_cpu: minimized_avg={minCpu:F2}% (need <3%) fps60_avg={fps60:F2}% fps_idle_avg={fpsIdle:F2}% gpu={gpu}");
                 fail = 1;
             }
             if (fail == 0)
-                L($"app_idle_cpu: PASS fps60_avg={fps60:F2}% fps30_avg={fps30:F2}% drop_pct={drop:F1}% minimized_avg={minCpu:F2}% need_drop={needDrop:F0} gpu={gpu}");
+                L($"app_idle_cpu: PASS fps60_avg={fps60:F2}% fps_idle_avg={fpsIdle:F2}% drop_pct={drop:F1}% minimized_avg={minCpu:F2}% gpu={gpu}");
             return fail;
         }
         catch (Exception ex)

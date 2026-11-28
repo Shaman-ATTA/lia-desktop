@@ -16,7 +16,7 @@ public sealed class HoloPanel : SwapChainPanel
     {
         /// <summary>No Tick/Present — minimized / occluded / screen locked.</summary>
         Paused = 0,
-        /// <summary>~30 fps — ОЖИДАНИЕ idle (visible, not speaking/listening).</summary>
+        /// <summary>~20 fps — ОЖИДАНИЕ idle (visible, not speaking/listening); economy Present.</summary>
         Idle = 1,
         /// <summary>~60 fps — speaking or follow-up listening (lip sync unchanged).</summary>
         Active = 2,
@@ -62,14 +62,16 @@ public sealed class HoloPanel : SwapChainPanel
                 break;
             case RenderPace.Idle:
                 _renderer.EconomyMode = true;
-                _renderer.PresentInterval = 2;
-                _timer.Interval = TimeSpan.FromMilliseconds(33);
+                _renderer.PresentInterval = 3; // ~20Hz vsync cap
+                _timer.Interval = TimeSpan.FromMilliseconds(50);
+                _renderer.MarkDirty();
                 if (!_timer.IsEnabled) _timer.Start();
                 break;
             case RenderPace.Active:
                 _renderer.EconomyMode = false;
                 _renderer.PresentInterval = 1;
                 _timer.Interval = TimeSpan.FromMilliseconds(16);
+                _renderer.MarkDirty();
                 if (!_timer.IsEnabled) _timer.Start();
                 break;
         }
@@ -167,7 +169,7 @@ public sealed class HoloPanel : SwapChainPanel
                 }
                 finally { ticking = false; }
             };
-            ApplyPaceToTimer(); // Idle ~30fps by default
+            ApplyPaceToTimer(); // Idle ~20fps economy by default
         }
         catch (Exception ex)
         {

@@ -64,8 +64,10 @@ public sealed class HoloRenderer : IDisposable
     ID3D11Texture2D? _msaaColor;
     ID3D11Texture2D? _msaaDepth;
     ID3D11Texture2D? _sceneColor;
+    ID3D11Texture2D? _depth1x;
     ID3D11RenderTargetView? _rtvMsaa;
     ID3D11DepthStencilView? _dsvMsaa;
+    ID3D11DepthStencilView? _dsv1x;
     ID3D11RenderTargetView? _rtvScene;
     ID3D11ShaderResourceView? _srvScene;
     ID3D11RenderTargetView? _rtvSwap;
@@ -142,15 +144,33 @@ public sealed class HoloRenderer : IDisposable
     Vector3 _eyeL = new(-0.06f, 0.39f, 0.05f);
     Vector3 _eyeR = new(0.06f, 0.39f, 0.05f);
 
-    public float Jaw { set => _jaw = value; }
+    public float Jaw
+    {
+        set
+        {
+            if (MathF.Abs(_jaw - value) > 0.004f) _dirty = true;
+            _jaw = value;
+        }
+    }
     public float Funnel { set => _funnel = value; }
     public float Wide { set => _wide = value; }
     public float PoseYaw { set => _poseYaw = value; }
-    public void SetPointer(float x, float y) { _ptrX = x; _ptrY = y; }
-    public void SetListening(bool listening) => _listening = listening;
+    public void SetPointer(float x, float y)
+    {
+        if (MathF.Abs(_ptrX - x) > 0.01f || MathF.Abs(_ptrY - y) > 0.01f) _dirty = true;
+        _ptrX = x; _ptrY = y;
+    }
+    public void SetListening(bool listening)
+    {
+        if (_listening != listening) _dirty = true;
+        _listening = listening;
+    }
     /// <summary>Brief HUD/listen pulse on wake word (does not change materials/lip sync).</summary>
-    public void TriggerWakePulse(float seconds = 0.85f) =>
+    public void TriggerWakePulse(float seconds = 0.85f)
+    {
         _wakePulseUntil = _time + Math.Clamp(seconds, 0.2f, 2f);
+        _dirty = true;
+    }
     public bool WakePulseActive => _time < _wakePulseUntil;
 
     public void ForcePose(float? yawDeg, float? jaw, bool eyesCloseup = false, bool ringsShowcase = false)
@@ -165,12 +185,32 @@ public sealed class HoloRenderer : IDisposable
 
     public ID3D11Device? Device => _device;
 
-    /// <summary>DXGI Present sync interval: 1 ≈ 60Hz, 2 ≈ 30Hz. Idle uses 2; speaking/listening uses 1.</summary>
-    public int PresentInterval { get; set; } = 2;
+    /// <summary>DXGI Present sync interval: 1 ≈ 60Hz, 2–3 ≈ 20–30Hz. Idle uses 3; speaking/listening uses 1.</summary>
+    public int PresentInterval { get; set; } = 3;
 
-    /// <summary>Idle throttle: skip FXAA + lighten animation work (lip morphs still apply when jaw&gt;0).</summary>
-    public bool EconomyMode { get; set; }
+    /// <summary>
+    /// Idle throttle: 1× RT (no MSAA resolve), no FXAA, no hair, eased rings, morph only when mouth moves,
+    /// skip Present when the frame is unchanged.
+    /// </summary>
+    public bool EconomyMode
+    {
+        get => _economyMode;
+        set
+        {
+            if (_economyMode == value) return;
+            _economyMode = value;
+            _dirty = true; // force one Present on pace change
+            if (!value) _economyMorphedOnce = false;
+        }
+    }
+    bool _economyMode;
     bool _economyMorphedOnce;
+    bool _dirty = true;
+    int _idleSkipCounter;
+    float _lastPresentedJaw = float.NaN;
+
+    /// <summary>Mark scene dirty so the next Idle Tick will Present.</summary>
+    public void MarkDirty() => _dirty = true;
 
     public void InitDevice()
     {
@@ -452,6 +492,8 @@ public sealed class HoloRenderer : IDisposable
         _rtvScene?.Dispose(); _rtvScene = null;
         _srvScene?.Dispose(); _srvScene = null;
         _sceneColor?.Dispose(); _sceneColor = null;
+        _dsv1x?.Dispose(); _dsv1x = null;
+        _depth1x?.Dispose(); _depth1x = null;
         _rtvSwap?.Dispose(); _rtvSwap = null;
     }
 
@@ -480,6 +522,18 @@ public sealed class HoloRenderer : IDisposable
         });
         _rtvScene = _device.CreateRenderTargetView(_sceneColor);
         _srvScene = _device.CreateShaderResourceView(_sceneColor);
+        _depth1x = _device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = (uint)_width,
+            Height = (uint)_height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = Format.D24_UNorm_S8_UInt,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.DepthStencil,
+        });
+        _dsv1x = _device.CreateDepthStencilView(_depth1x);
 
         var sample = new SampleDescription(MsaaCount, 0);
         try
@@ -542,15 +596,27 @@ public sealed class HoloRenderer : IDisposable
             return;
         _time += dt;
 
-        if (!EconomyMode || _jaw > 0.02f || !float.IsNaN(_forcedJaw))
+        var jaw = float.IsNaN(_forcedJaw) ? _jaw : _forcedJaw;
+        if (EconomyMode)
+        {
+            // Heartbeat: eased ring motion ~ every 3rd idle tick; otherwise skip Present if clean.
+            _idleSkipCounter++;
+            var jawMoved = float.IsNaN(_lastPresentedJaw) || MathF.Abs(jaw - _lastPresentedJaw) > 0.004f;
+            var heartbeat = (_idleSkipCounter % 3) == 0;
+            if (!_dirty && !jawMoved && !heartbeat && !_wakePulseActiveNow())
+                return; // skip Present — nothing changed
+            _dirty = false;
+            _idleSkipCounter = heartbeat ? 0 : _idleSkipCounter;
+        }
+
+        if (!EconomyMode || jaw > 0.02f || !float.IsNaN(_forcedJaw) || _wakePulseActiveNow())
         {
             UpdateBlink(dt);
             UpdateHeadLook(dt);
             UpdateGaze(dt);
         }
-        var blinkAmt = _blinkPhase;
+        var blinkAmt = EconomyMode ? 0f : _blinkPhase;
 
-        var jaw = float.IsNaN(_forcedJaw) ? _jaw : _forcedJaw;
         var funnel = float.IsNaN(_forcedJaw) ? _funnel : Math.Min(0.35f, _forcedJaw * 0.4f);
         var wide = float.IsNaN(_forcedJaw) ? _wide : 0.08f;
 
@@ -565,15 +631,17 @@ public sealed class HoloRenderer : IDisposable
         var needMorph = !EconomyMode || jaw > 0.02f || !float.IsNaN(_forcedJaw) || !_economyMorphedOnce;
         if (needMorph && _mesh != null && _morphScratch != null)
         {
-            var lid = BlinkLidAmount();
+            var lid = EconomyMode ? 0f : BlinkLidAmount();
             _mesh.Morph(Math.Min(0.62f, jaw * 0.88f), funnel * 0.50f, wide * 0.50f, smile, brow, lid, _morphScratch);
             UploadHead(_morphScratch);
             _economyMorphedOnce = true;
         }
 
-        // Scene → MSAA RT (or scene color when MSAA unavailable); FXAA to swapchain after.
-        var drawRtv = _msaaSamples > 1 ? _rtvMsaa! : _rtvScene!;
-        var drawDsv = _dsvMsaa!;
+        // Economy: draw 1× into scene color (skip MSAA resolve — dominant WARP CPU cost).
+        // Active: MSAA RT when available, then resolve.
+        var useMsaa = !EconomyMode && _msaaSamples > 1;
+        var drawRtv = useMsaa ? _rtvMsaa! : _rtvScene!;
+        var drawDsv = useMsaa ? _dsvMsaa! : (_dsv1x ?? _dsvMsaa!);
         _ctx.OMSetRenderTargets(drawRtv, drawDsv);
         _ctx.RSSetViewport(new Viewport(0, 0, _width, _height));
         // v0.6.2 opaque navy clear — stage composites reliably; arcs drawn in-pass behind head.
@@ -611,7 +679,8 @@ public sealed class HoloRenderer : IDisposable
         else
         {
             // Exact v0.6.2 framing — head+neck ≈75–80% viewport height
-            var orbit = MathF.Sin(_time * 0.09f) * 0.04f;
+            // Idle: freeze micro-orbit (camera static) — motion lives in eased rings only.
+            var orbit = EconomyMode ? 0f : MathF.Sin(_time * 0.09f) * 0.04f;
             cam = new Vector3(orbit, 0.00f, 2.82f);
             lookAt = new Vector3(0, 0.00f, 0.02f);
             fovDeg = 24f;
@@ -622,8 +691,8 @@ public sealed class HoloRenderer : IDisposable
 
         var yaw = float.IsNaN(_forcedYaw) ? _headYaw : _forcedYaw;
         var pitch = _eyesCloseup ? 0f : _headPitch;
-        var breath = 1f + MathF.Sin(_time * 1.05f) * 0.008f;
-        var breathY = MathF.Sin(_time * 1.05f) * 0.006f;
+        var breath = EconomyMode ? 1f : 1f + MathF.Sin(_time * 1.05f) * 0.008f;
+        var breathY = EconomyMode ? 0f : MathF.Sin(_time * 1.05f) * 0.006f;
         var headWorld = Matrix4x4.CreateScale(HeadScale * breath)
                         * Matrix4x4.CreateRotationX(pitch)
                         * Matrix4x4.CreateRotationY(yaw)
@@ -631,8 +700,8 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 0) Dense 2D arcs FIRST (screen-space) — head draws after and occludes them
-        if (!_eyesCloseup)
+        // 0) Dense 2D arcs — skip in economy (big fill-rate on WARP)
+        if (!_eyesCloseup && !EconomyMode)
             DrawBackgroundArcs();
 
         // Restore mesh IA after fullscreen pass
@@ -654,24 +723,35 @@ public sealed class HoloRenderer : IDisposable
         {
             _ctx.IASetVertexBuffer(0, _headVb, stride, 0);
             _ctx.IASetIndexBuffer(_headIb, Format.R32_UInt, 0);
-            // 1a) Depth only — closest surface wins (NoCull, same as v0.6.6 skin)
-            _ctx.OMSetDepthStencilState(_dssWrite);
-            _ctx.OMSetBlendState(_blendNoColor!);
-            _ctx.RSSetState(_rsNoCull);
-            _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
-            // 1b) Color premul; LessEqual (MSAA-safe vs Equal) + no depth write
-            _ctx.OMSetDepthStencilState(_dssRead);
-            _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
-            _ctx.RSSetState(_rsNoCull);
-            _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
+            if (EconomyMode)
+            {
+                // Single color pass — depth prepass skipped (idle CPU)
+                _ctx.OMSetDepthStencilState(_dssWrite);
+                _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+                _ctx.RSSetState(_rsNoCull);
+                _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
+            }
+            else
+            {
+                // 1a) Depth only — closest surface wins (NoCull, same as v0.6.6 skin)
+                _ctx.OMSetDepthStencilState(_dssWrite);
+                _ctx.OMSetBlendState(_blendNoColor!);
+                _ctx.RSSetState(_rsNoCull);
+                _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
+                // 1b) Color premul; LessEqual (MSAA-safe vs Equal) + no depth write
+                _ctx.OMSetDepthStencilState(_dssRead);
+                _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+                _ctx.RSSetState(_rsNoCull);
+                _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
+            }
         }
         _ctx.RSSetState(_rs);
 
         // 2) Eyes + cornea
         DrawEyes(viewProj, headWorld, cam, blinkAmt);
 
-        // 3) Hair — alpha-tested dark cards (lashes clipped; no amber holo on cards)
-        if (_hairVb != null && _hairIb != null && _hairIndexCount > 0)
+        // 3) Hair — skip in economy (alpha cards are expensive on WARP)
+        if (!EconomyMode && _hairVb != null && _hairIb != null && _hairIndexCount > 0)
         {
             _ctx.OMSetDepthStencilState(_dssRead);
             _ctx.OMSetBlendState(_blendOpaque); // opaque; neck stump is skin-only fade
@@ -687,6 +767,7 @@ public sealed class HoloRenderer : IDisposable
 
         // 4) Rings — parented to head orient (so yaw never slices the face);
         //    placed behind face plane in head space; hidden in eyes close-up
+        // Idle: eased spin (0.22×) so motion is still readable at ~20fps.
         if (!_eyesCloseup)
         {
             var headOrient = Matrix4x4.CreateRotationX(pitch)
@@ -697,12 +778,13 @@ public sealed class HoloRenderer : IDisposable
             _ctx.RSSetState(_rsNoCull);
             _ctx.PSSetShader(_psRing);
             _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
-            for (var i = 0; i < _rings.Count; i++)
+            var spinMul = _ringsShowcase ? 2.2f : EconomyMode ? 0.22f : 1f;
+            var ringCount = EconomyMode ? Math.Min(_rings.Count, 4) : _rings.Count;
+            for (var i = 0; i < ringCount; i++)
             {
                 var r = _rings[i];
-                var spinBoost = _ringsShowcase ? 2.2f : 1f;
                 var rot = Matrix4x4.CreateFromYawPitchRoll(
-                    r.BaseYaw + _time * r.SpinY * spinBoost,
+                    r.BaseYaw + _time * r.SpinY * spinMul,
                     r.BasePitch,
                     r.BaseRoll);
                 var ringLocal = rot * Matrix4x4.CreateTranslation(0f, r.TransY, r.TransZ);
@@ -722,14 +804,12 @@ public sealed class HoloRenderer : IDisposable
         // Unbind RTs before resolve/copy (MSAA DSV must not stay bound with 1x swap)
         _ctx.OMSetRenderTargets(Array.Empty<ID3D11RenderTargetView>(), null);
 
-        // Resolve into scene color
-        if (_msaaSamples > 1 && _msaaColor != null && _sceneColor != null)
+        if (useMsaa && _msaaColor != null && _sceneColor != null)
             _ctx.ResolveSubresource(_sceneColor, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
-        // msaa==1 already drew into _rtvScene
+        // economy / msaa==1 already drew into _rtvScene
 
-        // Blit scene → swap. FXAA only when MSAA unavailable (CI/WARP often has MSAA=4).
-        // EconomyMode: always CopyResource (skip FXAA cost on idle ~30fps).
-        if (_msaaSamples <= 1 && !EconomyMode)
+        // Blit scene → swap. FXAA only when Active + MSAA unavailable.
+        if (!useMsaa && !EconomyMode)
         {
             if (!ApplyFxaa())
             {
@@ -746,7 +826,10 @@ public sealed class HoloRenderer : IDisposable
         }
         var sync = (uint)Math.Clamp(PresentInterval, 0, 4);
         _swap.Present(sync, PresentFlags.None);
+        _lastPresentedJaw = jaw;
     }
+
+    bool _wakePulseActiveNow() => _time < _wakePulseUntil;
 
     /// <summary>
     /// Copy the resolved scene (or swapchain) to a PNG — offscreen CI dumps at exact WxH.
@@ -1350,6 +1433,8 @@ public sealed class HoloRenderer : IDisposable
         _msaaDepth?.Dispose();
         _rtvScene?.Dispose();
         _sceneColor?.Dispose();
+        _dsv1x?.Dispose();
+        _depth1x?.Dispose();
         _rtvSwap?.Dispose();
         _swap?.Dispose();
         _vs?.Dispose();

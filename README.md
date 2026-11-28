@@ -28,7 +28,7 @@ Head asset: Microsoft Rocketbox `Female_Adult_07` (MIT) — see `THIRD_PARTY.md`
 - Persistent daily logs under `%LOCALAPPDATA%\LiaDesktop\logs` (startup diagnostics, TTS metrics, crashes; Settings → copy `Lia-log.txt` to Desktop)
 - Low-latency TTS: speaks the first sentence while the rest synthesizes (warm Edge WS)
 - Offline wake word «Лиа» (Vosk small-ru, local model; first-run download ~45MB) — Settings toggle + sensitivity
-- Idle render throttle: ~30 fps in ОЖИДАНИЕ, 60 fps while speaking/listening, pause when minimized/locked
+- Idle render throttle: ~20 fps economy in ОЖИДАНИЕ, 60 fps while speaking/listening, pause when minimized/locked
 - System telemetry (CPU/GPU/RAM/net) + long-term memory + UIA desktop control
 - DPAPI-protected API key; stop: «Лиа, стоп» / **Ctrl+Alt+S**
 - Clean exit via Job Object `KILL_ON_JOB_CLOSE`

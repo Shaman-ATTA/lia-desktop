@@ -333,7 +333,7 @@ jobs:
             if ($txt -notmatch 'wake_cpu: PASS.*wall_s=') { throw "selftest wake_cpu missing wall_s=" }
             if ($txt -notmatch 'app_idle_cpu: PASS') { throw "selftest missing app_idle_cpu PASS" }
             if ($txt -notmatch 'app_idle_cpu: PASS.*fps60_avg=') { throw "selftest app_idle_cpu missing fps60_avg=" }
-            if ($txt -notmatch 'app_idle_cpu: PASS.*fps30_avg=') { throw "selftest app_idle_cpu missing fps30_avg=" }
+            if ($txt -notmatch 'app_idle_cpu: PASS.*fps_idle_avg=') { throw "selftest app_idle_cpu missing fps_idle_avg=" }
             if ($txt -notmatch 'app_idle_cpu: PASS.*drop_pct=') { throw "selftest app_idle_cpu missing drop_pct=" }
             if ($txt -notmatch 'app_idle_cpu: PASS.*minimized_avg=') { throw "selftest app_idle_cpu missing minimized_avg=" }
             if ($txt -notmatch 'app_idle_cpu: PASS.*gpu=') { throw "selftest app_idle_cpu missing gpu=" }
@@ -800,7 +800,7 @@ jobs:
 
           - Real system CPU/GPU/RAM/net/ping + ЛИА ЦП·ОЗУ; friendly mic journal (no WaveIn walls)
           - UIA tools + act-observe + destructive confirm; long-term memory (memory.json + Settings Память)
-          - Idle ~30fps / speak-listen 60fps / pause when minimized; hard gates telemetry_system, agent_*, ltm_*, mic_error_friendly, app_idle_cpu
+          - Idle ~20fps economy (no MSAA resolve / skip Present when static) / speak-listen 60fps; app_idle_cpu hard ≥40% drop on all GPUs
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -837,7 +837,7 @@ jobs:
 
           - Real system CPU/GPU/RAM/net/ping + ЛИА ЦП·ОЗУ; friendly mic journal (no WaveIn walls)
           - UIA tools + act-observe + destructive confirm; long-term memory (memory.json + Settings Память)
-          - Idle ~30fps / speak-listen 60fps / pause when minimized; hard gates telemetry_system, agent_*, ltm_*, mic_error_friendly, app_idle_cpu
+          - Idle ~20fps economy (no MSAA resolve / skip Present when static) / speak-listen 60fps; app_idle_cpu hard ≥40% drop on all GPUs
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
