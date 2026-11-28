@@ -42,6 +42,7 @@ public static class Program
                 Directory.CreateDirectory(dir);
                 SecretsStore.ConfigDirOverride = dir;
                 ConversationMemory.PathOverride = Path.Combine(dir, "session.json");
+                LongTermMemory.PathOverride = Path.Combine(dir, "memory.json");
                 AppLog.LogRootOverride = dir;
                 BootLog($"selftest config dir={dir}");
                 BootLog($"gemini base={GeminiEndpoints.Base}");

@@ -733,7 +733,7 @@ public sealed class HoloRenderer : IDisposable
             if (_sceneColor != null)
                 _ctx.CopyResource(bb, _sceneColor);
         }
-        var sync = Math.Clamp(PresentInterval, 0, 4);
+        var sync = (uint)Math.Clamp(PresentInterval, 0, 4);
         _swap.Present(sync, PresentFlags.None);
     }
 

@@ -35,6 +35,26 @@ public sealed class AppLog
         Push(journal, null);
     }
 
+    /// <summary>Write to daily log / error.log only — never the ЖУРНАЛ HUD ring.</summary>
+    public void FileOnly(string line, string? detail = null)
+    {
+        line = RedactSecrets(Collapse(line));
+        detail = detail == null ? null : RedactSecrets(detail);
+        AppendFile("DEBUG", line, detail);
+        if (!string.IsNullOrWhiteSpace(detail) && detail.Length > 200)
+            WriteCrash("file-only", detail);
+    }
+
+    /// <summary>One friendly Russian HUD line; full technical detail stays in the log file.</summary>
+    public void MicUnavailable(string technicalDetail)
+    {
+        FileOnly("mic capture failed", technicalDetail);
+        Error(MicUnavailableJournalLine);
+    }
+
+    public const string MicUnavailableJournalLine =
+        "Микрофон недоступен — проверьте устройство в Настройках";
+
     void Push(string line, string? detail)
     {
         line = RedactSecrets(line);

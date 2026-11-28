@@ -337,6 +337,15 @@ jobs:
             if ($txt -notmatch 'app_idle_cpu: PASS.*drop_pct=') { throw "selftest app_idle_cpu missing drop_pct=" }
             if ($txt -notmatch 'app_idle_cpu: PASS.*minimized_avg=') { throw "selftest app_idle_cpu missing minimized_avg=" }
             if ($txt -notmatch 'app_idle_cpu: PASS.*gpu=') { throw "selftest app_idle_cpu missing gpu=" }
+            if ($txt -notmatch 'mic_error_friendly: PASS') { throw "selftest missing mic_error_friendly PASS" }
+            if ($txt -notmatch 'telemetry_system: PASS') { throw "selftest missing telemetry_system PASS" }
+            if ($txt -notmatch 'agent_confirm: PASS') { throw "selftest missing agent_confirm PASS" }
+            if ($txt -notmatch 'agent_uia_click: PASS') { throw "selftest missing agent_uia_click PASS" }
+            if ($txt -notmatch 'agent_notepad: PASS') { throw "selftest missing agent_notepad PASS" }
+            if ($txt -notmatch 'agent_retry: PASS') { throw "selftest missing agent_retry PASS" }
+            if ($txt -notmatch 'ltm_save: PASS') { throw "selftest missing ltm_save PASS" }
+            if ($txt -notmatch 'ltm_recall_new_session: PASS') { throw "selftest missing ltm_recall_new_session PASS" }
+            if ($txt -notmatch 'ltm_forget: PASS') { throw "selftest missing ltm_forget PASS" }
             if ($txt -notmatch 'log_file: PASS') { throw "selftest missing log_file PASS" }
             if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }
             if ($txt -notmatch 'render_nondefault_comm: PASS') { throw "selftest missing render_nondefault_comm PASS" }
@@ -787,12 +796,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.5** — Idle render throttle (CPU)
+          Lia Desktop **v0.7.5** — System telemetry · UIA agent · LTM · idle throttle
 
-          - ОЖИДАНИЕ → ~30 fps head/HUD; speaking/listening → 60 fps; minimized/occluded/locked → pause Present
-          - Lip sync / visuals unchanged while speaking
-          - Selftest hard gate `app_idle_cpu`: Idle drop ≥40% vs 60fps; minimized_avg <3%; reports fps60/fps30/drop/minimized + gpu
-          - Wake «Лиа» from v0.7.4 kept (wake_* gates + absolute baseline_avg/active_avg/delta)
+          - Real system CPU/GPU/RAM/net/ping + ЛИА ЦП·ОЗУ; friendly mic journal (no WaveIn walls)
+          - UIA tools + act-observe + destructive confirm; long-term memory (memory.json + Settings Память)
+          - Idle ~30fps / speak-listen 60fps / pause when minimized; hard gates telemetry_system, agent_*, ltm_*, mic_error_friendly, app_idle_cpu
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -825,12 +833,11 @@ jobs:
         run: |
           TAG=v0.7.5
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.5** — Idle render throttle (CPU)
+          Lia Desktop **v0.7.5** — System telemetry · UIA agent · LTM · idle throttle
 
-          - ОЖИДАНИЕ → ~30 fps head/HUD; speaking/listening → 60 fps; minimized/occluded/locked → pause Present
-          - Lip sync / visuals unchanged while speaking
-          - Selftest hard gate `app_idle_cpu`: Idle drop ≥40% vs 60fps; minimized_avg <3%; reports fps60/fps30/drop/minimized + gpu
-          - Wake «Лиа» from v0.7.4 kept (wake_* gates + absolute baseline_avg/active_avg/delta)
+          - Real system CPU/GPU/RAM/net/ping + ЛИА ЦП·ОЗУ; friendly mic journal (no WaveIn walls)
+          - UIA tools + act-observe + destructive confirm; long-term memory (memory.json + Settings Память)
+          - Idle ~30fps / speak-listen 60fps / pause when minimized; hard gates telemetry_system, agent_*, ltm_*, mic_error_friendly, app_idle_cpu
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \

@@ -65,16 +65,27 @@ public sealed class MicGeminiListen : IDisposable
         }
 
         // WaveInEvent is in core NAudio.Wave (WasapiCapture needs NAudio.Wasapi pack).
-        _capture = new WaveInEvent
+        try
         {
-            WaveFormat = _format,
-            BufferMilliseconds = 50,
-        };
-        _capture.DataAvailable += OnData;
-        _capture.RecordingStopped += (_, _) => { };
-        _capture.StartRecording();
-        _log.Info("Микрофон: Gemini STT (WaveIn)…");
-        _pipeline = Task.Run(() => PipelineAsync(ct), ct);
+            _capture = new WaveInEvent
+            {
+                WaveFormat = _format,
+                BufferMilliseconds = 50,
+            };
+            _capture.DataAvailable += OnData;
+            _capture.RecordingStopped += (_, _) => { };
+            _capture.StartRecording();
+            _log.Info("Микрофон: Gemini STT (WaveIn)…");
+            _pipeline = Task.Run(() => PipelineAsync(ct), ct);
+        }
+        catch (Exception ex)
+        {
+            CleanupCapture();
+            IsListening = false;
+            _armed = false;
+            _log.MicUnavailable(ex.ToString());
+            throw;
+        }
         await Task.CompletedTask;
     }
 

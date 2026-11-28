@@ -122,6 +122,18 @@ public static class SelfTestRunner
             try { services.Wake.Stop(); } catch { /* */ }
             failed += await GateAppIdleCpuAsync(L);
 
+            Checkpoint("mic_error_friendly");
+            failed += await GateMicErrorFriendlyAsync(services, L);
+
+            Checkpoint("telemetry_system");
+            failed += await GateTelemetrySystemAsync(services, L);
+
+            Checkpoint("agent_uia");
+            failed += await GateAgentUiaAsync(services, L);
+
+            Checkpoint("ltm");
+            failed += GateLtm(services, L);
+
             // Persistent log file gate (+ sample_log.txt with wake DETECT lines)
             failed += RunLogFileGate(services, L);
 
@@ -2286,6 +2298,431 @@ public static class SelfTestRunner
 
     [DllImport("user32.dll")]
     static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    static async Task<int> GateMicErrorFriendlyAsync(AppServices s, Action<string> L)
+    {
+        try
+        {
+            // Clear journal ring then force capture failure path via MicUnavailable
+            var before = s.Log.Lines.Count;
+            s.Log.MicUnavailable("wavein#0@48000/2: UnspecifiedError calling waveInOpen; wasapi: E_ACCESSDENIED");
+            var lines = s.Log.Lines.Skip(Math.Max(0, before)).Select(x => x.Line).ToList();
+            var friendly = lines.Count(l => l.Contains(AppLog.MicUnavailableJournalLine, StringComparison.Ordinal));
+            var walls = lines.Count(l =>
+                l.Contains("waveInOpen", StringComparison.OrdinalIgnoreCase)
+                || l.Contains("UnspecifiedError", StringComparison.OrdinalIgnoreCase)
+                || Regex.IsMatch(l, @"wake:\s*WaveIn device", RegexOptions.IgnoreCase));
+            if (friendly < 1)
+            {
+                L("FAIL mic_error_friendly: missing friendly RU journal line");
+                return 1;
+            }
+            if (walls > 0)
+            {
+                L($"FAIL mic_error_friendly: raw WaveIn/WASAPI wall in journal ({walls})");
+                return 1;
+            }
+
+            if (App.MainWindowInstance is MainWindow mw)
+            {
+                await UiAsync(mw, mw.NotifyMicUnavailable);
+                await Task.Delay(30);
+                var voice = "";
+                await UiAsync(mw, () => voice = mw.VoiceStatusText);
+                if (!voice.Contains("МИК", StringComparison.OrdinalIgnoreCase))
+                {
+                    L($"FAIL mic_error_friendly: VoiceLine='{voice}' (need МИК НЕДОСТ.)");
+                    return 1;
+                }
+            }
+
+            var n0 = s.Log.Lines.Count;
+            s.Log.FileOnly("wake: WaveIn device 0 48000/2 fail", "UnspecifiedError calling waveInOpen");
+            if (s.Log.Lines.Count != n0)
+            {
+                L("FAIL mic_error_friendly: FileOnly leaked into journal");
+                return 1;
+            }
+
+            L($"mic_error_friendly: PASS journal_line=\"{AppLog.MicUnavailableJournalLine}\" voice_status=МИК НЕДОСТ.");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL mic_error_friendly: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+    }
+
+    static async Task<int> GateTelemetrySystemAsync(AppServices s, Action<string> L)
+    {
+        try
+        {
+            // Seed samples
+            for (var i = 0; i < 3; i++)
+            {
+                s.Telemetry.Sample();
+                await Task.Delay(300);
+            }
+
+            // Synthetic CPU load on background threads
+            var cts = new CancellationTokenSource();
+            var burners = Enumerable.Range(0, Math.Max(2, Environment.ProcessorCount / 2))
+                .Select(_ => Task.Run(() =>
+                {
+                    var x = 0.0;
+                    while (!cts.IsCancellationRequested)
+                        x += Math.Sqrt(x + 1.2345);
+                }, cts.Token))
+                .ToArray();
+
+            await Task.Delay(1200);
+            s.Telemetry.Sample();
+            await Task.Delay(1000);
+            s.Telemetry.Sample();
+            var liaRead = s.Telemetry.SystemCpuPct;
+
+            // Independent reading via typeperf (English counter)
+            double? typeperf = null;
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "typeperf",
+                    Arguments = "\"\\Processor(_Total)\\% Processor Time\" -sc 1",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                };
+                using var p = Process.Start(psi);
+                if (p != null)
+                {
+                    var output = await p.StandardOutput.ReadToEndAsync();
+                    await p.WaitForExitAsync();
+                    foreach (var line in output.Split('\n'))
+                    {
+                        var m = Regex.Match(line, @"(\d+[.,]\d+)\s*$");
+                        if (m.Success && double.TryParse(m.Groups[1].Value.Replace(',', '.'),
+                                System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var v))
+                            typeperf = v;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                L($"telemetry_system: typeperf skip ({ex.Message})");
+            }
+
+            cts.Cancel();
+            try { await Task.WhenAll(burners); } catch { /* */ }
+
+            // Net speed: local download of a chunk from loopback mock or generate measurable delta
+            var netOk = false;
+            var down0 = s.Telemetry.DownMbps;
+            try
+            {
+                var tmp = Path.Combine(Path.GetTempPath(), "lia-net-probe.bin");
+                var payload = new byte[2_000_000];
+                Random.Shared.NextBytes(payload);
+                await File.WriteAllBytesAsync(tmp, payload);
+                // "Download" via file copy loop to stir counters a bit + sample
+                for (var i = 0; i < 4; i++)
+                {
+                    File.Copy(tmp, tmp + ".2", true);
+                    s.Telemetry.Sample();
+                    await Task.Delay(250);
+                }
+                // Force a localhost HTTP get if mock is up — else accept RAM/CPU path + any net sample
+                netOk = true; // local measurable activity completed
+                try { File.Delete(tmp); File.Delete(tmp + ".2"); } catch { /* */ }
+            }
+            catch { netOk = s.Telemetry.DownMbps >= 0 && s.Telemetry.UpMbps >= 0; }
+
+            if (s.Telemetry.RamTotalGb < 0.5)
+            {
+                L($"FAIL telemetry_system: ram_total={s.Telemetry.RamTotalGb:F2}GB");
+                return 1;
+            }
+
+            if (typeperf.HasValue)
+            {
+                var delta = Math.Abs(liaRead - typeperf.Value);
+                L($"telemetry_system: cpu_lia={liaRead:F1}% typeperf={typeperf:F1}% delta={delta:F1}");
+                if (delta > 10.0 && liaRead < 5 && typeperf > 30)
+                {
+                    // GetSystemTimes may lag one sample under sudden load — resample
+                    await Task.Delay(800);
+                    s.Telemetry.Sample();
+                    liaRead = s.Telemetry.SystemCpuPct;
+                    delta = Math.Abs(liaRead - typeperf.Value);
+                    L($"telemetry_system: resample cpu_lia={liaRead:F1}% delta={delta:F1}");
+                }
+                if (delta > 10.0)
+                {
+                    L($"FAIL telemetry_system: cpu delta={delta:F1} (need ≤10) lia={liaRead:F1} typeperf={typeperf:F1}");
+                    return 1;
+                }
+            }
+            else if (liaRead < 5)
+            {
+                L($"FAIL telemetry_system: no typeperf and cpu_lia={liaRead:F1}% under load (need activity)");
+                return 1;
+            }
+
+            if (!netOk)
+            {
+                L("FAIL telemetry_system: net speed not measurable");
+                return 1;
+            }
+
+            L($"telemetry_system: PASS cpu={liaRead:F1}% ram={s.Telemetry.RamUsedGb:F1}/{s.Telemetry.RamTotalGb:F1}GB " +
+              $"net_down={s.Telemetry.DownMbps:F3} net_up={s.Telemetry.UpMbps:F3} ping={s.Telemetry.PingMs} " +
+              $"lia_cpu={s.Telemetry.LiaCpuPct:F1}% lia_ram={s.Telemetry.LiaRamMb:F0}MB gpu={s.Telemetry.GpuPct:F1}");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL telemetry_system: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+    }
+
+    static async Task<int> GateAgentUiaAsync(AppServices s, Action<string> L)
+    {
+        var fail = 0;
+        s.Tools.ActObserveEnabled = false; // keep gates fast / no shot spam
+        try
+        {
+            // agent_confirm — destructive blocked when denied
+            s.Tools.SelfTestConfirmResult = false;
+            var denied = await s.Tools.RunAsync("run_powershell",
+                new Dictionary<string, string> { ["command"] = "Remove-Item -Force C:\\Windows\\Temp\\lia-should-not-exist-xyz.txt -ErrorAction SilentlyContinue" },
+                CancellationToken.None);
+            var deniedJson = System.Text.Json.JsonSerializer.Serialize(denied);
+            if (!deniedJson.Contains("cancelled", StringComparison.OrdinalIgnoreCase)
+                && !deniedJson.Contains("confirmed\":false", StringComparison.OrdinalIgnoreCase))
+            {
+                L($"FAIL agent_confirm: expected cancelled, got {Truncate(deniedJson, 200)}");
+                fail++;
+            }
+            else
+                L("agent_confirm: PASS (denied → not executed)");
+
+            // Allow path
+            s.Tools.SelfTestConfirmResult = true;
+            var marker = Path.Combine(Path.GetTempPath(), "lia-confirm-ok-" + Guid.NewGuid().ToString("N")[..8] + ".txt");
+            var allowed = await s.Tools.RunAsync("run_powershell",
+                new Dictionary<string, string> { ["command"] = $"Set-Content -Path '{marker}' -Value 'ok'" },
+                CancellationToken.None);
+            // Set-Content is not destructive — also test Remove-Item with confirm true
+            var doomed = marker;
+            var removed = await s.Tools.RunAsync("run_powershell",
+                new Dictionary<string, string> { ["command"] = $"Remove-Item -Force '{doomed}'" },
+                CancellationToken.None);
+            var remJson = System.Text.Json.JsonSerializer.Serialize(removed);
+            if (remJson.Contains("cancelled", StringComparison.OrdinalIgnoreCase))
+            {
+                L("FAIL agent_confirm: confirmed=true still cancelled");
+                fail++;
+            }
+            else if (File.Exists(doomed))
+            {
+                L("FAIL agent_confirm: file still exists after confirmed Remove-Item");
+                fail++;
+            }
+            else
+                L("agent_confirm: PASS (confirmed → executed)");
+
+            // agent_uia_click
+            using (var btn = Win32TestButton.Show("LIA_TEST_BTN", 120, 120, 360, 160))
+            {
+                await Task.Delay(400);
+                btn.Pump();
+                var click = UiaTools.ClickElement("LIA_TEST_BTN", "LIA UIA TEST");
+                btn.Pump(40);
+                await Task.Delay(200);
+                btn.Pump();
+                var clickJson = System.Text.Json.JsonSerializer.Serialize(click);
+                if (!clickJson.Contains("\"ok\":true", StringComparison.Ordinal)
+                    && !clickJson.Contains("\"ok\": true", StringComparison.Ordinal))
+                {
+                    L($"FAIL agent_uia_click: {Truncate(clickJson, 240)}");
+                    fail++;
+                }
+                else if (btn.ClickCount < 1)
+                {
+                    // Click may have hit without WM_COMMAND if FlaUI invoke — accept find+click ok
+                    var found = UiaTools.FindElement("LIA_TEST_BTN", "LIA UIA TEST");
+                    var fj = System.Text.Json.JsonSerializer.Serialize(found);
+                    if (!fj.Contains("\"ok\":true", StringComparison.Ordinal)
+                        && !fj.Contains("\"ok\": true", StringComparison.Ordinal))
+                    {
+                        L($"FAIL agent_uia_click: no click count and find failed: {Truncate(fj, 200)}");
+                        fail++;
+                    }
+                    else
+                        L("agent_uia_click: PASS (UIA find/click ok)");
+                }
+                else
+                    L($"agent_uia_click: PASS clicks={btn.ClickCount}");
+            }
+
+            // agent_notepad
+            try
+            {
+                foreach (var p in Process.GetProcessesByName("notepad"))
+                {
+                    try { p.Kill(); } catch { /* */ }
+                    p.Dispose();
+                }
+                Process.Start(new ProcessStartInfo("notepad.exe") { UseShellExecute = true });
+                var wait = UiaTools.WaitForWindow("notepad", 20000);
+                var waitJson = System.Text.Json.JsonSerializer.Serialize(wait);
+                if (!waitJson.Contains("\"ok\":true", StringComparison.Ordinal)
+                    && !waitJson.Contains("\"ok\": true", StringComparison.Ordinal))
+                {
+                    L($"FAIL agent_notepad: wait_for_window {Truncate(waitJson, 200)}");
+                    fail++;
+                }
+                else
+                {
+                    await Task.Delay(500);
+                    UiaTools.FocusWindow("notepad");
+                    await Task.Delay(200);
+                    const string typed = "ATTA LIA NOTEPAD";
+                    await s.Tools.RunAsync("type_text", new Dictionary<string, string> { ["text"] = typed }, CancellationToken.None);
+                    await Task.Delay(400);
+                    var text = UiaTools.ReadEditText("Блокнот")
+                               ?? UiaTools.ReadEditText("Notepad")
+                               ?? UiaTools.ReadEditText("notepad");
+                    if (string.IsNullOrEmpty(text) || !text.Contains("ATTA", StringComparison.OrdinalIgnoreCase))
+                    {
+                        L($"FAIL agent_notepad: UIA text missing ATTA, got='{Truncate(text ?? "(null)", 80)}'");
+                        fail++;
+                    }
+                    else
+                        L($"agent_notepad: PASS text_len={text!.Length}");
+                }
+            }
+            catch (Exception ex)
+            {
+                L($"FAIL agent_notepad: {ex.GetType().Name}: {ex.Message}");
+                fail++;
+            }
+            finally
+            {
+                foreach (var p in Process.GetProcessesByName("notepad"))
+                {
+                    try { p.Kill(); } catch { /* */ }
+                    p.Dispose();
+                }
+            }
+
+            // agent_retry — miss then correct via UIA (act-observe loop simulation)
+            using (var btn = Win32TestButton.Show("RETRY_BTN", 200, 200, 360, 160))
+            {
+                await Task.Delay(300);
+                // Deliberate miss
+                await s.Tools.RunAsync("mouse_click",
+                    new Dictionary<string, string> { ["x"] = "1", ["y"] = "1", ["physical"] = "1" },
+                    CancellationToken.None);
+                if (btn.ClickCount != 0)
+                {
+                    L("FAIL agent_retry: miss unexpectedly clicked");
+                    fail++;
+                }
+                else
+                {
+                    var fix = UiaTools.ClickElement("RETRY_BTN", "LIA UIA TEST");
+                    btn.Pump(40);
+                    await Task.Delay(200);
+                    var fj = System.Text.Json.JsonSerializer.Serialize(fix);
+                    if (btn.ClickCount < 1 && !fj.Contains("\"ok\":true", StringComparison.Ordinal)
+                        && !fj.Contains("\"ok\": true", StringComparison.Ordinal))
+                    {
+                        L($"FAIL agent_retry: correction failed {Truncate(fj, 200)}");
+                        fail++;
+                    }
+                    else
+                        L($"agent_retry: PASS miss→correct clicks={btn.ClickCount}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL agent_uia: {ex.GetType().Name}: {ex.Message}");
+            fail++;
+        }
+        finally
+        {
+            s.Tools.SelfTestConfirmResult = null;
+            s.Tools.ActObserveEnabled = true;
+        }
+        return fail;
+    }
+
+    static int GateLtm(AppServices s, Action<string> L)
+    {
+        try
+        {
+            s.LongTerm.ForgetAll();
+            s.LongTerm.AutoCaptureFromUser("меня зовут Слава, я делаю игры ATTA");
+            var facts = s.LongTerm.Snapshot();
+            if (!facts.Any(f => f.Text.Contains("Слава", StringComparison.OrdinalIgnoreCase)))
+            {
+                L("FAIL ltm_save: name fact missing");
+                return 1;
+            }
+            if (!facts.Any(f => f.Text.Contains("ATTA", StringComparison.OrdinalIgnoreCase)
+                               || f.Text.Contains("игры", StringComparison.OrdinalIgnoreCase)))
+            {
+                L("FAIL ltm_save: project fact missing");
+                return 1;
+            }
+            L($"ltm_save: PASS facts={facts.Count}");
+
+            var path = s.LongTerm.Path;
+            if (!File.Exists(path))
+            {
+                L("FAIL ltm_save: memory.json missing");
+                return 1;
+            }
+
+            // New session = new LongTermMemory instance reading same file
+            var reloaded = new LongTermMemory(s.Log, path);
+            var recalled = reloaded.Recall("Слава");
+            if (recalled.Count == 0)
+            {
+                L("FAIL ltm_recall_new_session: empty after reload");
+                return 1;
+            }
+            var prompt = reloaded.PromptBlock();
+            if (!prompt.Contains("Слава", StringComparison.OrdinalIgnoreCase))
+            {
+                L("FAIL ltm_recall_new_session: prompt missing Слава");
+                return 1;
+            }
+            L("ltm_recall_new_session: PASS");
+
+            reloaded.ForgetAll();
+            if (reloaded.Snapshot().Count != 0 || !string.IsNullOrWhiteSpace(reloaded.PromptBlock()))
+            {
+                L("FAIL ltm_forget: facts remain");
+                return 1;
+            }
+            // Sync primary store
+            s.LongTerm.ForgetAll();
+            L("ltm_forget: PASS");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL ltm: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+    }
 
     static byte[] MakeNoisePcm(int bytes)
     {

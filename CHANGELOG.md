@@ -1,10 +1,13 @@
 # Changelog
 
-## v0.7.5 — Idle render throttle (CPU)
+## v0.7.5 — System telemetry · UIA agent · LTM · idle throttle
 
-- **Render pace:** ОЖИДАНИЕ (visible, no speech) → ~30 fps (`PresentInterval=2`); speaking / follow-up listening → full ~60 fps; minimized / occluded / screen-locked → pause Tick/Present entirely. Lip sync morph targets unchanged while speaking.
-- **Selftest hard gate `app_idle_cpu`:** Idle CPU drop ≥40% vs Active 60fps on the same runner; minimized+Paused absolute CPU &lt;3%; prints `fps60_avg` / `fps30_avg` / `drop_pct` / `minimized_avg` / `gpu`.
-- Wake word + streaming TTS from v0.7.4 / v0.7.3 kept; `wake_cpu` still prints absolute `baseline_avg` / `active_avg` / `delta` + GPU adapter.
+- **ЖУРНАЛ / mic:** capture failures show one RU line («Микрофон недоступен — проверьте устройство в Настройках»); raw WaveIn/WASAPI walls go to the log file only; ГОЛОС → `МИК НЕДОСТ.`. Gate `mic_error_friendly`.
+- **Telemetry:** system CPU (GetSystemTimes), GPU % (PDH best-effort), RAM used/total ГБ, net ↓↑ Мбит/с, ping, plus `ЛИА ЦП · ОЗУ`. Gate `telemetry_system` (±10 vs typeperf under load).
+- **Agent PC control:** UIA tools `list_windows` / `focus_window` / `wait_for_window` / `find_element` / `click_element`; act-observe screenshot after click/type/ps/browser; destructive confirm dialog (Settings toggle). Gates `agent_notepad`, `agent_uia_click`, `agent_confirm`, `agent_retry`.
+- **Long-term memory:** `%LOCALAPPDATA%\LiaDesktop\memory.json`, tools `remember_fact` / `recall` / `forget_fact`, auto-capture name/prefs, Settings «Память», «забудь всё обо мне». Gates `ltm_save`, `ltm_recall_new_session`, `ltm_forget`.
+- **Render pace:** ОЖИДАНИЕ ~30 fps; speaking/listening 60 fps; minimized/occluded/locked pause Present. Gate `app_idle_cpu` (Idle drop ≥40%; minimized &lt;3%).
+- Wake «Лиа» from v0.7.4 kept (`wake_cpu` absolute baseline/active/delta + gpu).
 
 ## v0.7.4 — Offline wake word «Лиа»
 

@@ -19,6 +19,8 @@ public sealed class LiaConfig
     public bool WakeWordEnabled { get; set; } = true;
     /// <summary>0..1 — higher = stricter. Default 0.55.</summary>
     public float WakeWordSensitivity { get; set; } = 0.55f;
+    /// <summary>Ask before destructive PowerShell / system actions. Default ON.</summary>
+    public bool ConfirmDestructiveActions { get; set; } = true;
 }
 
 public sealed class SecretsStore

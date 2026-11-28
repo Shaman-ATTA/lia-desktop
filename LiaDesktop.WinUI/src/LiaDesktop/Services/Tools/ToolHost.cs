@@ -1,29 +1,65 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 
 namespace LiaDesktop.Services.Tools;
 
 public sealed class ToolHost : IAsyncDisposable
 {
+    static readonly HashSet<string> ObserveAfter = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "mouse_click", "type_text", "run_powershell", "browser_open", "click_element", "focus_window",
+    };
+
+    static readonly Regex DestructiveRe = new(
+        @"\b(remove-item|rm\s|del\s|erase\s|format-volume|format\s|shutdown|restart-computer|" +
+        @"stop-computer|reg\s+delete|Remove-ItemProperty|uninstall|install-package|winget\s+install|" +
+        @"send-mail|Invoke-WebRequest\s+.*-Method\s+POST|Clear-Disk|Reset-Computer)\b|" +
+        @"delete\s+file|удали(ть)?\s+файл|форматир|выключи\s+пк|отправ(ь|ить)\s+",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     readonly AppLog _log;
     readonly Func<string> _workspace;
+    readonly Func<LongTermMemory>? _ltm;
+    readonly Func<bool> _confirmEnabled;
     IPlaywright? _pw;
     IBrowserContext? _browser;
 
     /// <summary>Last look_at_screen / screenshot — used to map image coords → physical.</summary>
     public ScreenShot? LastShot { get; private set; }
 
-    public ToolHost(AppLog log, Func<string> workspace)
+    /// <summary>UI confirm for destructive tools. Return false to block. Null = auto-allow (tests set explicitly).</summary>
+    public Func<string, Task<bool>>? ConfirmDestructiveAsync { get; set; }
+
+    /// <summary>Selftest: force confirm result (null = ask UI / default allow when no UI).</summary>
+    public bool? SelfTestConfirmResult { get; set; }
+
+    public bool ActObserveEnabled { get; set; } = true;
+
+    public ToolHost(AppLog log, Func<string> workspace, Func<LongTermMemory>? ltm = null, Func<bool>? confirmEnabled = null)
     {
         _log = log;
         _workspace = workspace;
+        _ltm = ltm;
+        _confirmEnabled = confirmEnabled ?? (() => true);
     }
 
     public async Task<object> RunAsync(string name, Dictionary<string, string> args, CancellationToken ct)
     {
-        return name switch
+        if (IsDestructive(name, args) && _confirmEnabled())
+        {
+            var summary = DestructiveSummary(name, args);
+            var ok = await AskConfirmAsync(summary);
+            if (!ok)
+            {
+                _log.Info("⚠ действие отменено пользователем: " + summary);
+                return new { error = "cancelled", confirmed = false, summary };
+            }
+        }
+
+        object raw = name switch
         {
             "list_dir" => ListDir(args.GetValueOrDefault("path") ?? _workspace()),
             "read_file" => ReadFile(args.GetValueOrDefault("path") ?? ""),
@@ -38,8 +74,101 @@ public sealed class ToolHost : IAsyncDisposable
                 int.TryParse(args.GetValueOrDefault("x"), out var x) ? x : 0,
                 int.TryParse(args.GetValueOrDefault("y"), out var y) ? y : 0,
                 args.GetValueOrDefault("physical")),
+            "list_windows" => UiaTools.ListWindows(),
+            "focus_window" => UiaTools.FocusWindow(args.GetValueOrDefault("title") ?? ""),
+            "wait_for_window" => UiaTools.WaitForWindow(
+                args.GetValueOrDefault("title") ?? "",
+                int.TryParse(args.GetValueOrDefault("timeout_ms"), out var to) ? to : 15000),
+            "find_element" => UiaTools.FindElement(
+                args.GetValueOrDefault("name") ?? "",
+                args.GetValueOrDefault("window")),
+            "click_element" => UiaTools.ClickElement(
+                args.GetValueOrDefault("name") ?? "",
+                args.GetValueOrDefault("window")),
+            "remember_fact" => RememberFact(args.GetValueOrDefault("fact") ?? ""),
+            "recall" => Recall(args.GetValueOrDefault("query")),
+            "forget_fact" => ForgetFact(args.GetValueOrDefault("query") ?? ""),
             _ => new { error = "unknown tool" },
         };
+
+        if (raw is ScreenShot shotOnly)
+            return shotOnly;
+
+        if (ActObserveEnabled && ObserveAfter.Contains(name))
+        {
+            try
+            {
+                await Task.Delay(250, ct);
+                var observe = CaptureScreen(null);
+                return new ToolResult { Meta = raw, Observe = observe };
+            }
+            catch (Exception ex)
+            {
+                return new ToolResult { Meta = new { result = raw, observe_error = ex.Message } };
+            }
+        }
+
+        return raw;
+    }
+
+    async Task<bool> AskConfirmAsync(string summary)
+    {
+        if (SelfTestConfirmResult.HasValue) return SelfTestConfirmResult.Value;
+        if (ConfirmDestructiveAsync != null)
+            return await ConfirmDestructiveAsync(summary);
+        return true; // no UI hooked — allow (non-interactive)
+    }
+
+    public static bool IsDestructive(string name, Dictionary<string, string> args)
+    {
+        if (name is "write_file")
+        {
+            var path = args.GetValueOrDefault("path") ?? "";
+            if (path.Contains("Windows\\System32", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        if (name == "run_powershell")
+        {
+            var cmd = args.GetValueOrDefault("command") ?? "";
+            return DestructiveRe.IsMatch(cmd);
+        }
+        return false;
+    }
+
+    static string DestructiveSummary(string name, Dictionary<string, string> args) =>
+        name + ": " + Trunc(args.GetValueOrDefault("command")
+                            ?? args.GetValueOrDefault("path")
+                            ?? args.GetValueOrDefault("fact")
+                            ?? name, 120);
+
+    object RememberFact(string fact)
+    {
+        var ltm = _ltm?.Invoke();
+        if (ltm == null) return new { error = "ltm unavailable" };
+        var f = ltm.Remember(fact);
+        return new { ok = true, id = f.Id, fact = f.Text };
+    }
+
+    object Recall(string? query)
+    {
+        var ltm = _ltm?.Invoke();
+        if (ltm == null) return new { error = "ltm unavailable" };
+        var facts = ltm.Recall(query);
+        return new { facts = facts.Select(f => new { f.Id, f.Text }).ToList() };
+    }
+
+    object ForgetFact(string query)
+    {
+        var ltm = _ltm?.Invoke();
+        if (ltm == null) return new { error = "ltm unavailable" };
+        if (string.Equals(query, "*", StringComparison.Ordinal) ||
+            string.Equals(query, "all", StringComparison.OrdinalIgnoreCase) ||
+            query.Contains("всё", StringComparison.OrdinalIgnoreCase) ||
+            query.Contains("все", StringComparison.OrdinalIgnoreCase))
+        {
+            ltm.ForgetAll();
+            return new { ok = true, wiped = true };
+        }
+        return new { ok = ltm.Forget(query) };
     }
 
     public async ValueTask DisposeAsync()
@@ -104,7 +233,6 @@ public sealed class ToolHost : IAsyncDisposable
     {
         path ??= Path.Combine(_workspace(), $"shot-{DateTime.Now:yyyyMMdd-HHmmss}.jpg");
         path = Resolve(path);
-        // Prefer JPEG for Gemini size; keep .png if caller asked for png
         var jpeg = !path.EndsWith(".png", StringComparison.OrdinalIgnoreCase);
         var shot = ScreenCapture.CapturePrimary(path, jpeg);
         LastShot = shot;
@@ -121,7 +249,6 @@ public sealed class ToolHost : IAsyncDisposable
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LiaDesktop", "playwright-profile");
             Directory.CreateDirectory(profile);
-            // Use installed Edge — do not ship Chromium (~150MB+) in the zip
             _browser = await _pw.Chromium.LaunchPersistentContextAsync(profile, new()
             {
                 Channel = "msedge",

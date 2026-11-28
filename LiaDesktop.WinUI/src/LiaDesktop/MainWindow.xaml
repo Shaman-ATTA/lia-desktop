@@ -63,15 +63,17 @@
           <Path x:Name="LeftBracketBL" Stroke="{StaticResource LiaAmber}" StrokeThickness="1.2"/>
           <Path x:Name="LeftBracketBR" Stroke="{StaticResource LiaAmber}" StrokeThickness="1.2"/>
         </Canvas>
-        <StackPanel Spacing="8">
+        <StackPanel Spacing="6">
           <TextBlock Text="ТЕЛЕМЕТРИЯ" Style="{StaticResource HudLabel}"/>
           <TextBlock x:Name="VoiceLine" Style="{StaticResource HudMono}"/>
           <TextBlock x:Name="ModelLine" Style="{StaticResource HudMono}"/>
           <TextBlock Text="СЕТКА  HOLO · DX11" Style="{StaticResource HudMono}"/>
           <TextBlock x:Name="LinkLine" Text="СВЯЗЬ  ОК · 12 мс" Style="{StaticResource HudMono}"/>
           <TextBlock x:Name="CpuLine" Style="{StaticResource HudMono}"/>
+          <TextBlock x:Name="GpuLine" Style="{StaticResource HudMono}"/>
           <TextBlock x:Name="RamLine" Style="{StaticResource HudMono}"/>
           <TextBlock x:Name="NetLine" Style="{StaticResource HudMono}"/>
+          <TextBlock x:Name="LiaResLine" Style="{StaticResource HudMono}" Foreground="{StaticResource LiaMuted}"/>
         </StackPanel>
         <Border Grid.Row="1" Height="1" Background="{StaticResource LiaHairline}" Margin="0,14,0,10"/>
         <Grid Grid.Row="2">
@@ -185,9 +187,10 @@
 
     <!-- Settings glass -->
     <Grid x:Name="SettingsOverlay" Visibility="Collapsed" Background="#CC05070C">
-      <Border Width="460" Padding="22" Background="{StaticResource LiaPanelSolid}"
+      <Border Width="460" MaxHeight="640" Padding="22" Background="{StaticResource LiaPanelSolid}"
               BorderBrush="{StaticResource LiaAmber}" BorderThickness="1"
               HorizontalAlignment="Center" VerticalAlignment="Center">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="600">
         <StackPanel Spacing="10">
           <TextBlock Text="НАСТРОЙКИ · ЛИА" Foreground="{StaticResource LiaAmber}"
                      FontFamily="{StaticResource LiaUi}" FontSize="16" CharacterSpacing="80"/>
@@ -228,8 +231,19 @@
           <TextBlock Text="ЧУВСТВИТЕЛЬНОСТЬ ПРОБУЖДЕНИЯ" Style="{StaticResource HudLabel}"/>
           <Slider x:Name="WakeSensSlider" Minimum="0.1" Maximum="0.9" Value="0.55" StepFrequency="0.05"
                   TickFrequency="0.1" IsThumbToolTipEnabled="True"/>
+          <CheckBox x:Name="ConfirmDestructiveBox" Content="Подтверждать опасные действия (удаление, PowerShell…)"
+                    Foreground="{StaticResource LiaMuted}" Margin="0,4,0,0" IsChecked="True"/>
           <CheckBox x:Name="AutostartBox" Content="Запускать вместе с Windows (в трее, ждать «Лиа»)"
                     Foreground="{StaticResource LiaMuted}" Margin="0,4,0,0"/>
+          <TextBlock Text="ПАМЯТЬ" Style="{StaticResource HudLabel}" Margin="0,8,0,0"/>
+          <TextBlock Text="Долгие факты о вас (имя, предпочтения, проекты). «забудь всё обо мне» очищает."
+                     Foreground="{StaticResource LiaMuted}" FontSize="11" TextWrapping="Wrap"/>
+          <ListBox x:Name="MemoryFactsBox" Height="88" FontSize="11"
+                   Background="Transparent" BorderBrush="{StaticResource LiaHairline}"/>
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Удалить выбранное" Click="MemoryForgetSelected_Click" Style="{StaticResource HudGhostButton}"/>
+            <Button Content="Забыть всё обо мне" Click="MemoryForgetAll_Click" Style="{StaticResource HudGhostButton}"/>
+          </StackPanel>
           <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
             <Button Content="Открыть папку логов" Click="OpenLogs_Click" Style="{StaticResource HudGhostButton}"/>
             <Button Content="Сохранить лог на рабочий стол" Click="SaveLogDesktop_Click" Style="{StaticResource HudGhostButton}"/>
@@ -237,6 +251,27 @@
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,8,0,0">
             <Button Content="ОТМЕНА" Click="SettingsCancel_Click" Style="{StaticResource HudGhostButton}"/>
             <Button Content="СОХРАНИТЬ" Click="SettingsSave_Click" Style="{StaticResource HudGhostButton}"
+                    BorderBrush="{StaticResource LiaAmber}" Foreground="{StaticResource LiaAmber}"/>
+          </StackPanel>
+        </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+
+    <!-- Destructive action confirm -->
+    <Grid x:Name="ConfirmOverlay" Visibility="Collapsed" Background="#CC05070C">
+      <Border Width="420" Padding="22" Background="{StaticResource LiaPanelSolid}"
+              BorderBrush="{StaticResource LiaAmber}" BorderThickness="1"
+              HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel Spacing="12">
+          <TextBlock Text="ПОДТВЕРДИТЕ ДЕЙСТВИЕ" Foreground="{StaticResource LiaAmber}"
+                     FontFamily="{StaticResource LiaUi}" FontSize="15" CharacterSpacing="60"/>
+          <TextBlock x:Name="ConfirmSummary" Foreground="{StaticResource LiaCyan}" TextWrapping="Wrap" FontSize="13"/>
+          <TextBlock Text="Скажите «да» / «нет» или нажмите кнопку."
+                     Foreground="{StaticResource LiaMuted}" FontSize="11"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <Button Content="НЕТ" Click="ConfirmNo_Click" Style="{StaticResource HudGhostButton}"/>
+            <Button Content="ДА" Click="ConfirmYes_Click" Style="{StaticResource HudGhostButton}"
                     BorderBrush="{StaticResource LiaAmber}" Foreground="{StaticResource LiaAmber}"/>
           </StackPanel>
         </StackPanel>

@@ -15,7 +15,9 @@ public sealed class AppServices
     public BargeInService BargeIn { get; private set; } = null!;
     public AudioOutput Audio { get; private set; } = null!;
     public ConversationMemory Memory { get; private set; } = null!;
+    public LongTermMemory LongTerm { get; private set; } = null!;
     public WakeWordService Wake { get; private set; } = null!;
+    public SystemTelemetry Telemetry { get; } = new();
     public LiaConfig Config { get; private set; } = new();
 
     /// <summary>True when Windows ru-RU speech works; otherwise Gemini mic is the default.</summary>
@@ -27,12 +29,17 @@ public sealed class AppServices
         Directory.CreateDirectory(Config.WorkspacePath);
         Gemini = new GeminiClient(Secrets, Log);
         Tts = new EdgeTts(Log);
-        Tools = new ToolHost(Log, () => Secrets.Load().WorkspacePath);
+        LongTerm = new LongTermMemory(Log);
+        Tools = new ToolHost(
+            Log,
+            () => Secrets.Load().WorkspacePath,
+            () => LongTerm,
+            () => Secrets.Load().ConfirmDestructiveActions);
         Audio = new AudioOutput(Log);
         Audio.SetPreferredDeviceId(Config.AudioOutputDeviceId);
         BargeIn = new BargeInService(Gemini, Log, Audio);
         Memory = new ConversationMemory(Log);
-        Agent = new AgentService(Gemini, Secrets, Log, Tools, Tts, BargeIn, Memory);
+        Agent = new AgentService(Gemini, Secrets, Log, Tools, Tts, BargeIn, Memory, LongTerm);
         MicGemini = new MicGeminiListen(Gemini, Log);
         Wake = new WakeWordService(Log);
         Wake.Enabled = Config.WakeWordEnabled;

@@ -147,6 +147,12 @@ public sealed class WakeWordService : IDisposable
     /// <summary>Last capture open error (for selftest diagnostics).</summary>
     public string LastCaptureError { get; private set; } = "";
 
+    /// <summary>True when all capture backends failed (PushPcm-only fallback).</summary>
+    public bool MicCaptureFailed { get; private set; }
+
+    /// <summary>Raised once when capture open fails and HUD should show mic-unavailable.</summary>
+    public event Action? MicFailed;
+
     /// <summary>True when energy VAD is currently feeding Vosk (speech or hangover).</summary>
     public bool VadOpen => _vadOpen;
 
@@ -163,6 +169,7 @@ public sealed class WakeWordService : IDisposable
             }
             CreateGrammar_NoLock();
             LastCaptureError = "";
+            MicCaptureFailed = false;
             ResetVad_NoLock();
 
             var wantCapture = mode switch
@@ -193,7 +200,9 @@ public sealed class WakeWordService : IDisposable
             LastCaptureMode = "pushonly";
             if (string.IsNullOrEmpty(LastCaptureError))
                 LastCaptureError = "all capture backends failed";
-            _log.Info("wake: all capture backends failed — PushPcm-only (" + LastCaptureError + ")");
+            MicCaptureFailed = true;
+            _log.MicUnavailable(LastCaptureError);
+            MicFailed?.Invoke();
         }
     }
 
@@ -268,7 +277,7 @@ public sealed class WakeWordService : IDisposable
         }
 
         LastCaptureError = "wasapi: " + string.Join(" | ", errors);
-        _log.Info("wake: WasapiCapture fail — " + LastCaptureError);
+        _log.FileOnly("wake: WasapiCapture fail", LastCaptureError);
         return false;
     }
 
@@ -309,7 +318,7 @@ public sealed class WakeWordService : IDisposable
         {
             LastCaptureError = (string.IsNullOrEmpty(LastCaptureError) ? "" : LastCaptureError + " ; ")
                                + "loopback: " + ex.Message;
-            _log.Info("wake: WasapiLoopback fail — " + ex.Message);
+            _log.FileOnly("wake: WasapiLoopback fail", ex.Message);
             CleanupCapture_NoLock();
             return false;
         }
@@ -348,12 +357,13 @@ public sealed class WakeWordService : IDisposable
                     _running = true;
                     LastCaptureMode = "wavein";
                     LastCaptureError = "";
+                    MicCaptureFailed = false;
                     _log.Info($"wake: listening (ОЖИДАНИЕ) WaveIn device={i}/{name} fmt={rate}Hz/{ch}ch buf={CaptureBufferMs}ms");
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    _log.Info($"wake: WaveIn device {i} {rate}/{ch} fail — {ex.Message}");
+                    _log.FileOnly($"wake: WaveIn device {i} {rate}/{ch} fail", ex.Message);
                     LastCaptureError = (string.IsNullOrEmpty(LastCaptureError) ? "" : LastCaptureError + " ; ")
                                        + $"wavein#{i}@{rate}/{ch}: {ex.Message}";
                     CleanupCapture_NoLock();

@@ -9,18 +9,27 @@ namespace LiaDesktop.Services;
 
 public sealed class AgentService
 {
-    public const string SystemPrompt =
+    public const string SystemPromptBase =
         "Ты — Лиа, женский голосовой ИИ-ассистент ATTA CORP (N-33). Отвечай коротко по-русски, тёплым живым тоном, женский род. " +
         "Ты управляешь ПК пользователя (личное некоммерческое использование). Кратко озвучивай действия. " +
-        "Когда нужно — вызывай инструменты (файлы, PowerShell, браузер, экран, мышь/клавиатура). " +
+        "Когда нужно — вызывай инструменты (файлы, PowerShell, браузер, экран, мышь/клавиатура, UI Automation). " +
+        "После mouse_click/type_text/run_powershell/browser_open смотри verification-скриншот и при ошибке исправь (act-observe, max несколько шагов). " +
+        "Для кнопок по имени предпочитай click_element; для окон — wait_for_window / focus_window вместо sleep. " +
         "Если пользователь спрашивает «что на экране», «посмотри», «нажми на …» — сначала вызови look_at_screen " +
         "(или screenshot), дождись изображения, опиши экран и кликай mouse_click по координатам ЭТОГО изображения. " +
+        "Долгие факты (имя, предпочтения, проекты) сохраняй через remember_fact; «забудь всё обо мне» → forget_fact query=all. " +
         "Помни факты из текущего разговора, пока пользователь не скажет «забудь» / «новый разговор».";
+
+    /// <summary>Backward-compatible alias for tests / callers that read SystemPrompt.</summary>
+    public static string SystemPrompt => SystemPromptBase;
 
     static readonly Regex StopRe = new(@"лиа[,\s]+стоп", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     static readonly Regex ClearMemRe = new(
         @"^\s*(забудь|новый\s+разговор|новый\s+диалог|очисти\s+память)\s*[.!]?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.IgnorePatternWhitespace);
+    static readonly Regex ForgetAllAboutMeRe = new(
+        @"забудь\s+вс[её]\s+обо\s+мне",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     static readonly Regex VisionAskRe = new(
         @"что\s+на\s+экране|посмотри|нажми\s+на|что\s+написано",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -33,6 +42,7 @@ public sealed class AgentService
     readonly BargeInService _barge;
     readonly StreamingTtsService _streamTts;
     readonly ConversationMemory _memory;
+    readonly LongTermMemory _ltm;
     CancellationTokenSource? _cts;
     string? _activeReply;
     bool _bargeHandlingSuspended;
@@ -45,6 +55,7 @@ public sealed class AgentService
 
     public string? ActiveReply => _activeReply;
     public ConversationMemory Memory => _memory;
+    public LongTermMemory LongTerm => _ltm;
     public StreamingTtsService StreamTts => _streamTts;
 
     public AgentService(
@@ -54,7 +65,8 @@ public sealed class AgentService
         ToolHost tools,
         EdgeTts tts,
         BargeInService barge,
-        ConversationMemory? memory = null)
+        ConversationMemory? memory = null,
+        LongTermMemory? ltm = null)
     {
         _gemini = gemini;
         _secrets = secrets;
@@ -63,6 +75,7 @@ public sealed class AgentService
         _tts = tts;
         _barge = barge;
         _memory = memory ?? new ConversationMemory(log);
+        _ltm = ltm ?? new LongTermMemory(log);
         _streamTts = new StreamingTtsService(tts, barge, log);
         _streamTts.SpeakFile += p => SpeakFile?.Invoke(p);
         _streamTts.Mouth += (j, f, w) => Mouth?.Invoke(j, f, w);
@@ -71,6 +84,12 @@ public sealed class AgentService
         _barge.MouthStop += () => Mouth?.Invoke(0, 0, 0);
         _barge.Listening += () => BargeInListening?.Invoke();
         _barge.Decision += OnBargeDecision;
+    }
+
+    string BuildSystemPrompt()
+    {
+        var block = _ltm.PromptBlock();
+        return string.IsNullOrWhiteSpace(block) ? SystemPromptBase : SystemPromptBase + "\n\n" + block;
     }
 
     public void Abort()
@@ -103,6 +122,16 @@ public sealed class AgentService
             return;
         }
 
+        if (ForgetAllAboutMeRe.IsMatch(userText))
+        {
+            _ltm.ForgetAll();
+            ClearMemory();
+            _cts?.Cancel();
+            _cts = new CancellationTokenSource();
+            await SpeakReplyAsync("Хорошо, я забыла всё о вас.", _cts.Token);
+            return;
+        }
+
         if (IsClearMemoryPhrase(userText))
         {
             ClearMemory();
@@ -116,6 +145,7 @@ public sealed class AgentService
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
         _log.Info($"→ {userText}");
+        try { _ltm.AutoCaptureFromUser(userText); } catch { /* */ }
         var turnOrigin = Stopwatch.GetTimestamp();
         _streamTts.TurnOriginTimestamp = turnOrigin;
         // Warm Edge WS while Gemini thinks
@@ -250,7 +280,7 @@ public sealed class AgentService
         for (var step = 0; step < 8; step++)
         {
             ct.ThrowIfCancellationRequested();
-            var turn = await _gemini.GenerateTurnAsync(SystemPrompt, contents, ToolDefs.Declarations, ct);
+            var turn = await _gemini.GenerateTurnAsync(BuildSystemPrompt(), contents, ToolDefs.Declarations, ct);
 
             if (turn.Calls.Count == 0)
             {
@@ -275,8 +305,21 @@ public sealed class AgentService
                     result = new { error = ex.Message };
                 }
 
-                ScreenShot? shot = result as ScreenShot;
-                object meta = shot?.Meta() ?? result;
+                ScreenShot? shot = null;
+                object meta;
+                if (result is ToolResult tr)
+                {
+                    meta = tr.Meta;
+                    shot = tr.Observe;
+                }
+                else if (result is ScreenShot s)
+                {
+                    shot = s;
+                    meta = s.Meta();
+                }
+                else
+                    meta = result;
+
                 var payload = JsonSerializer.Serialize(meta);
                 if (payload.Length > 6000) payload = payload[..6000] + "…";
 
@@ -324,7 +367,7 @@ public sealed class AgentService
         // Keep short local history for Ollama too (text-only)
         _memory.AppendUserText(userText);
         var hist = _memory.Snapshot();
-        var messages = new List<object> { new { role = "system", content = SystemPrompt } };
+        var messages = new List<object> { new { role = "system", content = BuildSystemPrompt() } };
         foreach (var node in hist)
         {
             if (node is not JsonObject obj) continue;

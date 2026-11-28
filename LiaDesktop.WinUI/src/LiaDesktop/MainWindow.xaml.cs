@@ -34,6 +34,7 @@ public sealed partial class MainWindow : Window
     bool _speaking;
     bool _screenLocked;
     bool _windowOccluded;
+    bool _micUnavailable;
     HoloPanel.RenderPace? _renderPaceOverride;
     float _hudT;
     float _waveAmp;
@@ -41,6 +42,7 @@ public sealed partial class MainWindow : Window
     TimeSpan _lastCpu;
     DateTime _lastCpuSample = DateTime.UtcNow;
     int _pingMs = 12;
+    TaskCompletionSource<bool>? _confirmTcs;
 
     /// <summary>Selftest: force Idle/Active/Paused. Null = auto from speak/listen/visibility.</summary>
     public void SetRenderPaceOverride(HoloPanel.RenderPace? pace)
@@ -50,6 +52,8 @@ public sealed partial class MainWindow : Window
     }
 
     public HoloPanel.RenderPace CurrentRenderPace => Holo.Pace;
+    public string VoiceStatusText => VoiceLine.Text ?? "";
+    public void NotifyMicUnavailable() => OnMicUnavailable();
 
     public MainWindow()
     {
@@ -126,7 +130,9 @@ public sealed partial class MainWindow : Window
             OnSpeechFinal(text);
         });
         _s.Wake.Woken += OnWakeWord;
+        _s.Wake.MicFailed += () => DispatcherQueue.TryEnqueue(OnMicUnavailable);
         _s.MicGemini.TimedOut += OnMicGeminiTimedOut;
+        _s.Tools.ConfirmDestructiveAsync = AskDestructiveConfirmAsync;
         _clock.Tick += (_, _) => TickTelemetry();
         _clock.Start();
 
@@ -567,13 +573,21 @@ public sealed partial class MainWindow : Window
         var now = DateTime.Now;
         SysLine.Text = $"{now:yyyy.MM.dd}  {now:HH:mm:ss}  СВЯЗЬ ОК";
         var model = ModelLabel();
-        SampleCpuRam();
-        _pingMs = 8 + _rng.Next(0, 18);
+        try { _s.Telemetry.Sample(); } catch { /* */ }
+        var tel = _s.Telemetry;
+        _cpu = tel.SystemCpuPct;
+        if (tel.PingMs >= 0) _pingMs = tel.PingMs;
         LinkLine.Text = $"СВЯЗЬ  ОК · {_pingMs} мс";
         CpuLine.Text = $"ЦП     {_cpu,5:0.0}%";
-        RamLine.Text = $"ОЗУ    {_proc.WorkingSet64 / (1024.0 * 1024.0):0} МБ";
-        NetLine.Text = $"СЕТЬ   uplink {_pingMs} мс";
-        SysPanel.Text = $"ВРЕМЯ  {now:HH:mm:ss}\nДАТА   {now:yyyy.MM.dd}\nМОДЕЛЬ {model}\nКАДРЫ  60 · DX11";
+        GpuLine.Text = tel.GpuPct < 0 ? "ГПУ    н/д" : $"ГПУ    {tel.GpuPct,5:0.0}%";
+        RamLine.Text = $"ОЗУ    {tel.RamUsedGb:0.0}/{tel.RamTotalGb:0.0} ГБ";
+        NetLine.Text = $"СЕТЬ   ↓{tel.DownMbps:0.00} ↑{tel.UpMbps:0.00} Мбит/с";
+        LiaResLine.Text = $"ЛИА ЦП {tel.LiaCpuPct:0.0}% · ОЗУ {tel.LiaRamMb:0} МБ";
+        if (_micUnavailable && !_speaking && !_listening)
+            VoiceLine.Text = "ГОЛОС  МИК НЕДОСТ.";
+        var fps = Holo.Pace == HoloPanel.RenderPace.Active ? 60
+            : Holo.Pace == HoloPanel.RenderPace.Idle ? 30 : 0;
+        SysPanel.Text = $"ВРЕМЯ  {now:HH:mm:ss}\nДАТА   {now:yyyy.MM.dd}\nМОДЕЛЬ {model}\nКАДРЫ  {fps} · DX11";
         if (ModelLine.Text is null || !ModelLine.Text.Contains(model, StringComparison.Ordinal))
             ModelLine.Text = $"МОДЕЛЬ {model}";
 
@@ -587,33 +601,61 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    void SampleCpuRam()
+    void OnMicUnavailable()
     {
-        try
+        _micUnavailable = true;
+        VoiceLine.Text = "ГОЛОС  МИК НЕДОСТ.";
+        Subtitle.Text = AppLog.MicUnavailableJournalLine;
+    }
+
+    Task<bool> AskDestructiveConfirmAsync(string summary)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _confirmTcs = tcs;
+        DispatcherQueue.TryEnqueue(() =>
         {
-            _proc.Refresh();
-            var t = _proc.TotalProcessorTime;
-            var wall = DateTime.UtcNow;
-            // First sample only seeds baselines (Zero → lifetime CPU looked like 80%+)
-            if (_lastCpu == TimeSpan.Zero)
-            {
-                _lastCpu = t;
-                _lastCpuSample = wall;
-                _cpu = 0;
-                return;
-            }
-            var dt = (wall - _lastCpuSample).TotalMilliseconds;
-            if (dt > 500)
-            {
-                // Real process share of the machine (all logical cores)
-                var cpuDt = (t - _lastCpu).TotalMilliseconds;
-                var cores = Math.Max(1, Environment.ProcessorCount);
-                _cpu = Math.Clamp(cpuDt / dt / cores * 100.0, 0, 100);
-                _lastCpu = t;
-                _lastCpuSample = wall;
-            }
+            ConfirmSummary.Text = summary;
+            ConfirmOverlay.Visibility = Visibility.Visible;
+        });
+        return tcs.Task;
+    }
+
+    void ConfirmYes_Click(object sender, RoutedEventArgs e)
+    {
+        ConfirmOverlay.Visibility = Visibility.Collapsed;
+        _confirmTcs?.TrySetResult(true);
+        _confirmTcs = null;
+    }
+
+    void ConfirmNo_Click(object sender, RoutedEventArgs e)
+    {
+        ConfirmOverlay.Visibility = Visibility.Collapsed;
+        _confirmTcs?.TrySetResult(false);
+        _confirmTcs = null;
+    }
+
+    void MemoryForgetSelected_Click(object sender, RoutedEventArgs e)
+    {
+        if (MemoryFactsBox.SelectedItem is string line)
+        {
+            var id = line.Split(' ', 2)[0];
+            _s.LongTerm.Forget(id);
+            RefreshMemoryFactsBox();
         }
-        catch { /* */ }
+    }
+
+    void MemoryForgetAll_Click(object sender, RoutedEventArgs e)
+    {
+        _s.LongTerm.ForgetAll();
+        RefreshMemoryFactsBox();
+        _s.Log.Info("Память: забыла всё о вас");
+    }
+
+    void RefreshMemoryFactsBox()
+    {
+        MemoryFactsBox.Items.Clear();
+        foreach (var f in _s.LongTerm.Snapshot())
+            MemoryFactsBox.Items.Add($"{f.Id}  {f.Text}");
     }
 
     void FadeInSubtitle()
@@ -1057,8 +1099,14 @@ public sealed partial class MainWindow : Window
                 CommandBox.Focus(FocusState.Programmatic);
                 return;
             }
-            await _s.MicGemini.StartAsync();
+            try { await _s.MicGemini.StartAsync(); }
+            catch
+            {
+                OnMicUnavailable();
+                return;
+            }
         }
+        _micUnavailable = false;
         _listening = true;
         Holo.Renderer.SetListening(true);
         MicGlyph.Text = "■";
@@ -1125,6 +1173,7 @@ public sealed partial class MainWindow : Window
         AutostartBox.IsChecked = AutostartService.IsEnabled();
         WakeWordBox.IsChecked = cfg.WakeWordEnabled;
         WakeSensSlider.Value = Math.Clamp(cfg.WakeWordSensitivity, 0.1, 0.9);
+        ConfirmDestructiveBox.IsChecked = cfg.ConfirmDestructiveActions;
         ModelBox.Items.Clear();
         if (!string.IsNullOrEmpty(cfg.Model))
         {
@@ -1132,6 +1181,7 @@ public sealed partial class MainWindow : Window
             ModelBox.SelectedIndex = 0;
         }
         FillAudioOutBox(cfg.AudioOutputDeviceId);
+        RefreshMemoryFactsBox();
         SettingsOverlay.Visibility = Visibility.Visible;
         if (cfg.Provider != "ollama" && !string.IsNullOrEmpty(cfg.ApiKey))
             _ = RefreshModelsAsync();
@@ -1245,6 +1295,7 @@ public sealed partial class MainWindow : Window
             cfg.AudioOutputDeviceId = a.Id ?? "";
         cfg.WakeWordEnabled = WakeWordBox.IsChecked == true;
         cfg.WakeWordSensitivity = (float)WakeSensSlider.Value;
+        cfg.ConfirmDestructiveActions = ConfirmDestructiveBox.IsChecked == true;
         _s.BargeIn.SetPreferredOutputDevice(cfg.AudioOutputDeviceId);
         _s.Secrets.Save(cfg);
         _s.ApplyWakeSettings(cfg);
