@@ -58,13 +58,16 @@ public sealed class HoloPanel : SwapChainPanel
         {
             case RenderPace.Paused:
                 _timer.Stop();
+                _renderer.EconomyMode = true;
                 break;
             case RenderPace.Idle:
+                _renderer.EconomyMode = true;
                 _renderer.PresentInterval = 2;
                 _timer.Interval = TimeSpan.FromMilliseconds(33);
                 if (!_timer.IsEnabled) _timer.Start();
                 break;
             case RenderPace.Active:
+                _renderer.EconomyMode = false;
                 _renderer.PresentInterval = 1;
                 _timer.Interval = TimeSpan.FromMilliseconds(16);
                 if (!_timer.IsEnabled) _timer.Start();

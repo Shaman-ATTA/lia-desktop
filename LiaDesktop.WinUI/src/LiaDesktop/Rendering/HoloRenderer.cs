@@ -168,6 +168,10 @@ public sealed class HoloRenderer : IDisposable
     /// <summary>DXGI Present sync interval: 1 ≈ 60Hz, 2 ≈ 30Hz. Idle uses 2; speaking/listening uses 1.</summary>
     public int PresentInterval { get; set; } = 2;
 
+    /// <summary>Idle throttle: skip FXAA + lighten animation work (lip morphs still apply when jaw&gt;0).</summary>
+    public bool EconomyMode { get; set; }
+    bool _economyMorphedOnce;
+
     public void InitDevice()
     {
         try
@@ -538,9 +542,12 @@ public sealed class HoloRenderer : IDisposable
             return;
         _time += dt;
 
-        UpdateBlink(dt);
-        UpdateHeadLook(dt);
-        UpdateGaze(dt);
+        if (!EconomyMode || _jaw > 0.02f || !float.IsNaN(_forcedJaw))
+        {
+            UpdateBlink(dt);
+            UpdateHeadLook(dt);
+            UpdateGaze(dt);
+        }
         var blinkAmt = _blinkPhase;
 
         var jaw = float.IsNaN(_forcedJaw) ? _jaw : _forcedJaw;
@@ -554,11 +561,14 @@ public sealed class HoloRenderer : IDisposable
             ? 0.08f + 0.05f * MathF.Sin(_time * 0.41f + 1.2f)
             : 0.05f;
 
-        if (_mesh != null && _morphScratch != null)
+        // Economy: morph only when mouth/forced pose changes — idle head reuses last upload.
+        var needMorph = !EconomyMode || jaw > 0.02f || !float.IsNaN(_forcedJaw) || !_economyMorphedOnce;
+        if (needMorph && _mesh != null && _morphScratch != null)
         {
             var lid = BlinkLidAmount();
             _mesh.Morph(Math.Min(0.62f, jaw * 0.88f), funnel * 0.50f, wide * 0.50f, smile, brow, lid, _morphScratch);
             UploadHead(_morphScratch);
+            _economyMorphedOnce = true;
         }
 
         // Scene → MSAA RT (or scene color when MSAA unavailable); FXAA to swapchain after.
@@ -718,7 +728,8 @@ public sealed class HoloRenderer : IDisposable
         // msaa==1 already drew into _rtvScene
 
         // Blit scene → swap. FXAA only when MSAA unavailable (CI/WARP often has MSAA=4).
-        if (_msaaSamples <= 1)
+        // EconomyMode: always CopyResource (skip FXAA cost on idle ~30fps).
+        if (_msaaSamples <= 1 && !EconomyMode)
         {
             if (!ApplyFxaa())
             {

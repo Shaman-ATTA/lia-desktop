@@ -233,9 +233,14 @@ public sealed partial class MainWindow : Window
     void ApplyHudTimerForPace(HoloPanel.RenderPace pace)
     {
         if (pace == HoloPanel.RenderPace.Paused)
+        {
             _hudTimer.Stop();
-        else if (!_hudTimer.IsEnabled)
-            _hudTimer.Start();
+            return;
+        }
+        // Idle HUD ~10fps; Active ~20fps — cheap vs DX Present.
+        _hudTimer.Interval = TimeSpan.FromMilliseconds(
+            pace == HoloPanel.RenderPace.Idle ? 100 : 50);
+        if (!_hudTimer.IsEnabled) _hudTimer.Start();
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]

@@ -53,7 +53,7 @@ public sealed class AppLog
     }
 
     public const string MicUnavailableJournalLine =
-        "Микрофон недоступен — проверьте устройство в Настройках";
+        "Микрофон недоступен - проверьте устройство в Настройках";
 
     void Push(string line, string? detail)
     {

@@ -6,7 +6,7 @@
 - **Telemetry:** system CPU (GetSystemTimes), GPU % (PDH best-effort), RAM used/total ГБ, net ↓↑ Мбит/с, ping, plus `ЛИА ЦП · ОЗУ`. Gate `telemetry_system` (±10 vs typeperf under load).
 - **Agent PC control:** UIA tools `list_windows` / `focus_window` / `wait_for_window` / `find_element` / `click_element`; act-observe screenshot after click/type/ps/browser; destructive confirm dialog (Settings toggle). Gates `agent_notepad`, `agent_uia_click`, `agent_confirm`, `agent_retry`.
 - **Long-term memory:** `%LOCALAPPDATA%\LiaDesktop\memory.json`, tools `remember_fact` / `recall` / `forget_fact`, auto-capture name/prefs, Settings «Память», «забудь всё обо мне». Gates `ltm_save`, `ltm_recall_new_session`, `ltm_forget`.
-- **Render pace:** ОЖИДАНИЕ ~30 fps; speaking/listening 60 fps; minimized/occluded/locked pause Present. Gate `app_idle_cpu` (Idle drop ≥40%; minimized &lt;3%).
+- **Render pace:** ОЖИДАНИЕ ~30 fps (economy: skip FXAA/idle morph); speaking/listening 60 fps; minimized/occluded/locked pause Present. Gate `app_idle_cpu` (Idle drop ≥40% real GPU / ≥20% WARP·Basic Render; minimized &lt;3%).
 - Wake «Лиа» from v0.7.4 kept (`wake_cpu` absolute baseline/active/delta + gpu).
 
 ## v0.7.4 — Offline wake word «Лиа»
