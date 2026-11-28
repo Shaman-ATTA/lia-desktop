@@ -308,6 +308,7 @@ jobs:
             if ($txt -notmatch 'barge_queue_cancel: PASS') { throw "selftest missing barge_queue_cancel PASS" }
             if ($txt -notmatch 'wake_positive: PASS') { throw "selftest missing wake_positive PASS" }
             if ($txt -notmatch 'wake_positive: PASS.*voices=') { throw "selftest wake_positive missing voices=" }
+            if ($txt -notmatch 'wake_quiet: PASS') { throw "selftest missing wake_quiet PASS" }
             if ($txt -notmatch 'wake_negative: PASS') { throw "selftest missing wake_negative PASS" }
             if ($txt -notmatch 'wake_negative: PASS.*speech_s=') { throw "selftest wake_negative missing speech_s" }
             if ($txt -notmatch 'wake_negative: PASS.*noise_s=') { throw "selftest wake_negative missing noise_s" }
@@ -319,7 +320,9 @@ jobs:
             if ($txt -notmatch 'wake_offline: PASS') { throw "selftest missing wake_offline PASS" }
             if ($txt -notmatch 'wake_cpu: PASS') { throw "selftest missing wake_cpu PASS" }
             if ($txt -notmatch 'wake_cpu: PASS.*mode=') { throw "selftest wake_cpu missing mode=" }
-            if ($txt -notmatch 'wake_cpu: PASS.*mode=(wavein|wasapi)') { throw "selftest wake_cpu must use real capture mode=wavein|wasapi" }
+            if ($txt -notmatch 'wake_cpu: PASS.*mode=(wavein|wasapi|loopback)') { throw "selftest wake_cpu must use real capture mode=wavein|wasapi|loopback" }
+            if ($txt -notmatch 'wake_cpu: PASS.*idle_avg=') { throw "selftest wake_cpu missing idle_avg=" }
+            if ($txt -notmatch 'wake_cpu: PASS.*wall_s=') { throw "selftest wake_cpu missing wall_s=" }
             if ($txt -notmatch 'log_file: PASS') { throw "selftest missing log_file PASS" }
             if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }
             if ($txt -notmatch 'render_nondefault_comm: PASS') { throw "selftest missing render_nondefault_comm PASS" }

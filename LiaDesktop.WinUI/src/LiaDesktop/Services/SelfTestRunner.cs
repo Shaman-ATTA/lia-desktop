@@ -1262,6 +1262,10 @@ public static class SelfTestRunner
             L("wake_positive: starting…");
             fail += await GateWakePositiveAsync(s, L);
 
+            // --- wake_quiet: «Лиа» at -20 dBFS still passes energy VAD ---
+            L("wake_quiet: starting…");
+            fail += await GateWakeQuietAsync(s, L);
+
             // --- wake_command_inline ---
             L("wake_command_inline: starting…");
             fail += await GateWakeCommandInlineAsync(s, L);
@@ -1950,14 +1954,119 @@ public static class SelfTestRunner
         }
     }
 
+    static async Task<int> GateWakeQuietAsync(AppServices s, Action<string> L)
+    {
+        // «Лиа» attenuated to -20 dBFS must still open energy VAD and detect (live PushPcm path).
+        try
+        {
+            s.Wake.SetEchoGuard(false);
+            s.Wake.Stop();
+            s.Wake.Start(WakeWordService.CaptureMode.PushOnly);
+
+            var synth = await SynthAudibleAsync(s, "Лиа", L, 30);
+            if (string.IsNullOrEmpty(synth.Path) || !File.Exists(synth.Path))
+            {
+                L("FAIL wake_quiet: synth missing");
+                return 1;
+            }
+            byte[] pcm;
+            try { pcm = LoadPcm16kMono(synth.Path); }
+            finally { try { File.Delete(synth.Path); } catch { /* */ } }
+
+            AttenuatePeakToDbFs(pcm, -20.0);
+            var peakDb = PeakDbFs(pcm);
+            L($"wake_quiet: peak_dbfs={peakDb:F1} backend={synth.Backend} bytes={pcm.Length}");
+
+            var detected = false;
+            string got = "";
+            void OnWoken(string full, string _, float conf)
+            {
+                detected = true;
+                got = full;
+            }
+            s.Wake.Woken += OnWoken;
+            try
+            {
+                const int chunk = WakeWordService.SampleRate * 2 / 10; // 100ms
+                for (var i = 0; i < pcm.Length; i += chunk)
+                {
+                    var n = Math.Min(chunk, pcm.Length - i);
+                    var slice = new byte[n];
+                    Buffer.BlockCopy(pcm, i, slice, 0, n);
+                    s.Wake.PushPcm(slice);
+                    await Task.Delay(20);
+                }
+                // trailing silence so grammar can finalize after hangover
+                var silence = new byte[WakeWordService.SampleRate * 2]; // 1s
+                for (var i = 0; i < 8; i++)
+                {
+                    s.Wake.PushPcm(silence);
+                    await Task.Delay(50);
+                }
+                s.Wake.Flush();
+                await Task.Delay(200);
+            }
+            finally
+            {
+                s.Wake.Woken -= OnWoken;
+            }
+
+            if (!detected)
+            {
+                L($"FAIL wake_quiet: no DETECT at -20 dBFS peak_dbfs={peakDb:F1} (VAD dropped quiet speech?)");
+                return 1;
+            }
+            L($"wake_quiet: PASS text=\"{got}\" peak_dbfs={peakDb:F1}");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL wake_quiet: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try { s.Wake.Stop(); } catch { /* */ }
+        }
+    }
+
+    static void AttenuatePeakToDbFs(byte[] pcm16le, double targetDbFs)
+    {
+        var peak = 1;
+        for (var i = 0; i + 1 < pcm16le.Length; i += 2)
+        {
+            var s = Math.Abs((short)(pcm16le[i] | (pcm16le[i + 1] << 8)));
+            if (s > peak) peak = s;
+        }
+        var target = Math.Pow(10.0, targetDbFs / 20.0) * 32767.0;
+        var gain = target / peak;
+        for (var i = 0; i + 1 < pcm16le.Length; i += 2)
+        {
+            var s = (short)(pcm16le[i] | (pcm16le[i + 1] << 8));
+            var v = (short)Math.Clamp((int)Math.Round(s * gain), short.MinValue, short.MaxValue);
+            pcm16le[i] = (byte)(v & 0xff);
+            pcm16le[i + 1] = (byte)((v >> 8) & 0xff);
+        }
+    }
+
+    static double PeakDbFs(byte[] pcm16le)
+    {
+        var peak = 1;
+        for (var i = 0; i + 1 < pcm16le.Length; i += 2)
+        {
+            var s = Math.Abs((short)(pcm16le[i] | (pcm16le[i + 1] << 8)));
+            if (s > peak) peak = s;
+        }
+        return 20.0 * Math.Log10(peak / 32767.0);
+    }
+
     static async Task<int> GateWakeCpuAsync(AppServices s, Action<string> L)
     {
         try
         {
             s.Wake.SetEchoGuard(false);
-            s.Wake.SuspendCaptureProcessing = false;
             s.Wake.Stop();
-            // Prefer real capture (Wasapi/WaveIn/loopback) when a device exists (VB-CABLE on CI)
+            // Real capture must stay actively recording for the whole sample (no StopRecording cheat).
             var hasCap = WakeWordService.HasAnyCaptureDevice();
             var mode = hasCap
                 ? WakeWordService.CaptureMode.ForceWaveIn
@@ -1965,29 +2074,29 @@ public static class SelfTestRunner
             s.Wake.Start(mode);
             var used = s.Wake.LastCaptureMode;
             L($"wake_cpu: mode={used} WaveIn.DeviceCount={WaveIn.DeviceCount} hasCapture={hasCap} err={s.Wake.LastCaptureError}");
-            var realCap = used is "wavein" or "wasapi";
+            var realCap = used is "wavein" or "wasapi" or "loopback";
             if (hasCap && !realCap)
             {
-                L($"FAIL wake_cpu: capture device present but mode={used} (need wavein|wasapi) err={s.Wake.LastCaptureError}");
+                L($"FAIL wake_cpu: capture device present but mode={used} (need wavein|wasapi|loopback) err={s.Wake.LastCaptureError}");
                 return 1;
             }
 
-            // Prove mode=wasapi|wavein opened, then pause the capture thread for the idle
-            // sample (CI WasapiLoopback pegs ~1 core even with empty callbacks). Still feed
-            // silence via PushPcm so Vosk idle cost is included — same as pushonly path.
-            if (realCap) s.Wake.SuspendCaptureProcessing = true;
-            await Task.Delay(200); // let capture thread park
+            const int sampleSec = 20;
+            var silence = new byte[WakeWordService.SampleRate * 2 / 10]; // 100ms
+            // Warm-up: let capture thread settle + noise EMA adapt
+            await Task.Delay(500);
 
             var proc = Process.GetCurrentProcess();
             proc.Refresh();
             var cpu0 = proc.TotalProcessorTime;
             var wall0 = Stopwatch.StartNew();
-            var silence = new byte[WakeWordService.SampleRate * 2 / 10]; // 100ms
-            var end = DateTime.UtcNow.AddSeconds(5);
+            var end = DateTime.UtcNow.AddSeconds(sampleSec);
             while (DateTime.UtcNow < end)
             {
-                s.Wake.PushPcm(silence);
-                await Task.Delay(100);
+                // Capture actively running. PushOnly: feed silence. Real cap: device callbacks only.
+                if (!realCap)
+                    s.Wake.PushPcm(silence);
+                await Task.Delay(realCap ? 200 : 100);
             }
             wall0.Stop();
             proc.Refresh();
@@ -1995,12 +2104,18 @@ public static class SelfTestRunner
             var wallMs = Math.Max(1, wall0.Elapsed.TotalMilliseconds);
             var cores = Math.Max(1, Environment.ProcessorCount);
             var pct = cpuDt / wallMs / cores * 100.0;
-            if (pct >= 5.0)
+            L($"wake_cpu: cpu_ms={cpuDt:F0} wall_ms={wallMs:F0} cores={cores} idle_avg={pct:F2}% mode={used}");
+            if (wallMs < sampleSec * 1000 - 500)
             {
-                L($"FAIL wake_cpu: idle_avg={pct:F2}% mode={used} (need <5%) cores={cores}");
+                L($"FAIL wake_cpu: sample too short wall_s={wallMs / 1000.0:F1} (need ≥{sampleSec}s)");
                 return 1;
             }
-            L($"wake_cpu: PASS idle_avg={pct:F2}% mode={used} cores={cores} wall_ms={wallMs:F0}");
+            if (pct >= 5.0)
+            {
+                L($"FAIL wake_cpu: idle_avg={pct:F2}% mode={used} (need <5%) cores={cores} wall_s={wallMs / 1000.0:F1}");
+                return 1;
+            }
+            L($"wake_cpu: PASS idle_avg={pct:F2}% mode={used} cores={cores} wall_s={wallMs / 1000.0:F1} cpu_ms={cpuDt:F0}");
             return 0;
         }
         catch (Exception ex)
@@ -2010,7 +2125,6 @@ public static class SelfTestRunner
         }
         finally
         {
-            try { s.Wake.SuspendCaptureProcessing = false; } catch { /* */ }
             try { s.Wake.Stop(); } catch { /* */ }
         }
     }

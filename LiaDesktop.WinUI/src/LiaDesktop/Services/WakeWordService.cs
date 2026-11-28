@@ -17,6 +17,13 @@ public sealed class WakeWordService : IDisposable
     public const int SampleRate = 16000;
     const int RingSeconds = 4;
     const int PostWakeMs = 2200;
+    const int CaptureBufferMs = 100;
+    /// <summary>~300 ms pre-roll so VAD open doesn't clip the start of «Лиа».</summary>
+    const int PreRollMs = 300;
+    const int PreRollBytes = SampleRate * 2 * PreRollMs / 1000;
+    const int VadHangoverMs = 450;
+    /// <summary>Absolute PCM16 RMS floor — below -40 dBFS; -20 dBFS speech stays above.</summary>
+    const double VadMinThresholdRms = 120.0;
 
     readonly AppLog _log;
     readonly object _gate = new();
@@ -36,6 +43,17 @@ public sealed class WakeWordService : IDisposable
     float _sensitivity = 0.55f;
     bool _chimeEnabled = true;
     DateTime _grammarCooldownUntilUtc;
+
+    // Energy VAD + pre-roll (shared by live capture and PushPcm injection)
+    readonly byte[] _preroll = new byte[PreRollBytes];
+    int _prerollWrite;
+    int _prerollCount;
+    double _noiseRms = 80;
+    bool _vadOpen;
+    DateTime _vadHangoverUntil = DateTime.MinValue;
+    // Reused convert buffers — no per-chunk alloc on the capture thread
+    byte[] _pcmScratch = new byte[SampleRate * 2]; // up to 1s mono pcm16
+    WaveFormat? _waveInNativeFormat;
 
     public int DetectCount { get; private set; }
     public int RejectCount { get; private set; }
@@ -108,11 +126,14 @@ public sealed class WakeWordService : IDisposable
         PushOnly,
     }
 
-    /// <summary>Last Start() capture mode actually used (wasapi|wavein|pushonly).</summary>
+    /// <summary>Last Start() capture mode: wavein|wasapi|loopback|pushonly.</summary>
     public string LastCaptureMode { get; private set; } = "pushonly";
 
     /// <summary>Last capture open error (for selftest diagnostics).</summary>
     public string LastCaptureError { get; private set; } = "";
+
+    /// <summary>True when energy VAD is currently feeding Vosk (speech or hangover).</summary>
+    public bool VadOpen => _vadOpen;
 
     public void Start(CaptureMode mode = CaptureMode.Auto)
     {
@@ -127,6 +148,7 @@ public sealed class WakeWordService : IDisposable
             }
             CreateGrammar_NoLock();
             LastCaptureError = "";
+            ResetVad_NoLock();
 
             var wantCapture = mode switch
             {
@@ -143,9 +165,8 @@ public sealed class WakeWordService : IDisposable
                 return;
             }
 
-            // Prefer WASAPI capture, then WaveIn. ForceWaveIn (wake_cpu): loopback on
-            // default Multimedia render when mic/capture is denied (VB-CABLE Output E_ACCESSDENIED
-            // on CI — WasapiLoopbackCapture on CABLE Input still proves real audio I/O).
+            // Prefer WASAPI capture (event-driven 100ms), then WaveIn. ForceWaveIn: loopback
+            // on default Multimedia when mic/capture is denied (CABLE Output E_ACCESSDENIED on CI).
             if (TryStartWasapi_NoLock())
                 return;
             if (TryStartWaveIn_NoLock())
@@ -161,6 +182,16 @@ public sealed class WakeWordService : IDisposable
         }
     }
 
+    void ResetVad_NoLock()
+    {
+        _prerollWrite = 0;
+        _prerollCount = 0;
+        _noiseRms = 80;
+        _vadOpen = false;
+        _vadHangoverUntil = DateTime.MinValue;
+        Array.Clear(_preroll);
+    }
+
     bool TryStartWasapi_NoLock()
     {
         var errors = new List<string>();
@@ -171,7 +202,6 @@ public sealed class WakeWordService : IDisposable
             foreach (var d in en.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
                 candidates.Add(d);
 
-            // Prefer CABLE, then try every active capture endpoint
             var ordered = candidates
                 .OrderByDescending(d =>
                 {
@@ -198,14 +228,18 @@ public sealed class WakeWordService : IDisposable
                 try
                 {
                     CleanupCapture_NoLock();
-                    _wasapi = new WasapiCapture(pick) { ShareMode = AudioClientShareMode.Shared };
+                    // Event-driven + 100ms buffers — no sleep-poll spin
+                    _wasapi = new WasapiCapture(pick, useEventSync: true, audioBufferMillisecondsLength: CaptureBufferMs)
+                    {
+                        ShareMode = AudioClientShareMode.Shared,
+                    };
                     _wasapiFormat = _wasapi.WaveFormat;
                     _wasapi.DataAvailable += OnWasapiData;
                     _wasapi.StartRecording();
                     _running = true;
                     LastCaptureMode = "wasapi";
                     LastCaptureError = "";
-                    _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiCapture device={pick.FriendlyName} fmt={_wasapiFormat}");
+                    _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiCapture device={pick.FriendlyName} buf={CaptureBufferMs}ms eventSync fmt={_wasapiFormat}");
                     return true;
                 }
                 catch (Exception ex)
@@ -227,8 +261,8 @@ public sealed class WakeWordService : IDisposable
     }
 
     /// <summary>
-    /// Selftest-only fallback: loopback of default Multimedia render (same path as playback_rms).
-    /// Does not require microphone privacy; never used in production Auto mode (echo hazard).
+    /// Selftest-only: event-driven loopback of default Multimedia render (100ms buffers).
+    /// Never used in production Auto mode (echo hazard).
     /// </summary>
     bool TryStartWasapiLoopback_NoLock()
     {
@@ -248,15 +282,15 @@ public sealed class WakeWordService : IDisposable
             }
 
             CleanupCapture_NoLock();
-            var loop = new WasapiLoopbackCapture(render);
+            var loop = new WakeLoopbackCapture(render, CaptureBufferMs);
             _wasapi = loop;
             _wasapiFormat = loop.WaveFormat;
             _wasapi.DataAvailable += OnWasapiData;
             _wasapi.StartRecording();
             _running = true;
-            LastCaptureMode = "wasapi";
+            LastCaptureMode = "loopback";
             LastCaptureError = "";
-            _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiLoopback device={render.FriendlyName} fmt={_wasapiFormat}");
+            _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiLoopback device={render.FriendlyName} buf={CaptureBufferMs}ms eventSync fmt={_wasapiFormat}");
             return true;
         }
         catch (Exception ex)
@@ -268,8 +302,6 @@ public sealed class WakeWordService : IDisposable
             return false;
         }
     }
-
-    WaveFormat? _waveInNativeFormat; // non-16k open → resample in OnWaveInData
 
     bool TryStartWaveIn_NoLock()
     {
@@ -296,7 +328,7 @@ public sealed class WakeWordService : IDisposable
                     {
                         DeviceNumber = i,
                         WaveFormat = new WaveFormat(rate, 16, ch),
-                        BufferMilliseconds = 100,
+                        BufferMilliseconds = CaptureBufferMs,
                     };
                     _waveInNativeFormat = rate == SampleRate && ch == 1 ? null : _waveIn.WaveFormat;
                     _waveIn.DataAvailable += _waveInNativeFormat == null ? OnData : OnWaveInResampleData;
@@ -304,7 +336,7 @@ public sealed class WakeWordService : IDisposable
                     _running = true;
                     LastCaptureMode = "wavein";
                     LastCaptureError = "";
-                    _log.Info($"wake: listening (ОЖИДАНИЕ) WaveIn device={i}/{name} fmt={rate}Hz/{ch}ch");
+                    _log.Info($"wake: listening (ОЖИДАНИЕ) WaveIn device={i}/{name} fmt={rate}Hz/{ch}ch buf={CaptureBufferMs}ms");
                     return true;
                 }
                 catch (Exception ex)
@@ -324,16 +356,13 @@ public sealed class WakeWordService : IDisposable
         if (e.BytesRecorded <= 0 || _waveInNativeFormat == null) return;
         try
         {
-            using var src = new RawSourceWaveStream(
-                new MemoryStream(e.Buffer, 0, e.BytesRecorded), _waveInNativeFormat);
-            // 16-bit PCM → float → 16k mono via MF only when needed
-            using var resampler = new MediaFoundationResampler(
-                src, new WaveFormat(SampleRate, 16, 1))
-            { ResamplerQuality = 30 };
-            var buf = new byte[SampleRate];
-            int n;
-            while ((n = resampler.Read(buf, 0, buf.Length)) > 0)
-                PushPcm(buf, n);
+            var ch = Math.Max(1, _waveInNativeFormat.Channels);
+            var srcFrames = e.BytesRecorded / (2 * ch);
+            var outFrames = Math.Max(1, (int)(srcFrames * (SampleRate / (double)Math.Max(1, _waveInNativeFormat.SampleRate))));
+            EnsureScratch(outFrames * 2);
+            var n = Pcm16ResampleTo16kMonoInto(
+                e.Buffer, e.BytesRecorded, _waveInNativeFormat, _pcmScratch);
+            if (n > 0) PushPcm(_pcmScratch, n);
         }
         catch (Exception ex)
         {
@@ -341,40 +370,46 @@ public sealed class WakeWordService : IDisposable
         }
     }
 
-    DateTime _lastSilentKeepaliveUtc = DateTime.MinValue;
-
     void OnWasapiData(object? sender, WaveInEventArgs e)
     {
         if (e.BytesRecorded <= 0 || _wasapiFormat == null) return;
-        if (SuspendCaptureProcessing) return;
         try
         {
-            // Fast path: IEEE float mix → 16 kHz mono PCM16 (no MF per buffer)
             if (_wasapiFormat.Encoding == WaveFormatEncoding.IeeeFloat)
             {
-                // Idle loopback/capture is digital silence — skip FloatMix+Vosk (wake_cpu <5%).
-                // Keepalive every 250ms so grammar can still finalize after real speech.
-                if (IeeeFloatNearSilent(e.Buffer, e.BytesRecorded))
-                {
-                    if ((DateTime.UtcNow - _lastSilentKeepaliveUtc).TotalMilliseconds < 250)
-                        return;
-                    _lastSilentKeepaliveUtc = DateTime.UtcNow;
-                    PushPcm(new byte[SampleRate * 2 / 50]); // 20ms zeros
+                var rms = FloatRmsAsPcm16(e.Buffer, e.BytesRecorded, _wasapiFormat.Channels);
+                // Cheap reject before convert — capture thread stays event-driven & running
+                if (!PeekWantsConvert(rms) && !_capturingPost)
                     return;
-                }
-                var pcm = FloatMixToPcm16kMono(e.Buffer, e.BytesRecorded, _wasapiFormat);
-                if (pcm.Length > 0) PushPcm(pcm);
+                var outFrames = Math.Max(1, (int)((e.BytesRecorded / 4.0 / Math.Max(1, _wasapiFormat.Channels))
+                    * (SampleRate / (double)Math.Max(1, _wasapiFormat.SampleRate))));
+                EnsureScratch(outFrames * 2);
+                var n = FloatMixToPcm16kMonoInto(e.Buffer, e.BytesRecorded, _wasapiFormat, _pcmScratch);
+                if (n > 0) PushPcm(_pcmScratch, n);
                 return;
             }
+
+            if (_wasapiFormat.Encoding == WaveFormatEncoding.Pcm && _wasapiFormat.BitsPerSample == 16)
+            {
+                var ch = Math.Max(1, _wasapiFormat.Channels);
+                var srcFrames = e.BytesRecorded / (2 * ch);
+                var outFrames = Math.Max(1, (int)(srcFrames * (SampleRate / (double)Math.Max(1, _wasapiFormat.SampleRate))));
+                EnsureScratch(outFrames * 2);
+                var n = Pcm16ResampleTo16kMonoInto(
+                    e.Buffer, e.BytesRecorded, _wasapiFormat, _pcmScratch);
+                if (n > 0) PushPcm(_pcmScratch, n);
+                return;
+            }
+
             using var src = new RawSourceWaveStream(
                 new MemoryStream(e.Buffer, 0, e.BytesRecorded), _wasapiFormat);
             using var resampler = new MediaFoundationResampler(
                 src, new WaveFormat(SampleRate, 16, 1))
             { ResamplerQuality = 30 };
-            var buf = new byte[SampleRate];
-            int n;
-            while ((n = resampler.Read(buf, 0, buf.Length)) > 0)
-                PushPcm(buf, n);
+            EnsureScratch(SampleRate * 2);
+            int read;
+            while ((read = resampler.Read(_pcmScratch, 0, _pcmScratch.Length)) > 0)
+                PushPcm(_pcmScratch, read);
         }
         catch (Exception ex)
         {
@@ -382,52 +417,94 @@ public sealed class WakeWordService : IDisposable
         }
     }
 
-    bool _suspendCapture;
-
-    /// <summary>
-    /// Wake_cpu idle measure: pause the WASAPI capture thread (StopRecording) while keeping
-    /// the device handle / LastCaptureMode. Loopback's capture thread alone pegs ~1 core on CI.
-    /// </summary>
-    public bool SuspendCaptureProcessing
+    /// <summary>Lock-free peek: skip FloatMix on digital silence; noise EMA only.</summary>
+    bool PeekWantsConvert(double rmsPcm16)
     {
-        get => _suspendCapture;
-        set
-        {
-            _suspendCapture = value;
-            var cap = _wasapi;
-            if (cap == null) return;
-            try
-            {
-                if (value) cap.StopRecording();
-                else cap.StartRecording();
-            }
-            catch (Exception ex)
-            {
-                _log.Info("wake: SuspendCaptureProcessing=" + value + " — " + ex.Message);
-            }
-        }
+        var thresh = Math.Max(VadMinThresholdRms, _noiseRms * 3.5);
+        if (rmsPcm16 >= thresh || DateTime.UtcNow < _vadHangoverUntil)
+            return true;
+        _noiseRms = _noiseRms * 0.97 + rmsPcm16 * 0.03;
+        return false;
     }
 
-    static bool IeeeFloatNearSilent(byte[] buffer, int bytes)
+    void EnsureScratch(int bytes)
     {
-        // Sample every 4th float; anything above ~digital floor is speech/noise.
-        for (var i = 0; i + 4 <= bytes; i += 16)
-        {
-            if (Math.Abs(BitConverter.ToSingle(buffer, i)) > 0.002f)
-                return false;
-        }
-        return true;
+        if (_pcmScratch.Length < bytes)
+            _pcmScratch = new byte[bytes];
     }
 
-    static byte[] FloatMixToPcm16kMono(byte[] buffer, int bytes, WaveFormat fmt)
+    /// <summary>Update noise floor / hangover. Returns true if VAD wants audio fed to Vosk.</summary>
+    bool ObserveEnergy(double rmsPcm16)
+    {
+        var thresh = Math.Max(VadMinThresholdRms, _noiseRms * 3.5);
+        var now = DateTime.UtcNow;
+        if (rmsPcm16 >= thresh)
+        {
+            _vadHangoverUntil = now.AddMilliseconds(VadHangoverMs);
+            _vadOpen = true;
+            return true;
+        }
+        // Slow noise EMA only while quiet
+        _noiseRms = _noiseRms * 0.97 + rmsPcm16 * 0.03;
+        if (now < _vadHangoverUntil)
+        {
+            _vadOpen = true;
+            return true;
+        }
+        _vadOpen = false;
+        return false;
+    }
+
+    static double FloatRmsAsPcm16(byte[] buffer, int bytes, int channels)
+    {
+        var ch = Math.Max(1, channels);
+        var floatCount = bytes / 4;
+        var frames = floatCount / ch;
+        if (frames <= 0) return 0;
+        // Stride sample for cheap RMS (every 4th frame)
+        double sumSq = 0;
+        var n = 0;
+        for (var f = 0; f < frames; f += 4)
+        {
+            double mix = 0;
+            var baseF = f * ch;
+            for (var c = 0; c < ch; c++)
+            {
+                var bi = (baseF + c) * 4;
+                if (bi + 4 > bytes) break;
+                mix += BitConverter.ToSingle(buffer, bi);
+            }
+            var s = mix / ch * 32767.0;
+            sumSq += s * s;
+            n++;
+        }
+        return n == 0 ? 0 : Math.Sqrt(sumSq / n);
+    }
+
+    static double Pcm16Rms(byte[] buffer, int bytes)
+    {
+        var samples = bytes / 2;
+        if (samples <= 0) return 0;
+        double sumSq = 0;
+        for (var i = 0; i + 1 < bytes; i += 2)
+        {
+            short s = (short)(buffer[i] | (buffer[i + 1] << 8));
+            sumSq += (double)s * s;
+        }
+        return Math.Sqrt(sumSq / samples);
+    }
+
+    /// <summary>Float mix → 16 kHz mono PCM16 into <paramref name="dst"/>. Returns byte count.</summary>
+    static int FloatMixToPcm16kMonoInto(byte[] buffer, int bytes, WaveFormat fmt, byte[] dst)
     {
         var ch = Math.Max(1, fmt.Channels);
         var srcRate = Math.Max(1, fmt.SampleRate);
         var floatCount = bytes / 4;
         var frames = floatCount / ch;
-        if (frames <= 0) return Array.Empty<byte>();
+        if (frames <= 0) return 0;
         var outFrames = Math.Max(1, (int)(frames * (SampleRate / (double)srcRate)));
-        var pcm = new byte[outFrames * 2];
+        var need = outFrames * 2;
+        if (dst.Length < need) return 0; // caller must EnsureScratch first
         for (var o = 0; o < outFrames; o++)
         {
             var srcIdx = Math.Min(frames - 1, (int)(o * (srcRate / (double)SampleRate)));
@@ -440,10 +517,54 @@ public sealed class WakeWordService : IDisposable
                 sum += BitConverter.ToSingle(buffer, bi);
             }
             var s = (short)Math.Clamp((int)(sum / ch * 32767.0), short.MinValue, short.MaxValue);
-            pcm[o * 2] = (byte)(s & 0xff);
-            pcm[o * 2 + 1] = (byte)((s >> 8) & 0xff);
+            dst[o * 2] = (byte)(s & 0xff);
+            dst[o * 2 + 1] = (byte)((s >> 8) & 0xff);
         }
-        return pcm;
+        return need;
+    }
+
+    /// <summary>PCM16 any-rate/ch → 16 kHz mono into dst (point resample, no alloc).</summary>
+    static int Pcm16ResampleTo16kMonoInto(byte[] buffer, int bytes, WaveFormat fmt, byte[] dst)
+    {
+        var ch = Math.Max(1, fmt.Channels);
+        var srcRate = Math.Max(1, fmt.SampleRate);
+        var srcFrames = bytes / (2 * ch);
+        if (srcFrames <= 0) return 0;
+        var outFrames = Math.Max(1, (int)(srcFrames * (SampleRate / (double)srcRate)));
+        var need = outFrames * 2;
+        if (dst.Length < need)
+        {
+            // grow once outside hot silence path
+            return 0;
+        }
+        for (var o = 0; o < outFrames; o++)
+        {
+            var srcIdx = Math.Min(srcFrames - 1, (int)(o * (srcRate / (double)SampleRate)));
+            int sum = 0;
+            for (var c = 0; c < ch; c++)
+            {
+                var bi = (srcIdx * ch + c) * 2;
+                if (bi + 1 >= bytes) break;
+                sum += (short)(buffer[bi] | (buffer[bi + 1] << 8));
+            }
+            var s = (short)Math.Clamp(sum / ch, short.MinValue, short.MaxValue);
+            dst[o * 2] = (byte)(s & 0xff);
+            dst[o * 2 + 1] = (byte)((s >> 8) & 0xff);
+        }
+        return need;
+    }
+
+    /// <summary>Event-driven loopback with explicit ~100 ms buffers (no busy-wait).</summary>
+    sealed class WakeLoopbackCapture : WasapiCapture
+    {
+        public WakeLoopbackCapture(MMDevice device, int bufferMs)
+            : base(device, useEventSync: true, audioBufferMillisecondsLength: bufferMs)
+        {
+            ShareMode = AudioClientShareMode.Shared;
+        }
+
+        protected override AudioClientStreamFlags GetAudioClientStreamFlags() =>
+            AudioClientStreamFlags.Loopback | base.GetAudioClientStreamFlags();
     }
 
     public static bool HasAnyCaptureDevice()
@@ -500,6 +621,8 @@ public sealed class WakeWordService : IDisposable
         {
             if (!_running || _model == null || _echoGuard || !_enabled) return;
             AppendRing_NoLock(buffer, bytes);
+            AppendPreroll_NoLock(buffer, bytes);
+
             if (_capturingPost)
             {
                 _postWake ??= new List<byte>();
@@ -510,20 +633,78 @@ public sealed class WakeWordService : IDisposable
                 if (wallDone || audioDone)
                     confirmPcm = TakePostCapturePcm_NoLock();
             }
-            else if (_grmNative != IntPtr.Zero && DateTime.UtcNow >= _grammarCooldownUntilUtc)
+            else
             {
-                var ok = vosk_recognizer_accept_waveform(_grmNative, buffer, bytes);
-                if (ok != 0)
+                var wasOpen = _vadOpen || DateTime.UtcNow < _vadHangoverUntil;
+                var open = ObserveEnergy(Pcm16Rms(buffer, bytes));
+                if (open && _grmNative != IntPtr.Zero && DateTime.UtcNow >= _grammarCooldownUntilUtc)
                 {
-                    var json = PtrToUtf8(vosk_recognizer_result(_grmNative));
-                    ResetGrammar_NoLock();
-                    TryHandleGrammarFinal_NoLock(json);
+                    if (!wasOpen)
+                    {
+                        // Onset: flush ~300ms pre-roll (includes this chunk) so «Лиа» isn't clipped
+                        FeedPrerollToVosk_NoLock();
+                    }
+                    else
+                    {
+                        AcceptWaveform_NoLock(buffer, bytes);
+                    }
                 }
+                // else silence: skip Vosk; pre-roll retained for next onset
             }
         }
-        // Free-form confirm OUTSIDE lock — Vosk decode must not block WaveIn/PushPcm
         if (confirmPcm != null)
             ConfirmWakeFromPcm(confirmPcm);
+    }
+
+    void AppendPreroll_NoLock(byte[] buffer, int bytes)
+    {
+        if (bytes <= 0) return;
+        if (bytes >= PreRollBytes)
+        {
+            Buffer.BlockCopy(buffer, bytes - PreRollBytes, _preroll, 0, PreRollBytes);
+            _prerollWrite = 0;
+            _prerollCount = PreRollBytes;
+            return;
+        }
+        var first = Math.Min(bytes, PreRollBytes - _prerollWrite);
+        Buffer.BlockCopy(buffer, 0, _preroll, _prerollWrite, first);
+        _prerollWrite = (_prerollWrite + first) % PreRollBytes;
+        if (first < bytes)
+        {
+            Buffer.BlockCopy(buffer, first, _preroll, _prerollWrite, bytes - first);
+            _prerollWrite = (_prerollWrite + (bytes - first)) % PreRollBytes;
+        }
+        _prerollCount = Math.Min(PreRollBytes, _prerollCount + bytes);
+    }
+
+    void FeedPrerollToVosk_NoLock()
+    {
+        if (_grmNative == IntPtr.Zero || _prerollCount <= 0) return;
+        // Linearize circular buffer into scratch (one shot on onset only)
+        EnsureScratch(_prerollCount);
+        if (_prerollCount < PreRollBytes)
+        {
+            Buffer.BlockCopy(_preroll, 0, _pcmScratch, 0, _prerollCount);
+            AcceptWaveform_NoLock(_pcmScratch, _prerollCount);
+            return;
+        }
+        var tail = PreRollBytes - _prerollWrite;
+        Buffer.BlockCopy(_preroll, _prerollWrite, _pcmScratch, 0, tail);
+        if (_prerollWrite > 0)
+            Buffer.BlockCopy(_preroll, 0, _pcmScratch, tail, _prerollWrite);
+        AcceptWaveform_NoLock(_pcmScratch, PreRollBytes);
+    }
+
+    void AcceptWaveform_NoLock(byte[] buffer, int bytes)
+    {
+        if (_grmNative == IntPtr.Zero || bytes <= 0) return;
+        var ok = vosk_recognizer_accept_waveform(_grmNative, buffer, bytes);
+        if (ok != 0)
+        {
+            var json = PtrToUtf8(vosk_recognizer_result(_grmNative));
+            ResetGrammar_NoLock();
+            TryHandleGrammarFinal_NoLock(json);
+        }
     }
 
     /// <summary>
