@@ -235,6 +235,14 @@
                     Foreground="{StaticResource LiaMuted}" Margin="0,4,0,0" IsChecked="True"/>
           <CheckBox x:Name="AutostartBox" Content="Запускать вместе с Windows (в трее, ждать «Лиа»)"
                     Foreground="{StaticResource LiaMuted}" Margin="0,4,0,0"/>
+          <TextBlock Text="ОБНОВЛЕНИЯ" Style="{StaticResource HudLabel}" Margin="0,8,0,0"/>
+          <TextBlock x:Name="UpdateVersionLine" Text="Текущая версия —"
+                     Foreground="{StaticResource LiaMuted}" FontSize="11"/>
+          <CheckBox x:Name="AutoUpdateBox" Content="Проверять обновления автоматически"
+                    Foreground="{StaticResource LiaMuted}" Margin="0,4,0,0" IsChecked="True"/>
+          <Button Content="Проверить сейчас" Click="CheckUpdates_Click" Style="{StaticResource HudGhostButton}"
+                  HorizontalAlignment="Left" Margin="0,4,0,0"/>
+          <TextBlock x:Name="UpdateCheckHint" Foreground="{StaticResource LiaMuted}" FontSize="11" TextWrapping="Wrap"/>
           <TextBlock Text="ПАМЯТЬ" Style="{StaticResource HudLabel}" Margin="0,8,0,0"/>
           <TextBlock Text="Долгие факты о вас (имя, предпочтения, проекты). «забудь всё обо мне» очищает."
                      Foreground="{StaticResource LiaMuted}" FontSize="11" TextWrapping="Wrap"/>
@@ -257,6 +265,29 @@
         </ScrollViewer>
       </Border>
     </Grid>
+
+    <!-- Non-intrusive update notice (bottom strip, above dock) -->
+    <Border x:Name="UpdateBanner" Visibility="Collapsed" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+            Margin="0,0,0,128" Padding="14,10" Background="#EE0A1018"
+            BorderBrush="{StaticResource LiaAmber}" BorderThickness="1" MaxWidth="520">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <StackPanel Spacing="2" VerticalAlignment="Center">
+          <TextBlock x:Name="UpdateBannerText" Text="Доступно обновление"
+                     Foreground="{StaticResource LiaAmber}" FontFamily="{StaticResource LiaUi}" FontSize="13"/>
+          <TextBlock x:Name="UpdateBannerProgress" Visibility="Collapsed"
+                     Foreground="{StaticResource LiaMuted}" FontSize="11"/>
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="16,0,0,0">
+          <Button Content="Позже" Click="UpdateLater_Click" Style="{StaticResource HudGhostButton}" Padding="12,4"/>
+          <Button Content="Обновить" Click="UpdateNow_Click" Style="{StaticResource HudGhostButton}"
+                  Padding="12,4" BorderBrush="{StaticResource LiaAmber}" Foreground="{StaticResource LiaAmber}"/>
+        </StackPanel>
+      </Grid>
+    </Border>
 
     <!-- Destructive action confirm -->
     <Grid x:Name="ConfirmOverlay" Visibility="Collapsed" Background="#CC05070C">

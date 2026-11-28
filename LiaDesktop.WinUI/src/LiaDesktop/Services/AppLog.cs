@@ -161,7 +161,7 @@ public sealed class AppLog
         {
             var sb = new StringBuilder();
             sb.AppendLine("======== STARTUP DIAGNOSTICS ========");
-            var ver = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.7.5";
+            var ver = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.7.6";
             sb.AppendLine($"app_version={ver}");
             sb.AppendLine($"os={Environment.OSVersion}");
             try

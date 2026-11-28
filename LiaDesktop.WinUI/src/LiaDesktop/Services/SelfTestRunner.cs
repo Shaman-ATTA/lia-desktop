@@ -14,7 +14,7 @@ namespace LiaDesktop.Services;
 /// Headless E2E gate (--selftest): mock Gemini scenarios + optional live call.
 /// Writes selftest.txt and exits the process with 0/1.
 /// </summary>
-public static class SelfTestRunner
+public static partial class SelfTestRunner
 {
     public static bool IsSelfTest { get; private set; }
     public static string? OutPath { get; private set; }
@@ -137,6 +137,10 @@ public static class SelfTestRunner
 
             Checkpoint("ltm");
             failed += GateLtm(services, L);
+
+            Checkpoint("update");
+            failed += await RunUpdateGatesAsync(services, L);
+            Checkpoint("after_update");
 
             // Persistent log file gate (+ sample_log.txt with wake DETECT lines)
             failed += RunLogFileGate(services, L);

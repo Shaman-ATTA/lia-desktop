@@ -186,6 +186,22 @@ public sealed partial class MainWindow : Window
         _s.Wake.MicFailed += () => DispatcherQueue.TryEnqueue(OnMicUnavailable);
         _s.MicGemini.TimedOut += OnMicGeminiTimedOut;
         _s.Tools.ConfirmDestructiveAsync = AskDestructiveConfirmAsync;
+        _s.Updates.UpdateAvailable += info => DispatcherQueue.TryEnqueue(() => ShowUpdateBanner(info));
+        _s.Updates.Progress += msg => DispatcherQueue.TryEnqueue(() =>
+        {
+            UpdateBannerProgress.Text = msg;
+            UpdateBannerProgress.Visibility = Visibility.Visible;
+        });
+        _s.Updates.FriendlyError += msg => DispatcherQueue.TryEnqueue(() =>
+        {
+            Subtitle.Text = msg;
+            UpdateBannerProgress.Text = msg;
+            UpdateBannerProgress.Visibility = Visibility.Visible;
+        });
+        _s.Updates.Dismissed += () => DispatcherQueue.TryEnqueue(() =>
+        {
+            UpdateBanner.Visibility = Visibility.Collapsed;
+        });
         _clock.Tick += (_, _) => TickTelemetry();
         _clock.Start();
 
@@ -219,7 +235,16 @@ public sealed partial class MainWindow : Window
         // Smoke uses real default Idle pace — Idle must visually match Active (parity gate).
         DispatcherQueue.TryEnqueue(() => InitTrayAndAutostart());
         DispatcherQueue.TryEnqueue(RefreshRenderPace);
-        if (SelfTestRunner.IsSelfTest)
+        if (UpdateE2eHook.IsAgentMode(Environment.GetCommandLineArgs()))
+        {
+            BootOverlay.Visibility = Visibility.Collapsed;
+            DispatcherQueue.TryEnqueue(async () =>
+            {
+                await Task.Delay(1200);
+                await RunUpdateE2eAgentAsync();
+            });
+        }
+        else if (SelfTestRunner.IsSelfTest)
         {
             BootOverlay.Visibility = Visibility.Collapsed;
             // Let DX/swapchain settle, then run E2E and Environment.Exit
@@ -1115,9 +1140,123 @@ public sealed partial class MainWindow : Window
         var text = CommandBox.Text?.Trim() ?? "";
         if (string.IsNullOrEmpty(text)) return;
         CommandBox.Text = "";
+        if (UpdateService.IsUpdateCommand(text))
+        {
+            await HandleUpdateVoiceCommandAsync(text);
+            return;
+        }
         StatusCaption.Text = "ДУМАЮ";
         VoiceLine.Text = "ГОЛОС  ДУМАЮ";
         await _s.Agent.RunAsync(text);
+    }
+
+    public void ShowUpdateBanner(UpdateInfo info)
+    {
+        UpdateBannerText.Text = $"Доступно обновление {info.Tag}";
+        UpdateBannerProgress.Visibility = Visibility.Collapsed;
+        UpdateBanner.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Selftest: is the update HUD notice visible?</summary>
+    public bool IsUpdateBannerVisible => UpdateBanner.Visibility == Visibility.Visible;
+
+    public string UpdateBannerCaption => UpdateBannerText.Text ?? "";
+
+    void UpdateLater_Click(object sender, RoutedEventArgs e) => _s.Updates.Dismiss();
+
+    async void UpdateNow_Click(object sender, RoutedEventArgs e)
+    {
+        var info = _s.Updates.Pending;
+        if (info == null) return;
+        await InstallUpdateAsync(info);
+    }
+
+    async Task InstallUpdateAsync(UpdateInfo info)
+    {
+        UpdateBannerProgress.Text = "Скачивание…";
+        UpdateBannerProgress.Visibility = Visibility.Visible;
+        var prog = new Progress<double>(p =>
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                UpdateBannerProgress.Text = p < 0 ? "Скачивание…" : $"Скачивание {(int)(p * 100)}%";
+            });
+        });
+        await _s.Updates.DownloadAndInstallAsync(info, prog);
+    }
+
+    async Task HandleUpdateVoiceCommandAsync(string text)
+    {
+        StatusCaption.Text = "ОБНОВЛЕНИЯ";
+        Subtitle.Text = "Проверяю обновления…";
+        var result = await _s.Updates.CheckAsync(quiet: false);
+        if (result.Status == UpdateCheckStatus.Available && result.Info != null)
+        {
+            ShowUpdateBanner(result.Info);
+            Subtitle.Text = $"Доступно обновление {result.Info.Tag}";
+            if (UpdateService.IsInstallIntent(text))
+            {
+                var ok = await AskDestructiveConfirmAsync($"Установить обновление {result.Info.Tag}?");
+                if (!ok)
+                {
+                    Subtitle.Text = "Обновление отложено";
+                    return;
+                }
+                await InstallUpdateAsync(result.Info);
+            }
+            return;
+        }
+        Subtitle.Text = result.Message ?? UpdateService.JournalUpToDate;
+        StatusCaption.Text = "ОЖИДАНИЕ";
+    }
+
+    async void CheckUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateCheckHint.Text = "Проверка…";
+        var result = await _s.Updates.CheckAsync(quiet: false);
+        UpdateVersionLine.Text = $"Текущая версия — {AppVersion.Display}";
+        UpdateCheckHint.Text = result.Status switch
+        {
+            UpdateCheckStatus.Available when result.Info != null =>
+                $"Доступно {result.Info.Tag}",
+            UpdateCheckStatus.UpToDate => "У вас актуальная версия",
+            UpdateCheckStatus.Offline => UpdateService.JournalOffline,
+            UpdateCheckStatus.RateLimited => UpdateService.JournalRateLimit,
+            _ => result.Message ?? "Ошибка проверки",
+        };
+        if (result.Status == UpdateCheckStatus.Available && result.Info != null)
+            ShowUpdateBanner(result.Info);
+    }
+
+    async Task RunUpdateE2eAgentAsync()
+    {
+        try
+        {
+            foreach (var a in Environment.GetCommandLineArgs())
+            {
+                if (a.StartsWith("--update-api=", StringComparison.OrdinalIgnoreCase))
+                    _s.Updates.ApiOverride = a["--update-api=".Length..];
+            }
+            var apiEnv = Environment.GetEnvironmentVariable("LIA_UPDATE_API");
+            if (!string.IsNullOrWhiteSpace(apiEnv))
+                _s.Updates.ApiOverride = apiEnv;
+            _s.Updates.InstallDirOverride =
+                Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+            var result = await _s.Updates.CheckAsync(quiet: false);
+            if (result.Status != UpdateCheckStatus.Available || result.Info == null)
+            {
+                _s.Log.Info("update_e2e agent: no update — " + (result.Message ?? result.Status.ToString()));
+                Environment.Exit(2);
+                return;
+            }
+            ShowUpdateBanner(result.Info);
+            await InstallUpdateAsync(result.Info);
+        }
+        catch (Exception ex)
+        {
+            _s.Log.Info("update_e2e agent FAIL: " + ex.Message);
+            Environment.Exit(3);
+        }
     }
 
     void OnSpeakEnded()
@@ -1243,6 +1382,9 @@ public sealed partial class MainWindow : Window
         WakeWordBox.IsChecked = cfg.WakeWordEnabled;
         WakeSensSlider.Value = Math.Clamp(cfg.WakeWordSensitivity, 0.1, 0.9);
         ConfirmDestructiveBox.IsChecked = cfg.ConfirmDestructiveActions;
+        AutoUpdateBox.IsChecked = cfg.AutoCheckUpdates;
+        UpdateVersionLine.Text = $"Текущая версия — {AppVersion.Display}";
+        UpdateCheckHint.Text = "";
         ModelBox.Items.Clear();
         if (!string.IsNullOrEmpty(cfg.Model))
         {
@@ -1365,6 +1507,7 @@ public sealed partial class MainWindow : Window
         cfg.WakeWordEnabled = WakeWordBox.IsChecked == true;
         cfg.WakeWordSensitivity = (float)WakeSensSlider.Value;
         cfg.ConfirmDestructiveActions = ConfirmDestructiveBox.IsChecked == true;
+        cfg.AutoCheckUpdates = AutoUpdateBox.IsChecked == true;
         _s.BargeIn.SetPreferredOutputDevice(cfg.AudioOutputDeviceId);
         _s.Secrets.Save(cfg);
         _s.ApplyWakeSettings(cfg);

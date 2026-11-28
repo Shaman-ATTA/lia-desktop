@@ -21,6 +21,8 @@ public sealed class LiaConfig
     public float WakeWordSensitivity { get; set; } = 0.55f;
     /// <summary>Ask before destructive PowerShell / system actions. Default ON.</summary>
     public bool ConfirmDestructiveActions { get; set; } = true;
+    /// <summary>Check GitHub Releases for updates on startup / every 6h. Default ON.</summary>
+    public bool AutoCheckUpdates { get; set; } = true;
 }
 
 public sealed class SecretsStore

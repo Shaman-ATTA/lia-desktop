@@ -103,11 +103,11 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command 7z -ErrorAction SilentlyContinue) {
-            7z a -tzip -mx=9 LiaDesktop-0.7.5-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
+            7z a -tzip -mx=9 LiaDesktop-0.7.6-win-x64.zip ".\publish\LiaDesktop\*" | Out-Host
           } else {
-            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.5-win-x64.zip -CompressionLevel Optimal -Force
+            Compress-Archive -Path publish/LiaDesktop/* -DestinationPath LiaDesktop-0.7.6-win-x64.zip -CompressionLevel Optimal -Force
           }
-          Get-Item LiaDesktop-0.7.5-win-x64.zip | Format-List Name,Length
+          Get-Item LiaDesktop-0.7.6-win-x64.zip | Format-List Name,Length
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -120,11 +120,61 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found" }
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           & $iscc /Q installer\LiaDesktop.iss
-          $setup = Get-Item artifacts\LiaDesktop-0.7.5-setup.exe
-          Copy-Item $setup.FullName .\LiaDesktop-0.7.5-setup.exe -Force
+          $setup = Get-Item artifacts\LiaDesktop-0.7.6-setup.exe
+          Copy-Item $setup.FullName .\LiaDesktop-0.7.6-setup.exe -Force
           $setup | Format-List Name,Length
-          $zip = Get-Item LiaDesktop-0.7.5-win-x64.zip
+          $zip = Get-Item LiaDesktop-0.7.6-win-x64.zip
           Write-Host ("SIZES zip={0:N0} setup={1:N0}" -f $zip.Length,$setup.Length)
+
+      - name: Build update e2e payload installer (v0.7.7 bits)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Real newer FileVersion for update_e2e — not published as Latest
+          $proj = "LiaDesktop.WinUI\src\LiaDesktop\LiaDesktop.csproj"
+          $out = Join-Path $PWD "publish-update\LiaDesktop"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          msbuild $proj `
+            /restore `
+            /t:Publish `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:RuntimeIdentifier=win-x64 `
+            /p:TargetFramework=net8.0-windows10.0.19041.0 `
+            /p:SelfContained=true `
+            /p:WindowsPackageType=None `
+            /p:WindowsAppSDKSelfContained=true `
+            /p:EnableMsixTooling=true `
+            /p:AppxPackage=false `
+            /p:GenerateAppxPackageOnBuild=false `
+            /p:PublishReadyToRun=false `
+            /p:Version=0.7.7 `
+            /p:PublishDir="$out\" `
+            /p:PublishProtocol=FileSystem `
+            /v:m
+          if (-not (Test-Path (Join-Path $out "LiaDesktop.exe"))) { throw "update payload exe missing" }
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          & $iscc /Q "/DMyAppVersion=0.7.7" "/DMyAppPublishDir=..\publish-update\LiaDesktop" installer\LiaDesktop.iss
+          Copy-Item artifacts\LiaDesktop-0.7.7-setup.exe .\LiaDesktop-0.7.7-setup.exe -Force
+          Get-Item .\LiaDesktop-0.7.7-setup.exe | Format-List Name,Length
+
+      - name: SHA256SUMS for release assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lines = @()
+          foreach ($f in @('LiaDesktop-0.7.6-setup.exe','LiaDesktop-0.7.6-win-x64.zip')) {
+            if (-not (Test-Path $f)) { throw "missing $f for SHA256SUMS" }
+            $h = (Get-FileHash -Algorithm SHA256 -Path $f).Hash.ToLowerInvariant()
+            $lines += "$h  $f"
+            Write-Host "$f $h"
+          }
+          $lines -join "`n" | Set-Content -Path SHA256SUMS -Encoding ascii -NoNewline
+          Add-Content -Path SHA256SUMS -Value "`n"
+          Get-Content SHA256SUMS
 
       - name: Install VB-CABLE virtual render (for playback_rms loopback)
         shell: pwsh
@@ -261,10 +311,14 @@ jobs:
         env:
           # Optional — absent secrets are empty; never echo the value
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LIA_SETUP_EXE: ${{ github.workspace }}/LiaDesktop-0.7.6-setup.exe
+          LIA_UPDATE_E2E_SETUP: ${{ github.workspace }}/LiaDesktop-0.7.7-setup.exe
         run: |
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path $PWD 'publish/LiaDesktop/LiaDesktop.exe'
           if (-not (Test-Path $exe)) { throw "exe missing: $exe" }
+          if (-not (Test-Path $env:LIA_SETUP_EXE)) { throw "LIA_SETUP_EXE missing" }
+          if (-not (Test-Path $env:LIA_UPDATE_E2E_SETUP)) { throw "LIA_UPDATE_E2E_SETUP missing" }
           # Do NOT install edge-tts — C# WebSocket must work alone (selftest poisons PATH python)
           pip install --quiet pillow numpy
           $port = 18765
@@ -282,6 +336,7 @@ jobs:
             if (Test-Path $out) { Remove-Item $out -Force }
             $hasLive = -not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)
             Write-Host "selftest live_key_present=$hasLive LIA_VOSK_MODEL=$env:LIA_VOSK_MODEL"
+            Write-Host "LIA_SETUP_EXE=$env:LIA_SETUP_EXE LIA_UPDATE_E2E_SETUP=$env:LIA_UPDATE_E2E_SETUP"
             $args = @(
               '--selftest',
               "--gemini-base=http://127.0.0.1:$port/v1beta",
@@ -349,6 +404,11 @@ jobs:
             if ($txt -notmatch 'ltm_save: PASS') { throw "selftest missing ltm_save PASS" }
             if ($txt -notmatch 'ltm_recall_new_session: PASS') { throw "selftest missing ltm_recall_new_session PASS" }
             if ($txt -notmatch 'ltm_forget: PASS') { throw "selftest missing ltm_forget PASS" }
+            if ($txt -notmatch 'update_offline: PASS') { throw "selftest missing update_offline PASS" }
+            if ($txt -notmatch 'update_sha_mismatch: PASS') { throw "selftest missing update_sha_mismatch PASS" }
+            if ($txt -notmatch 'update_check: PASS') { throw "selftest missing update_check PASS" }
+            if ($txt -notmatch 'update_upgrade_exists: PASS') { throw "selftest missing update_upgrade_exists PASS" }
+            if ($txt -notmatch 'update_e2e: PASS') { throw "selftest missing update_e2e PASS" }
             if ($txt -notmatch 'log_file: PASS') { throw "selftest missing log_file PASS" }
             if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }
             if ($txt -notmatch 'render_nondefault_comm: PASS') { throw "selftest missing render_nondefault_comm PASS" }
@@ -744,7 +804,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $PWD 'LiaDesktop-0.7.5-setup.exe'
+          $setup = Join-Path $PWD 'LiaDesktop-0.7.6-setup.exe'
           if (-not (Test-Path $setup)) { throw "setup missing" }
           $dir = Join-Path $env:LOCALAPPDATA 'LiaDesktop-smoke'
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
@@ -770,8 +830,10 @@ jobs:
         with:
           name: winui-smoke-${{ github.run_id }}
           path: |
-            LiaDesktop-0.7.5-win-x64.zip
-            LiaDesktop-0.7.5-setup.exe
+            LiaDesktop-0.7.6-win-x64.zip
+            LiaDesktop-0.7.6-setup.exe
+            SHA256SUMS
+            update_check.png
             desktop_winui_front.png
             desktop_winui_threequarter.png
             desktop_winui_profile.png
@@ -801,11 +863,14 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.5** — System telemetry · UIA agent · LTM · idle throttle
+          Lia Desktop **v0.7.6** — обновление на месте
 
-          - Real system CPU/GPU/RAM/net/ping + ЛИА ЦП·ОЗУ; friendly mic journal (no WaveIn walls)
-          - UIA tools + act-observe + destructive confirm; long-term memory (memory.json + Settings Память)
-          - Idle ~20fps economy (no MSAA resolve / skip Present when static) / speak-listen 60fps; app_idle_cpu hard ≥40% drop on all GPUs
+          - Установщик обновляет существующую установку без удаления (тот же AppId): закрывает LiaDesktop, меняет файлы, сохраняет настройки, memory.json, Vosk и логи в %LOCALAPPDATA%
+          - Повторная установка той же версии и откат на более старую — без ошибок
+          - Автообновление в приложении: проверка GitHub Releases при старте и каждые 6 ч; уведомление «Доступно обновление vX.Y.Z» (Обновить / Позже); в Настройках — «Проверять обновления автоматически» и «Проверить сейчас»
+          - «Обновить» скачивает setup, сверяет SHA256 с SHA256SUMS релиза, ставит тихо и перезапускает Лиа
+          - Голос: «Лиа, обнови себя» / «проверь обновления» (перед установкой — подтверждение)
+          - Жёсткие гейты: update_upgrade_exists, update_check, update_sha_mismatch, update_offline, update_e2e (+ все прежние)
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -813,11 +878,11 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           fi
-          for f in LiaDesktop-0.7.5-win-x64.zip LiaDesktop-0.7.5-setup.exe \
+          for f in LiaDesktop-0.7.6-win-x64.zip LiaDesktop-0.7.6-setup.exe SHA256SUMS \
                    desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png \
                    desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png \
                    desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt \
-                   tasklist_before.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
+                   update_check.png tasklist_before.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
             for m in $f; do
               if [ -f "$m" ]; then
                 gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber
@@ -830,25 +895,28 @@ jobs:
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      - name: Mirror + publish Latest v0.7.5 on main pushes
+      - name: Mirror + publish Latest v0.7.6 on main pushes
         if: success() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG=v0.7.5
+          TAG=v0.7.6
           NOTES=$(cat <<'EOF'
-          Lia Desktop **v0.7.5** — System telemetry · UIA agent · LTM · idle throttle
+          Lia Desktop **v0.7.6** — обновление на месте
 
-          - Real system CPU/GPU/RAM/net/ping + ЛИА ЦП·ОЗУ; friendly mic journal (no WaveIn walls)
-          - UIA tools + act-observe + destructive confirm; long-term memory (memory.json + Settings Память)
-          - Idle ~20fps economy (no MSAA resolve / skip Present when static) / speak-listen 60fps; app_idle_cpu hard ≥40% drop on all GPUs
+          - Установщик обновляет существующую установку без удаления (тот же AppId): закрывает LiaDesktop, меняет файлы, сохраняет настройки, memory.json, Vosk и логи в %LOCALAPPDATA%
+          - Повторная установка той же версии и откат на более старую — без ошибок
+          - Автообновление в приложении: проверка GitHub Releases при старте и каждые 6 ч; уведомление «Доступно обновление vX.Y.Z» (Обновить / Позже); в Настройках — «Проверять обновления автоматически» и «Проверить сейчас»
+          - «Обновить» скачивает setup, сверяет SHA256 с SHA256SUMS релиза, ставит тихо и перезапускает Лиа
+          - Голос: «Лиа, обнови себя» / «проверь обновления» (перед установкой — подтверждение)
+          - Жёсткие гейты: update_upgrade_exists, update_check, update_sha_mismatch, update_offline, update_e2e (+ все прежние)
           EOF
           )
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lia Desktop $TAG" --notes "$NOTES" || true
-          for f in LiaDesktop-0.7.5-win-x64.zip LiaDesktop-0.7.5-setup.exe desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
+          for f in LiaDesktop-0.7.6-win-x64.zip LiaDesktop-0.7.6-setup.exe SHA256SUMS update_check.png desktop_winui_front.png desktop_winui_threequarter.png desktop_winui_profile.png desktop_winui_speaking.png desktop_winui_eyes.png desktop_winui_rings.png desktop_winui_hud.png desktop_winui_front_1080.png desktop_winui_front_4k.png layout_window_max.png selftest.txt tasklist_after.txt vision_test.png sample_log.txt layout_*.png; do
             for m in $f; do
               [ -f "$m" ] && gh release upload "$TAG" "$m" --repo "$GITHUB_REPOSITORY" --clobber || true
             done

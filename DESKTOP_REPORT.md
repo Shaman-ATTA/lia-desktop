@@ -1,6 +1,10 @@
 # Lia Desktop — ship report
 
-## v0.7.5 — System telemetry · UIA · LTM · idle throttle — **Latest**
+## v0.7.6 — обновление на месте — **Latest** (pending CI green)
+
+In-place installer upgrade + GitHub auto-update + voice «обнови себя». Hard gates: `update_upgrade_exists`, `update_check`, `update_sha_mismatch`, `update_offline`, `update_e2e`. SHA256SUMS on release. Prior 49 gates stay hard. Head/materials/lip sync untouched.
+
+## v0.7.5 — System telemetry · UIA · LTM · idle throttle
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.7.5  
 CI: https://github.com/Shaman-ATTA/lia-desktop/actions/runs/46110017785 (`552fc35`)
@@ -31,8 +35,6 @@ Assets: `LiaDesktop-0.7.5-setup.exe`, `LiaDesktop-0.7.5-win-x64.zip`, smoke/layo
 ## v0.7.4 — Offline wake word «Лиа»
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.7.4
-
-Offline Vosk wake «Лиа»/«Лия» + inline commands; echo-guard vs own TTS; MicGemini 8s no-speech → ОЖИДАНИЕ; Settings toggle/sensitivity. Streaming TTS from v0.7.3 kept. Selftest: `wake_*` incl. absolute wake_cpu baseline/active/delta + gpu.
 
 ## v0.7.2 — Vision + memory + Multimedia TTS + logs
 

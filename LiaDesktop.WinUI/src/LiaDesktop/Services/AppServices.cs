@@ -18,6 +18,7 @@ public sealed class AppServices
     public LongTermMemory LongTerm { get; private set; } = null!;
     public WakeWordService Wake { get; private set; } = null!;
     public SystemTelemetry Telemetry { get; } = new();
+    public UpdateService Updates { get; private set; } = null!;
     public LiaConfig Config { get; private set; } = new();
 
     /// <summary>True when Windows ru-RU speech works; otherwise Gemini mic is the default.</summary>
@@ -47,10 +48,13 @@ public sealed class AppServices
         // Echo/loopback guard — own TTS must not self-wake
         BargeIn.PlaybackStarted += () => Wake.SetEchoGuard(true);
         BargeIn.PlaybackStopped += () => Wake.SetEchoGuard(false);
+        Updates = new UpdateService(Log);
         try { Log.WriteStartupDiagnostics(this); } catch { /* */ }
         _ = Gemini.EnsureModelAsync();
         _ = InitSpeechAsync();
         _ = InitWakeAsync();
+        if (!SelfTestRunner.IsSelfTest)
+            Updates.StartPeriodicChecks(() => Secrets.Load().AutoCheckUpdates);
     }
 
     async Task InitSpeechAsync()
@@ -99,6 +103,7 @@ public sealed class AppServices
         try { Wake.Stop(); } catch { /* */ }
         try { BargeIn.AbortPlayback(); } catch { /* */ }
         try { await MicGemini.StopAsync(); } catch { /* */ }
+        try { Updates.Dispose(); } catch { /* */ }
         Wake.Dispose();
         BargeIn.Dispose();
         Audio.Dispose();

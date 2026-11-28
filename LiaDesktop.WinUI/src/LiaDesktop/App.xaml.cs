@@ -78,6 +78,18 @@ public partial class App : Application
         {
             Services.Bootstrap();
             Program.BootLog("Bootstrap ok");
+            try
+            {
+                var e2e = UpdateE2eHook.TryComplete(out var e2eMsg);
+                if (e2e != null)
+                {
+                    Program.BootLog(e2eMsg);
+                    try { Services.Log.Info(e2eMsg); } catch { /* */ }
+                    // Pending handshake done (relaunch has no agent env) — exit for parent waiter
+                    Environment.Exit(e2e == true ? 0 : 1);
+                }
+            }
+            catch (Exception ex) { Program.BootLog("update_e2e hook: " + ex.Message); }
             MainWindowInstance = new MainWindow();
             Program.BootLog("MainWindow created");
             MainWindowInstance.Activate();
