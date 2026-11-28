@@ -1241,7 +1241,7 @@ public sealed partial class MainWindow : Window
             if (!string.IsNullOrWhiteSpace(apiEnv))
                 _s.Updates.ApiOverride = apiEnv;
             _s.Updates.InstallDirOverride =
-                Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+                System.IO.Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
             var result = await _s.Updates.CheckAsync(quiet: false);
             if (result.Status != UpdateCheckStatus.Available || result.Info == null)
             {
