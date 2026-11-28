@@ -60,4 +60,21 @@ public static class WakeText
         if (!c.Contains(' ') && c.Length < 8) return false;
         return true;
     }
+
+    /// <summary>
+    /// Freeform ASR that is clearly a non-wake utterance (e.g. «могу ли я…»).
+    /// Sparse crumbs («лет», «ли») are NOT substantial — grammar may still wake.
+    /// </summary>
+    public static bool IsSubstantialNonWake(string? freeform)
+    {
+        if (string.IsNullOrWhiteSpace(freeform)) return false;
+        var t = NormalizeAsrWake(freeform);
+        if (ContainsWake(t)) return false;
+        // Mid-sentence «ли я» — the false-wake class we must never promote via grammar
+        if (Regex.IsMatch(t, @"\bли\s+я\b", RegexOptions.CultureInvariant)) return true;
+        var words = t.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length >= 4) return true;
+        if (t.Length >= 20) return true;
+        return false;
+    }
 }

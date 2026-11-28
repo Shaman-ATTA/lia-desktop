@@ -316,6 +316,7 @@ jobs:
             if ($txt -notmatch 'wake_offline: PASS') { throw "selftest missing wake_offline PASS" }
             if ($txt -notmatch 'wake_cpu: PASS') { throw "selftest missing wake_cpu PASS" }
             if ($txt -notmatch 'wake_cpu: PASS.*mode=') { throw "selftest wake_cpu missing mode=" }
+            if ($txt -notmatch 'wake_cpu: PASS.*mode=(wavein|wasapi)') { throw "selftest wake_cpu must use real capture mode=wavein|wasapi" }
             if ($txt -notmatch 'log_file: PASS') { throw "selftest missing log_file PASS" }
             if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }
             if ($txt -notmatch 'render_nondefault_comm: PASS') { throw "selftest missing render_nondefault_comm PASS" }

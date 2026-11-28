@@ -1956,16 +1956,18 @@ public static class SelfTestRunner
         {
             s.Wake.SetEchoGuard(false);
             s.Wake.Stop();
-            // Prefer real WaveIn when a capture device exists (VB-CABLE Output on CI)
-            var mode = WaveIn.DeviceCount > 0
+            // Prefer real capture (Wasapi/WaveIn) when a device exists (VB-CABLE on CI)
+            var hasCap = WakeWordService.HasAnyCaptureDevice();
+            var mode = hasCap
                 ? WakeWordService.CaptureMode.ForceWaveIn
                 : WakeWordService.CaptureMode.PushOnly;
             s.Wake.Start(mode);
             var used = s.Wake.LastCaptureMode;
-            L($"wake_cpu: mode={used} WaveIn.DeviceCount={WaveIn.DeviceCount}");
-            if (WaveIn.DeviceCount > 0 && used != "wavein")
+            L($"wake_cpu: mode={used} WaveIn.DeviceCount={WaveIn.DeviceCount} hasCapture={hasCap}");
+            var realCap = used is "wavein" or "wasapi";
+            if (hasCap && !realCap)
             {
-                L($"FAIL wake_cpu: capture device present but mode={used} (need wavein)");
+                L($"FAIL wake_cpu: capture device present but mode={used} (need wavein|wasapi)");
                 return 1;
             }
 
@@ -1973,14 +1975,14 @@ public static class SelfTestRunner
             proc.Refresh();
             var cpu0 = proc.TotalProcessorTime;
             var wall0 = Stopwatch.StartNew();
-            // Idle listen ~5s. WaveIn: real capture only. PushOnly: light silence feed.
+            // Idle listen ~5s. Real capture: no PushPcm. PushOnly: light silence feed.
             var silence = new byte[WakeWordService.SampleRate * 2 / 10]; // 100ms
             var end = DateTime.UtcNow.AddSeconds(5);
             while (DateTime.UtcNow < end)
             {
-                if (used == "pushonly")
+                if (!realCap)
                     s.Wake.PushPcm(silence);
-                await Task.Delay(used == "wavein" ? 200 : 100);
+                await Task.Delay(realCap ? 200 : 100);
             }
             wall0.Stop();
             proc.Refresh();

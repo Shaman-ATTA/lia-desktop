@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using Vosk;
 
@@ -21,6 +22,8 @@ public sealed class WakeWordService : IDisposable
     readonly object _gate = new();
     Model? _model;
     WaveInEvent? _waveIn;
+    WasapiCapture? _wasapi;
+    WaveFormat? _wasapiFormat;
     IntPtr _grmNative; // grammar recognizer
     // ring buffer of recent PCM (16-bit LE)
     readonly List<byte> _ring = new(SampleRate * 2 * RingSeconds);
@@ -121,72 +124,167 @@ public sealed class WakeWordService : IDisposable
             }
             CreateGrammar_NoLock();
 
-            var wantWaveIn = mode switch
+            var wantCapture = mode switch
             {
-                CaptureMode.ForceWaveIn => WaveIn.DeviceCount > 0,
+                CaptureMode.ForceWaveIn => HasAnyCaptureDevice(),
                 CaptureMode.PushOnly => false,
-                _ => !SelfTestRunner.IsSelfTest && WaveIn.DeviceCount > 0,
+                _ => !SelfTestRunner.IsSelfTest && HasAnyCaptureDevice(),
             };
 
-            if (!wantWaveIn)
+            if (!wantCapture)
             {
                 _running = true;
                 LastCaptureMode = "pushonly";
-                _log.Info(WaveIn.DeviceCount <= 0
-                    ? "wake: no WaveIn — PushPcm-only mode"
-                    : "wake: PushPcm-only mode");
+                _log.Info("wake: PushPcm-only mode");
                 return;
             }
 
-            var device = PickWaveInDevice();
-            _waveIn = new WaveInEvent
+            // Prefer WASAPI (VB-CABLE Output often absent from legacy WaveIn list on CI)
+            if (TryStartWasapi_NoLock())
+                return;
+            if (TryStartWaveIn_NoLock())
+                return;
+
+            _running = true;
+            LastCaptureMode = "pushonly";
+            _log.Info("wake: all capture backends failed — PushPcm-only");
+        }
+    }
+
+    bool TryStartWasapi_NoLock()
+    {
+        try
+        {
+            using var en = new MMDeviceEnumerator();
+            MMDevice? pick = null;
+            foreach (var d in en.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
             {
-                DeviceNumber = device.Index,
-                WaveFormat = new WaveFormat(SampleRate, 16, 1),
-                BufferMilliseconds = 100,
-            };
-            _waveIn.DataAvailable += OnData;
+                var n = d.FriendlyName ?? "";
+                if (n.Contains("CABLE", StringComparison.OrdinalIgnoreCase)
+                    || n.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase))
+                {
+                    pick = d;
+                    break;
+                }
+            }
+            pick ??= en.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+
+            _wasapi = new WasapiCapture(pick) { ShareMode = AudioClientShareMode.Shared };
+            _wasapiFormat = _wasapi.WaveFormat;
+            _wasapi.DataAvailable += OnWasapiData;
+            _wasapi.StartRecording();
+            _running = true;
+            LastCaptureMode = "wasapi";
+            _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiCapture device={pick.FriendlyName} fmt={_wasapiFormat}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Info("wake: WasapiCapture fail — " + ex.Message);
+            CleanupCapture_NoLock();
+            return false;
+        }
+    }
+
+    bool TryStartWaveIn_NoLock()
+    {
+        if (WaveIn.DeviceCount <= 0) return false;
+        var device = PickWaveInDevice();
+        var order = new List<int> { device.Index };
+        for (var i = 0; i < WaveIn.DeviceCount; i++)
+            if (i != device.Index) order.Add(i);
+
+        foreach (var i in order)
+        {
             try
             {
+                var name = SafeWaveInName(i);
+                _waveIn = new WaveInEvent
+                {
+                    DeviceNumber = i,
+                    WaveFormat = new WaveFormat(SampleRate, 16, 1),
+                    BufferMilliseconds = 100,
+                };
+                _waveIn.DataAvailable += OnData;
                 _waveIn.StartRecording();
                 _running = true;
                 LastCaptureMode = "wavein";
-                _log.Info($"wake: listening (ОЖИДАНИЕ) WaveIn device={device.Index}/{device.Name} devices={WaveIn.DeviceCount}");
+                _log.Info($"wake: listening (ОЖИДАНИЕ) WaveIn device={i}/{name}");
+                return true;
             }
             catch (Exception ex)
             {
-                _log.Info($"wake: WaveIn start fail device={device.Index}/{device.Name} — {ex.Message}");
+                _log.Info($"wake: WaveIn device {i} fail — {ex.Message}");
                 CleanupCapture_NoLock();
-                // Retry other devices before falling back
-                for (var i = 0; i < WaveIn.DeviceCount; i++)
-                {
-                    if (i == device.Index) continue;
-                    try
-                    {
-                        var name = SafeWaveInName(i);
-                        _waveIn = new WaveInEvent
-                        {
-                            DeviceNumber = i,
-                            WaveFormat = new WaveFormat(SampleRate, 16, 1),
-                            BufferMilliseconds = 100,
-                        };
-                        _waveIn.DataAvailable += OnData;
-                        _waveIn.StartRecording();
-                        _running = true;
-                        LastCaptureMode = "wavein";
-                        _log.Info($"wake: listening WaveIn fallback device={i}/{name}");
-                        return;
-                    }
-                    catch (Exception ex2)
-                    {
-                        _log.Info($"wake: WaveIn device {i} fail — {ex2.Message}");
-                        CleanupCapture_NoLock();
-                    }
-                }
-                _running = true;
-                LastCaptureMode = "pushonly";
             }
         }
+        return false;
+    }
+
+    void OnWasapiData(object? sender, WaveInEventArgs e)
+    {
+        if (e.BytesRecorded <= 0 || _wasapiFormat == null) return;
+        try
+        {
+            // Fast path: IEEE float mix → 16 kHz mono PCM16 (no MF per buffer)
+            if (_wasapiFormat.Encoding == WaveFormatEncoding.IeeeFloat)
+            {
+                var pcm = FloatMixToPcm16kMono(e.Buffer, e.BytesRecorded, _wasapiFormat);
+                if (pcm.Length > 0) PushPcm(pcm);
+                return;
+            }
+            using var src = new RawSourceWaveStream(
+                new MemoryStream(e.Buffer, 0, e.BytesRecorded), _wasapiFormat);
+            using var resampler = new MediaFoundationResampler(
+                src, new WaveFormat(SampleRate, 16, 1))
+            { ResamplerQuality = 30 };
+            var buf = new byte[SampleRate];
+            int n;
+            while ((n = resampler.Read(buf, 0, buf.Length)) > 0)
+                PushPcm(buf, n);
+        }
+        catch (Exception ex)
+        {
+            _log.Info("wake wasapi resample: " + ex.Message);
+        }
+    }
+
+    static byte[] FloatMixToPcm16kMono(byte[] buffer, int bytes, WaveFormat fmt)
+    {
+        var ch = Math.Max(1, fmt.Channels);
+        var srcRate = Math.Max(1, fmt.SampleRate);
+        var floatCount = bytes / 4;
+        var frames = floatCount / ch;
+        if (frames <= 0) return Array.Empty<byte>();
+        var outFrames = Math.Max(1, (int)(frames * (SampleRate / (double)srcRate)));
+        var pcm = new byte[outFrames * 2];
+        for (var o = 0; o < outFrames; o++)
+        {
+            var srcIdx = Math.Min(frames - 1, (int)(o * (srcRate / (double)SampleRate)));
+            double sum = 0;
+            var baseF = srcIdx * ch;
+            for (var c = 0; c < ch; c++)
+            {
+                var bi = (baseF + c) * 4;
+                if (bi + 4 > bytes) break;
+                sum += BitConverter.ToSingle(buffer, bi);
+            }
+            var s = (short)Math.Clamp((int)(sum / ch * 32767.0), short.MinValue, short.MaxValue);
+            pcm[o * 2] = (byte)(s & 0xff);
+            pcm[o * 2 + 1] = (byte)((s >> 8) & 0xff);
+        }
+        return pcm;
+    }
+
+    public static bool HasAnyCaptureDevice()
+    {
+        if (WaveIn.DeviceCount > 0) return true;
+        try
+        {
+            using var en = new MMDeviceEnumerator();
+            return en.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active).Count > 0;
+        }
+        catch { return false; }
     }
 
     static (int Index, string Name) PickWaveInDevice()
@@ -267,8 +365,8 @@ public sealed class WakeWordService : IDisposable
         full = ""; command = ""; conf = 0;
         if (_model == null || pcm16le.Length < 3200) return false;
 
-        // Free-form first (trustworthy for mid-sentence «могу ли я»). Grammar alone
-        // only for short wake-only clips — restricted vocab otherwise hallucinates «лия».
+        // Free-form first when it has a wake or is a substantial non-wake sentence.
+        // Sparse freeform crumbs («лет») fall through to grammar (short «Лиа» clips).
         var (fText, fConf) = FreeFormDecode(pcm16le);
         fText = WakeText.NormalizeAsrWake(fText);
         var (gText, gConf) = GrammarDecodeUtterance(pcm16le);
@@ -281,9 +379,9 @@ public sealed class WakeWordService : IDisposable
             text = fText;
             c = fConf;
         }
-        else if (!string.IsNullOrWhiteSpace(fText))
+        else if (WakeText.IsSubstantialNonWake(fText))
         {
-            // Freeform heard real speech without a leading wake — do NOT promote grammar «лия»
+            // e.g. «могу ли я…» — never promote grammar hallucination «лия»
             full = fText;
             conf = fConf;
             RejectCount++;
@@ -296,8 +394,8 @@ public sealed class WakeWordService : IDisposable
         }
         else
         {
-            full = gText;
-            conf = gConf;
+            full = string.IsNullOrWhiteSpace(fText) ? gText : fText;
+            conf = string.IsNullOrWhiteSpace(fText) ? gConf : fConf;
             RejectCount++;
             return false;
         }
@@ -605,6 +703,14 @@ public sealed class WakeWordService : IDisposable
 
     void CleanupCapture_NoLock()
     {
+        if (_wasapi != null)
+        {
+            try { _wasapi.DataAvailable -= OnWasapiData; } catch { /* */ }
+            try { _wasapi.StopRecording(); } catch { /* */ }
+            try { _wasapi.Dispose(); } catch { /* */ }
+            _wasapi = null;
+            _wasapiFormat = null;
+        }
         if (_waveIn != null)
         {
             try { _waveIn.DataAvailable -= OnData; } catch { /* */ }

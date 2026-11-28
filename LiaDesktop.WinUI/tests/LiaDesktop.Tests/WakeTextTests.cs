@@ -61,4 +61,16 @@ public class WakeTextTests
     [InlineData("какая сейчас погода", true)]
     public void IsLikelyInlineCommand_cases(string? cmd, bool expect) =>
         Assert.Equal(expect, WakeText.IsLikelyInlineCommand(cmd));
+
+    [Theory]
+    [InlineData("лет", false)]
+    [InlineData("ли", false)]
+    [InlineData("ли привет", false)]
+    [InlineData("эй ли а", false)]
+    [InlineData("могу ли я это сделать", true)]
+    [InlineData("правильно ли я понял", true)]
+    [InlineData("не знаю, смогу ли я прийти", true)]
+    [InlineData("должен ли я звонить", true)]
+    public void IsSubstantialNonWake_cases(string text, bool expect) =>
+        Assert.Equal(expect, WakeText.IsSubstantialNonWake(text));
 }
