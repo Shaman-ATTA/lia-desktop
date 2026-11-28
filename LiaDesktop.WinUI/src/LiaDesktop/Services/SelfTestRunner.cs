@@ -2683,7 +2683,7 @@ public static class SelfTestRunner
             }
             L($"ltm_save: PASS facts={facts.Count}");
 
-            var path = s.LongTerm.Path;
+            var path = s.LongTerm.FilePath;
             if (!File.Exists(path))
             {
                 L("FAIL ltm_save: memory.json missing");

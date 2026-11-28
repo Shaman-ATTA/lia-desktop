@@ -33,13 +33,13 @@ public sealed class LongTermMemory
         _log = log;
         _path = pathOverride
                 ?? PathOverride
-                ?? Path.Combine(
+                ?? System.IO.Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "LiaDesktop", "memory.json");
         Load();
     }
 
-    public string Path => _path;
+    public string FilePath => _path;
 
     public IReadOnlyList<MemoryFact> Snapshot()
     {
@@ -152,7 +152,7 @@ public sealed class LongTermMemory
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
             var json = JsonSerializer.Serialize(new Store { Facts = _facts },
                 new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_path, json);
