@@ -146,15 +146,57 @@ public static class UiaTools
         var win = FindWindowElement(desk, windowTitleContains);
         if (win == null) return null;
         var edit = win.FindFirstDescendant(cf => cf.ByControlType(ControlType.Edit))
-                   ?? win.FindFirstDescendant(cf => cf.ByControlType(ControlType.Document));
+                   ?? win.FindFirstDescendant(cf => cf.ByControlType(ControlType.Document))
+                   ?? win.FindFirstDescendant(cf => cf.ByControlType(ControlType.Text));
         if (edit == null) return null;
         try
         {
             if (edit.Patterns.Value.IsSupported)
-                return edit.Patterns.Value.Pattern.Value;
-            return edit.Name;
+            {
+                var v = edit.Patterns.Value.Pattern.Value;
+                if (!string.IsNullOrEmpty(v)) return v;
+            }
+            if (edit.Patterns.Text.IsSupported)
+            {
+                var t = edit.Patterns.Text.Pattern.DocumentRange?.GetText(-1);
+                if (!string.IsNullOrEmpty(t)) return t;
+            }
+            return string.IsNullOrEmpty(edit.Name) ? null : edit.Name;
         }
-        catch { return edit.Name; }
+        catch { return string.IsNullOrEmpty(edit.Name) ? null : edit.Name; }
+    }
+
+    /// <summary>Click Document/Edit inside a window (Notepad classic or Win11).</summary>
+    public static object? ClickDocumentOrEdit(string windowTitleContains)
+    {
+        using var auto = new UIA3Automation();
+        var desk = auto.GetDesktop();
+        var win = FindWindowElement(desk, windowTitleContains);
+        if (win == null) return null;
+        var edit = win.FindFirstDescendant(cf => cf.ByControlType(ControlType.Document))
+                   ?? win.FindFirstDescendant(cf => cf.ByControlType(ControlType.Edit))
+                   ?? win.FindFirstDescendant(cf => cf.ByControlType(ControlType.Text));
+        if (edit == null) return null;
+        try
+        {
+            edit.Focus();
+            edit.Click();
+            return new { ok = true, name = edit.Name, controlType = edit.ControlType.ToString() };
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                var b = edit.BoundingRectangle;
+                var cx = (int)(b.X + b.Width / 2);
+                var cy = (int)(b.Y + b.Height / 2);
+                SetCursorPos(cx, cy);
+                mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+                mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+                return new { ok = true, fallback = "mouse", x = cx, y = cy, warn = ex.Message };
+            }
+            catch { return null; }
+        }
     }
 
     static AutomationElement? FindWindowElement(AutomationElement desk, string titleOrPart)
