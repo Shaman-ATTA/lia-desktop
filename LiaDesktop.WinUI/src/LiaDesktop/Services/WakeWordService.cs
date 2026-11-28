@@ -17,13 +17,16 @@ public sealed class WakeWordService : IDisposable
     public const int SampleRate = 16000;
     const int RingSeconds = 4;
     const int PostWakeMs = 2200;
-    const int CaptureBufferMs = 100;
+    /// <summary>Sleep-mode buffer length. Lower = more CPU (NAudio). 200ms keeps listen idle cheap.</summary>
+    const int CaptureBufferMs = 200;
     /// <summary>~300 ms pre-roll so VAD open doesn't clip the start of «Лиа».</summary>
     const int PreRollMs = 300;
     const int PreRollBytes = SampleRate * 2 * PreRollMs / 1000;
     const int VadHangoverMs = 450;
-    /// <summary>Absolute PCM16 RMS floor — below -40 dBFS; -20 dBFS speech stays above.</summary>
-    const double VadMinThresholdRms = 120.0;
+    /// <summary>Below this = digital/cable silence — never open VAD / never FloatMix.</summary>
+    const double VadDigitalSilenceRms = 80.0;
+    /// <summary>Min open threshold above silence; -20 dBFS speech RMS is typically ≫ this.</summary>
+    const double VadMinThresholdRms = 100.0;
 
     readonly AppLog _log;
     readonly object _gate = new();
@@ -228,18 +231,20 @@ public sealed class WakeWordService : IDisposable
                 try
                 {
                     CleanupCapture_NoLock();
-                    // Event-driven + 100ms buffers — no sleep-poll spin
-                    _wasapi = new WasapiCapture(pick, useEventSync: true, audioBufferMillisecondsLength: CaptureBufferMs)
-                    {
-                        ShareMode = AudioClientShareMode.Shared,
-                    };
+                    // Sleep-mode (not EventCallback): shared+event fires every device quantum (~10ms)
+                    // and pegs a core on loopback even when we drop the audio. Sleep waits ~buffer/2.
+                    _wasapi = CreateWasapiNoSyncContext(() =>
+                        new WasapiCapture(pick, useEventSync: false, audioBufferMillisecondsLength: CaptureBufferMs)
+                        {
+                            ShareMode = AudioClientShareMode.Shared,
+                        });
                     _wasapiFormat = _wasapi.WaveFormat;
                     _wasapi.DataAvailable += OnWasapiData;
                     _wasapi.StartRecording();
                     _running = true;
                     LastCaptureMode = "wasapi";
                     LastCaptureError = "";
-                    _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiCapture device={pick.FriendlyName} buf={CaptureBufferMs}ms eventSync fmt={_wasapiFormat}");
+                    _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiCapture device={pick.FriendlyName} buf={CaptureBufferMs}ms sleepSync fmt={_wasapiFormat}");
                     return true;
                 }
                 catch (Exception ex)
@@ -282,15 +287,15 @@ public sealed class WakeWordService : IDisposable
             }
 
             CleanupCapture_NoLock();
-            var loop = new WakeLoopbackCapture(render, CaptureBufferMs);
-            _wasapi = loop;
-            _wasapiFormat = loop.WaveFormat;
+            // Sleep sync + no SynchronizationContext (avoid UI Post on every packet)
+            _wasapi = CreateWasapiNoSyncContext(() => new WakeLoopbackCapture(render, CaptureBufferMs));
+            _wasapiFormat = _wasapi.WaveFormat;
             _wasapi.DataAvailable += OnWasapiData;
             _wasapi.StartRecording();
             _running = true;
             LastCaptureMode = "loopback";
             LastCaptureError = "";
-            _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiLoopback device={render.FriendlyName} buf={CaptureBufferMs}ms eventSync fmt={_wasapiFormat}");
+            _log.Info($"wake: listening (ОЖИДАНИЕ) WasapiLoopback device={render.FriendlyName} buf={CaptureBufferMs}ms sleepSync fmt={_wasapiFormat}");
             return true;
         }
         catch (Exception ex)
@@ -417,13 +422,44 @@ public sealed class WakeWordService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Construct WasapiCapture on a thread with no SynchronizationContext so NAudio does not
+    /// capture a WinUI dispatcher (RecordingStopped Post is harmless; keep ctor clean).
+    /// </summary>
+    static WasapiCapture CreateWasapiNoSyncContext(Func<WasapiCapture> factory)
+    {
+        WasapiCapture? cap = null;
+        Exception? err = null;
+        var t = new Thread(() =>
+        {
+            try
+            {
+                SynchronizationContext.SetSynchronizationContext(null);
+                cap = factory();
+            }
+            catch (Exception ex) { err = ex; }
+        })
+        { IsBackground = true, Name = "wake-wasapi-ctor" };
+        t.Start();
+        t.Join();
+        if (err != null) throw err;
+        return cap ?? throw new InvalidOperationException("wasapi ctor produced null");
+    }
+
     /// <summary>Lock-free peek: skip FloatMix on digital silence; noise EMA only.</summary>
     bool PeekWantsConvert(double rmsPcm16)
     {
-        var thresh = Math.Max(VadMinThresholdRms, _noiseRms * 3.5);
+        // Hard digital/cable silence — never convert (this was the wake_cpu 28% hot path when
+        // tiny loopback noise kept VAD open and FloatMix+Vosk ran every packet).
+        if (rmsPcm16 < VadDigitalSilenceRms)
+        {
+            _noiseRms = _noiseRms * 0.99 + rmsPcm16 * 0.01;
+            return DateTime.UtcNow < _vadHangoverUntil; // finish utterance only
+        }
+        var thresh = Math.Max(VadMinThresholdRms, _noiseRms * 2.5);
         if (rmsPcm16 >= thresh || DateTime.UtcNow < _vadHangoverUntil)
             return true;
-        _noiseRms = _noiseRms * 0.97 + rmsPcm16 * 0.03;
+        _noiseRms = _noiseRms * 0.95 + rmsPcm16 * 0.05;
         return false;
     }
 
@@ -436,16 +472,26 @@ public sealed class WakeWordService : IDisposable
     /// <summary>Update noise floor / hangover. Returns true if VAD wants audio fed to Vosk.</summary>
     bool ObserveEnergy(double rmsPcm16)
     {
-        var thresh = Math.Max(VadMinThresholdRms, _noiseRms * 3.5);
         var now = DateTime.UtcNow;
+        if (rmsPcm16 < VadDigitalSilenceRms)
+        {
+            _noiseRms = _noiseRms * 0.99 + rmsPcm16 * 0.01;
+            if (now < _vadHangoverUntil)
+            {
+                _vadOpen = true;
+                return true;
+            }
+            _vadOpen = false;
+            return false;
+        }
+        var thresh = Math.Max(VadMinThresholdRms, _noiseRms * 2.5);
         if (rmsPcm16 >= thresh)
         {
             _vadHangoverUntil = now.AddMilliseconds(VadHangoverMs);
             _vadOpen = true;
             return true;
         }
-        // Slow noise EMA only while quiet
-        _noiseRms = _noiseRms * 0.97 + rmsPcm16 * 0.03;
+        _noiseRms = _noiseRms * 0.95 + rmsPcm16 * 0.05;
         if (now < _vadHangoverUntil)
         {
             _vadOpen = true;
@@ -554,11 +600,11 @@ public sealed class WakeWordService : IDisposable
         return need;
     }
 
-    /// <summary>Event-driven loopback with explicit ~100 ms buffers (no busy-wait).</summary>
+    /// <summary>Loopback with sleep-sync buffers (EventCallback quantum is too hot on CI).</summary>
     sealed class WakeLoopbackCapture : WasapiCapture
     {
         public WakeLoopbackCapture(MMDevice device, int bufferMs)
-            : base(device, useEventSync: true, audioBufferMillisecondsLength: bufferMs)
+            : base(device, useEventSync: false, audioBufferMillisecondsLength: bufferMs)
         {
             ShareMode = AudioClientShareMode.Shared;
         }
@@ -767,13 +813,23 @@ public sealed class WakeWordService : IDisposable
         return true;
     }
 
-    /// <summary>Flush pending post-wake capture (selftest end-of-stream).</summary>
+    /// <summary>Flush pending post-wake capture + force grammar final (selftest end-of-stream).</summary>
     public void Flush()
     {
         byte[]? confirmPcm;
         lock (_gate)
         {
             confirmPcm = _capturingPost ? TakePostCapturePcm_NoLock() : null;
+            if (!_capturingPost && _grmNative != IntPtr.Zero)
+            {
+                try
+                {
+                    var json = PtrToUtf8(vosk_recognizer_final_result(_grmNative));
+                    ResetGrammar_NoLock();
+                    TryHandleGrammarFinal_NoLock(json);
+                }
+                catch { /* */ }
+            }
         }
         if (confirmPcm != null) ConfirmWakeFromPcm(confirmPcm);
     }

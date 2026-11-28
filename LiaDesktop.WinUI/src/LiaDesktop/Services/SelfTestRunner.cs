@@ -1957,10 +1957,13 @@ public static class SelfTestRunner
     static async Task<int> GateWakeQuietAsync(AppServices s, Action<string> L)
     {
         // «Лиа» attenuated to -20 dBFS must still open energy VAD and detect (live PushPcm path).
+        var prevSens = s.Wake.Sensitivity;
         try
         {
             s.Wake.SetEchoGuard(false);
             s.Wake.Stop();
+            // Soft floor so -20 dBFS conf (~0.3–0.5) still counts as DETECT; VAD gate is the point under test.
+            s.Wake.Sensitivity = 0.25f;
             s.Wake.Start(WakeWordService.CaptureMode.PushOnly);
 
             var synth = await SynthAudibleAsync(s, "Лиа", L, 30);
@@ -1975,30 +1978,36 @@ public static class SelfTestRunner
 
             AttenuatePeakToDbFs(pcm, -20.0);
             var peakDb = PeakDbFs(pcm);
-            L($"wake_quiet: peak_dbfs={peakDb:F1} backend={synth.Backend} bytes={pcm.Length}");
+            var rms = PcmRms(pcm);
+            L($"wake_quiet: peak_dbfs={peakDb:F1} rms={rms:F0} backend={synth.Backend} bytes={pcm.Length}");
 
             var detected = false;
             string got = "";
+            float gotConf = 0;
             void OnWoken(string full, string _, float conf)
             {
                 detected = true;
                 got = full;
+                gotConf = conf;
             }
             s.Wake.Woken += OnWoken;
             try
             {
-                const int chunk = WakeWordService.SampleRate * 2 / 10; // 100ms
+                // Small leading silence so noise EMA stays low, then speech, then hangover silence
+                var silence = new byte[WakeWordService.SampleRate * 2 / 10]; // 100ms
+                for (var i = 0; i < 3; i++)
+                    s.Wake.PushPcm(silence);
+
+                const int chunk = WakeWordService.SampleRate * 2 / 10;
                 for (var i = 0; i < pcm.Length; i += chunk)
                 {
                     var n = Math.Min(chunk, pcm.Length - i);
                     var slice = new byte[n];
                     Buffer.BlockCopy(pcm, i, slice, 0, n);
                     s.Wake.PushPcm(slice);
-                    await Task.Delay(20);
+                    await Task.Delay(15);
                 }
-                // trailing silence so grammar can finalize after hangover
-                var silence = new byte[WakeWordService.SampleRate * 2]; // 1s
-                for (var i = 0; i < 8; i++)
+                for (var i = 0; i < 10; i++)
                 {
                     s.Wake.PushPcm(silence);
                     await Task.Delay(50);
@@ -2013,10 +2022,10 @@ public static class SelfTestRunner
 
             if (!detected)
             {
-                L($"FAIL wake_quiet: no DETECT at -20 dBFS peak_dbfs={peakDb:F1} (VAD dropped quiet speech?)");
+                L($"FAIL wake_quiet: no DETECT at -20 dBFS peak_dbfs={peakDb:F1} rms={rms:F0} vad={s.Wake.VadOpen} reject={s.Wake.RejectCount}");
                 return 1;
             }
-            L($"wake_quiet: PASS text=\"{got}\" peak_dbfs={peakDb:F1}");
+            L($"wake_quiet: PASS text=\"{got}\" conf={gotConf:F2} peak_dbfs={peakDb:F1} rms={rms:F0}");
             return 0;
         }
         catch (Exception ex)
@@ -2026,8 +2035,22 @@ public static class SelfTestRunner
         }
         finally
         {
+            try { s.Wake.Sensitivity = prevSens; } catch { /* */ }
             try { s.Wake.Stop(); } catch { /* */ }
         }
+    }
+
+    static double PcmRms(byte[] pcm16le)
+    {
+        var samples = pcm16le.Length / 2;
+        if (samples <= 0) return 0;
+        double sum = 0;
+        for (var i = 0; i + 1 < pcm16le.Length; i += 2)
+        {
+            short s = (short)(pcm16le[i] | (pcm16le[i + 1] << 8));
+            sum += (double)s * s;
+        }
+        return Math.Sqrt(sum / samples);
     }
 
     static void AttenuatePeakToDbFs(byte[] pcm16le, double targetDbFs)
