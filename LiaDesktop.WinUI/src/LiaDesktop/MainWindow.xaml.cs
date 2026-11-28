@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using LiaDesktop.Rendering;
 using LiaDesktop.Services;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
@@ -7,6 +8,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
+using Microsoft.Win32;
 using Windows.Media.Core;
 using Windows.Media.Playback;
 using Windows.UI;
@@ -30,12 +32,24 @@ public sealed partial class MainWindow : Window
     TrayIcon? _tray;
     bool _listening;
     bool _speaking;
+    bool _screenLocked;
+    bool _windowOccluded;
+    HoloPanel.RenderPace? _renderPaceOverride;
     float _hudT;
     float _waveAmp;
     double _cpu;
     TimeSpan _lastCpu;
     DateTime _lastCpuSample = DateTime.UtcNow;
     int _pingMs = 12;
+
+    /// <summary>Selftest: force Idle/Active/Paused. Null = auto from speak/listen/visibility.</summary>
+    public void SetRenderPaceOverride(HoloPanel.RenderPace? pace)
+    {
+        _renderPaceOverride = pace;
+        RefreshRenderPace();
+    }
+
+    public HoloPanel.RenderPace CurrentRenderPace => Holo.Pace;
 
     public MainWindow()
     {
@@ -65,6 +79,7 @@ public sealed partial class MainWindow : Window
             Subtitle.Text = t.Length > 140 ? t[..140] : t;
             VoiceLine.Text = "ГОЛОС  ГОВОРЮ";
             FadeInSubtitle();
+            RefreshRenderPace();
         });
         _player.Volume = 1.0;
         _player.AudioCategory = MediaPlayerAudioCategory.Speech;
@@ -97,6 +112,7 @@ public sealed partial class MainWindow : Window
             VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
             MicGlyph.Text = "■";
             Subtitle.Text = "Перебивание · слушаю вас";
+            RefreshRenderPace();
         });
         _s.Agent.BargeInEnded += () => DispatcherQueue.TryEnqueue(OnSpeakEnded);
 
@@ -120,11 +136,29 @@ public sealed partial class MainWindow : Window
         _hudTimer.Start();
 
         Activated += OnActivated;
+        try
+        {
+            var hwnd = WindowNative.GetWindowHandle(this);
+            var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+            var appWindow = AppWindow.GetFromWindowId(windowId);
+            appWindow.Changed += (_, e) =>
+            {
+                if (e.DidVisibilityChange || e.DidPresenterChange)
+                    DispatcherQueue.TryEnqueue(RefreshRenderPace);
+            };
+        }
+        catch { /* */ }
+        try
+        {
+            SystemEvents.SessionSwitch += OnSessionSwitch;
+        }
+        catch { /* */ }
         foreach (var (line, detail) in _s.Log.Lines) AddLog(line, detail);
 
         var smoke = ApplySmokeOverrides();
         var virtualSmoke = TryScheduleVirtualSmokeDump();
         DispatcherQueue.TryEnqueue(() => InitTrayAndAutostart());
+        DispatcherQueue.TryEnqueue(RefreshRenderPace);
         if (SelfTestRunner.IsSelfTest)
         {
             BootOverlay.Visibility = Visibility.Collapsed;
@@ -141,6 +175,66 @@ public sealed partial class MainWindow : Window
             DispatcherQueue.TryEnqueue(async () => await RunBootSequenceAsync());
     }
 
+    void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
+    {
+        if (e.Reason == SessionSwitchReason.SessionLock) _screenLocked = true;
+        else if (e.Reason == SessionSwitchReason.SessionUnlock) _screenLocked = false;
+        else return;
+        DispatcherQueue.TryEnqueue(RefreshRenderPace);
+    }
+
+    /// <summary>
+    /// Idle ≈30fps (ОЖИДАНИЕ); Active ≈60fps while speaking/listening; Paused when
+    /// minimized/occluded/screen-locked. Lip sync morph targets still update via Agent.Mouth.
+    /// </summary>
+    public void RefreshRenderPace()
+    {
+        try
+        {
+            if (_renderPaceOverride.HasValue)
+            {
+                Holo.SetRenderPace(_renderPaceOverride.Value);
+                ApplyHudTimerForPace(_renderPaceOverride.Value);
+                return;
+            }
+
+            var hwnd = WindowNative.GetWindowHandle(this);
+            var iconic = IsIconic(hwnd);
+            var visible = Visible;
+            try
+            {
+                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+                var appWindow = AppWindow.GetFromWindowId(windowId);
+                visible = appWindow.IsVisible && !iconic;
+            }
+            catch { visible = !iconic; }
+
+            _windowOccluded = iconic || !visible;
+            HoloPanel.RenderPace pace;
+            if (_screenLocked || _windowOccluded)
+                pace = HoloPanel.RenderPace.Paused;
+            else if (_speaking || _listening || Holo.Renderer.WakePulseActive)
+                pace = HoloPanel.RenderPace.Active;
+            else
+                pace = HoloPanel.RenderPace.Idle;
+
+            Holo.SetRenderPace(pace);
+            ApplyHudTimerForPace(pace);
+        }
+        catch { /* */ }
+    }
+
+    void ApplyHudTimerForPace(HoloPanel.RenderPace pace)
+    {
+        if (pace == HoloPanel.RenderPace.Paused)
+            _hudTimer.Stop();
+        else if (!_hudTimer.IsEnabled)
+            _hudTimer.Start();
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool IsIconic(IntPtr hWnd);
+
     void OnMicGeminiTimedOut()
     {
         DispatcherQueue.TryEnqueue(() =>
@@ -152,6 +246,7 @@ public sealed partial class MainWindow : Window
             VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
             Subtitle.Text = "Скажите «Лиа» или нажмите микрофон";
             _s.Log.Info("wake follow-up: timeout → ОЖИДАНИЕ");
+            RefreshRenderPace();
         });
     }
 
@@ -180,6 +275,7 @@ public sealed partial class MainWindow : Window
             Subtitle.Text = string.IsNullOrWhiteSpace(command)
                 ? "Лиа · слушаю…"
                 : $"Лиа · {command}";
+            RefreshRenderPace();
 
             // Inline only for real commands — ignore ASR crumbs after wake («лет», «ли»)
             if (WakeText.IsLikelyInlineCommand(command))
@@ -862,6 +958,7 @@ public sealed partial class MainWindow : Window
 
     async void OnClosed(object sender, WindowEventArgs args)
     {
+        try { SystemEvents.SessionSwitch -= OnSessionSwitch; } catch { /* */ }
         _clock.Stop();
         _hudTimer.Stop();
         _hotkey?.Dispose();
@@ -928,6 +1025,7 @@ public sealed partial class MainWindow : Window
         Holo.Renderer.Jaw = 0;
         Holo.Renderer.Funnel = 0;
         Holo.Renderer.Wide = 0;
+        RefreshRenderPace();
     }
 
     async void Mic_Click(object sender, RoutedEventArgs e)
@@ -941,6 +1039,7 @@ public sealed partial class MainWindow : Window
             MicGlyph.Text = "◉";
             VoiceLine.Text = "ГОЛОС  ОЖИДАНИЕ";
             StatusCaption.Text = "ОЖИДАНИЕ";
+            RefreshRenderPace();
             return;
         }
 
@@ -965,6 +1064,7 @@ public sealed partial class MainWindow : Window
         MicGlyph.Text = "■";
         VoiceLine.Text = "ГОЛОС  СЛУШАЮ";
         StatusCaption.Text = "СЛУШАЮ";
+        RefreshRenderPace();
     }
 
     void OnSpeechFinal(string text)

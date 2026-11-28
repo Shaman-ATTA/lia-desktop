@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using LiaDesktop.Services.Tools;
 using NAudio.Wave;
+using WinRT.Interop;
 
 namespace LiaDesktop.Services;
 
@@ -115,6 +116,11 @@ public static class SelfTestRunner
             failed += await RunWakeGatesAsync(services, baseUrl, L);
             L("wake: gates done");
             Checkpoint("after_wake");
+
+            Checkpoint("app_idle_cpu");
+            L("app_idle_cpu: starting…");
+            try { services.Wake.Stop(); } catch { /* */ }
+            failed += await GateAppIdleCpuAsync(L);
 
             // Persistent log file gate (+ sample_log.txt with wake DETECT lines)
             failed += RunLogFileGate(services, L);
@@ -2185,6 +2191,101 @@ public static class SelfTestRunner
         var cores = Math.Max(1, Environment.ProcessorCount);
         return cpuDt / wallMs / cores * 100.0;
     }
+
+    /// <summary>
+    /// Render throttle gate: Idle(~30fps) must drop ≥40% vs Active(~60fps) on the same runner;
+    /// minimized+Paused absolute CPU &lt; 3%.
+    /// </summary>
+    static async Task<int> GateAppIdleCpuAsync(Action<string> L)
+    {
+        try
+        {
+            if (App.MainWindowInstance is not MainWindow mw)
+            {
+                L("FAIL app_idle_cpu: MainWindow missing");
+                return 1;
+            }
+
+            var gpu = QueryGpuAdapterName();
+            var proc = Process.GetCurrentProcess();
+            var cores = Math.Max(1, Environment.ProcessorCount);
+            L($"app_idle_cpu: gpu_adapter={gpu} cores={cores}");
+
+            // Ensure visible + restore before pacing samples
+            await UiAsync(mw, () =>
+            {
+                ShowWindow(WindowNative.GetWindowHandle(mw), SwRestore);
+                mw.SetRenderPaceOverride(null);
+            });
+            await Task.Delay(400);
+
+            await UiAsync(mw, () => mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Active));
+            await Task.Delay(500);
+            var fps60 = await SampleProcessCpuPctAsync(proc, 8, null);
+            L($"app_idle_cpu: fps60_avg={fps60:F2}% (Active PresentInterval=1 / 16ms)");
+
+            await UiAsync(mw, () => mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Idle));
+            await Task.Delay(500);
+            var fps30 = await SampleProcessCpuPctAsync(proc, 8, null);
+            var drop = fps60 > 0.01 ? (fps60 - fps30) / fps60 * 100.0 : 0;
+            L($"app_idle_cpu: fps30_avg={fps30:F2}% drop_pct={drop:F1}% (Idle PresentInterval=2 / 33ms)");
+
+            await UiAsync(mw, () =>
+            {
+                mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Paused);
+                ShowWindow(WindowNative.GetWindowHandle(mw), SwMinimize);
+            });
+            await Task.Delay(600);
+            var minCpu = await SampleProcessCpuPctAsync(proc, 6, null);
+            L($"app_idle_cpu: minimized_avg={minCpu:F2}% (Paused, no Present)");
+
+            // Restore for remaining gates / clean exit
+            await UiAsync(mw, () =>
+            {
+                ShowWindow(WindowNative.GetWindowHandle(mw), SwRestore);
+                mw.SetRenderPaceOverride(null);
+                mw.RefreshRenderPace();
+            });
+
+            var fail = 0;
+            if (drop < 40.0)
+            {
+                L($"FAIL app_idle_cpu: drop_pct={drop:F1}% (need ≥40% Idle vs Active) fps60={fps60:F2}% fps30={fps30:F2}% gpu={gpu}");
+                fail = 1;
+            }
+            if (minCpu >= 3.0)
+            {
+                L($"FAIL app_idle_cpu: minimized_avg={minCpu:F2}% (need <3%) gpu={gpu}");
+                fail = 1;
+            }
+            if (fail == 0)
+                L($"app_idle_cpu: PASS fps60_avg={fps60:F2}% fps30_avg={fps30:F2}% drop_pct={drop:F1}% minimized_avg={minCpu:F2}% gpu={gpu}");
+            return fail;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL app_idle_cpu: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+    }
+
+    static Task UiAsync(MainWindow mw, Action action)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!mw.DispatcherQueue.TryEnqueue(() =>
+            {
+                try { action(); tcs.TrySetResult(); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            }))
+            tcs.TrySetException(new InvalidOperationException("DispatcherQueue enqueue failed"));
+        return tcs.Task;
+    }
+
+    const int SwMinimize = 6;
+    const int SwRestore = 9;
+
+    [DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     static byte[] MakeNoisePcm(int bytes)
     {

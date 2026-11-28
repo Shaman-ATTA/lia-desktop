@@ -12,6 +12,16 @@ namespace LiaDesktop.Rendering;
 /// <summary>SwapChainPanel hosting DX11 hologram renderer.</summary>
 public sealed class HoloPanel : SwapChainPanel
 {
+    public enum RenderPace
+    {
+        /// <summary>No Tick/Present — minimized / occluded / screen locked.</summary>
+        Paused = 0,
+        /// <summary>~30 fps — ОЖИДАНИЕ idle (visible, not speaking/listening).</summary>
+        Idle = 1,
+        /// <summary>~60 fps — speaking or follow-up listening (lip sync unchanged).</summary>
+        Active = 2,
+    }
+
     readonly HoloRenderer _renderer = new();
     IDXGISwapChain1? _swap;
     DispatcherTimer? _timer;
@@ -24,8 +34,43 @@ public sealed class HoloPanel : SwapChainPanel
     int _settlePassesLeft;
     double _pendingDipW, _pendingDipH;
     double? _virtualDipW, _virtualDipH;
+    RenderPace _pace = RenderPace.Idle;
 
     public HoloRenderer Renderer => _renderer;
+    public RenderPace Pace => _pace;
+
+    /// <summary>Apply render throttle. Lip morphs still driven by TTS events while Active.</summary>
+    public void SetRenderPace(RenderPace pace)
+    {
+        if (_pace == pace && _timer != null)
+        {
+            ApplyPaceToTimer();
+            return;
+        }
+        _pace = pace;
+        ApplyPaceToTimer();
+    }
+
+    void ApplyPaceToTimer()
+    {
+        if (_timer == null) return;
+        switch (_pace)
+        {
+            case RenderPace.Paused:
+                _timer.Stop();
+                break;
+            case RenderPace.Idle:
+                _renderer.PresentInterval = 2;
+                _timer.Interval = TimeSpan.FromMilliseconds(33);
+                if (!_timer.IsEnabled) _timer.Start();
+                break;
+            case RenderPace.Active:
+                _renderer.PresentInterval = 1;
+                _timer.Interval = TimeSpan.FromMilliseconds(16);
+                if (!_timer.IsEnabled) _timer.Start();
+                break;
+        }
+    }
 
     /// <summary>
     /// Offscreen/oversized layout DIPs for CI (exact 1920×1080 / 3840×2160 centre column),
@@ -96,7 +141,7 @@ public sealed class HoloPanel : SwapChainPanel
             var ticking = false;
             _timer.Tick += (_, _) =>
             {
-                if (ticking) return;
+                if (ticking || _pace == RenderPace.Paused) return;
                 ticking = true;
                 try
                 {
@@ -119,7 +164,7 @@ public sealed class HoloPanel : SwapChainPanel
                 }
                 finally { ticking = false; }
             };
-            _timer.Start();
+            ApplyPaceToTimer(); // Idle ~30fps by default
         }
         catch (Exception ex)
         {

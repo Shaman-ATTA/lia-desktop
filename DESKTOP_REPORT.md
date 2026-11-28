@@ -1,10 +1,16 @@
 # Lia Desktop — ship report
 
-## v0.7.4 — Offline wake word «Лиа» (Latest)
+## v0.7.5 — Idle render throttle (Latest)
+
+https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.7.5
+
+Published non-draft Latest. ОЖИДАНИЕ ~30 fps; speaking/listening 60 fps; minimized/occluded/locked pause Present. Selftest hard `app_idle_cpu` (Idle drop ≥40% vs 60fps; minimized &lt;3%; prints fps60/fps30/drop/minimized + gpu). Wake «Лиа» + wake_* absolute CPU labels from v0.7.4 kept.
+
+## v0.7.4 — Offline wake word «Лиа»
 
 https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.7.4
 
-Published non-draft Latest. Offline Vosk wake «Лиа»/«Лия» + inline commands; echo-guard vs own TTS; MicGemini 8s no-speech → ОЖИДАНИЕ; Settings toggle/sensitivity. Streaming TTS from v0.7.3 kept. Selftest: `wake_*` incl. `wake_e2e`/`wake_timeout`/`wake_cpu mode=` + all prior hard gates. Assets: setup/zip, `selftest.txt`, `sample_log.txt` (with `wake: DETECT`), vision_test, layout/hud/speaking.
+Offline Vosk wake «Лиа»/«Лия» + inline commands; echo-guard vs own TTS; MicGemini 8s no-speech → ОЖИДАНИЕ; Settings toggle/sensitivity. Streaming TTS from v0.7.3 kept. Selftest: `wake_*` incl. `wake_e2e`/`wake_timeout`/`wake_cpu` absolute baseline/active/delta + gpu + all prior hard gates. Assets: setup/zip, `selftest.txt`, `sample_log.txt` (with `wake: DETECT`), vision_test, layout/hud/speaking.
 
 ## v0.7.2 — Vision + memory + Multimedia TTS + logs
 

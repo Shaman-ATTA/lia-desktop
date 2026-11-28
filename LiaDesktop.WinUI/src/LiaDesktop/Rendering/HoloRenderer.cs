@@ -165,6 +165,9 @@ public sealed class HoloRenderer : IDisposable
 
     public ID3D11Device? Device => _device;
 
+    /// <summary>DXGI Present sync interval: 1 ≈ 60Hz, 2 ≈ 30Hz. Idle uses 2; speaking/listening uses 1.</summary>
+    public int PresentInterval { get; set; } = 2;
+
     public void InitDevice()
     {
         try
@@ -730,8 +733,8 @@ public sealed class HoloRenderer : IDisposable
             if (_sceneColor != null)
                 _ctx.CopyResource(bb, _sceneColor);
         }
-        // SyncInterval 2 ≈ 30Hz — halves GPU/WARP load vs every-vsync Present
-        _swap.Present(2, PresentFlags.None);
+        var sync = Math.Clamp(PresentInterval, 0, 4);
+        _swap.Present(sync, PresentFlags.None);
     }
 
     /// <summary>

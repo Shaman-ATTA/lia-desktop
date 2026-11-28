@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.5 — Idle render throttle (CPU)
+
+- **Render pace:** ОЖИДАНИЕ (visible, no speech) → ~30 fps (`PresentInterval=2`); speaking / follow-up listening → full ~60 fps; minimized / occluded / screen-locked → pause Tick/Present entirely. Lip sync morph targets unchanged while speaking.
+- **Selftest hard gate `app_idle_cpu`:** Idle CPU drop ≥40% vs Active 60fps on the same runner; minimized+Paused absolute CPU &lt;3%; prints `fps60_avg` / `fps30_avg` / `drop_pct` / `minimized_avg` / `gpu`.
+- Wake word + streaming TTS from v0.7.4 / v0.7.3 kept; `wake_cpu` still prints absolute `baseline_avg` / `active_avg` / `delta` + GPU adapter.
+
 ## v0.7.4 — Offline wake word «Лиа»
 
 - **Wake word:** always-listening low-CPU Vosk `vosk-model-small-ru-0.22` with grammar `["лиа","лия","[unk]"]` (UTF-8 PInvoke); no cloud for detection.
@@ -7,7 +13,7 @@
 - **Echo guard:** own TTS (barge PlaybackStarted/Stopped) must not self-wake.
 - **Settings:** toggle «Пробуждение по слову „Лиа“» (default ON) + sensitivity slider; model downloads on first run (~45MB) into `%LOCALAPPDATA%\LiaDesktop\vosk` (installer stays lean).
 - **Follow-up safety:** MicGemini no-speech hard timeout (8s) → ОЖИДАНИЕ (never hang).
-- **Selftest hard gates:** `wake_positive` ≥90%, `wake_negative` ≤1 false wake (`speech_s`/`noise_s`/`false_wakes`), `wake_own_tts`, `wake_command_inline`, `wake_e2e` (injectable mic → mock Gemini → TTS ≤60s), `wake_timeout` (silence → ОЖИДАНИЕ), `wake_offline`, `wake_cpu` idle &lt;5% with real WaveIn when available (`mode=wavein|pushonly`); all prior gates unchanged. `sample_log.txt` includes `wake: DETECT` lines.
+- **Selftest hard gates:** `wake_positive` ≥90%, `wake_negative` ≤1 false wake (`speech_s`/`noise_s`/`false_wakes`), `wake_own_tts`, `wake_command_inline`, `wake_e2e` (injectable mic → mock Gemini → TTS ≤60s), `wake_timeout` (silence → ОЖИДАНИЕ), `wake_offline`, `wake_cpu` listen overhead &lt;5% with absolute `baseline_avg`/`active_avg`/`delta` + `gpu` (`mode=wavein|wasapi|loopback`); all prior gates unchanged. `sample_log.txt` includes `wake: DETECT` lines.
 
 ## v0.7.3 — Speak from the first sentence (low TTS latency)
 
