@@ -122,6 +122,10 @@ public static class SelfTestRunner
             try { services.Wake.Stop(); } catch { /* */ }
             failed += await GateAppIdleCpuAsync(L);
 
+            Checkpoint("idle_visual_parity");
+            L("idle_visual_parity: starting…");
+            failed += await GateIdleVisualParityAsync(L);
+
             Checkpoint("mic_error_friendly");
             failed += await GateMicErrorFriendlyAsync(services, L);
 
@@ -2280,6 +2284,204 @@ public static class SelfTestRunner
             L($"FAIL app_idle_cpu: {ex.GetType().Name}: {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Idle must look like Active: capture both (mouth closed), check_framing each,
+    /// mean abs pixel diff under threshold. Prints mean_abs_diff=.
+    /// </summary>
+    static async Task<int> GateIdleVisualParityAsync(Action<string> L)
+    {
+        try
+        {
+            if (App.MainWindowInstance is not MainWindow mw)
+            {
+                L("FAIL idle_visual_parity: MainWindow missing");
+                return 1;
+            }
+
+            // Prefer selftest-out dir (repo root on CI) so artifacts + check_framing land together
+            var outDir = !string.IsNullOrWhiteSpace(OutPath)
+                ? (Path.GetDirectoryName(Path.GetFullPath(OutPath)) ?? Directory.GetCurrentDirectory())
+                : Directory.GetCurrentDirectory();
+            var cwd = Directory.GetCurrentDirectory();
+            var idlePath = Path.Combine(outDir, "idle_parity_idle.png");
+            var activePath = Path.Combine(outDir, "idle_parity_active.png");
+            try { if (File.Exists(idlePath)) File.Delete(idlePath); } catch { /* */ }
+            try { if (File.Exists(activePath)) File.Delete(activePath); } catch { /* */ }
+
+            await UiAsync(mw, () =>
+            {
+                ShowWindow(WindowNative.GetWindowHandle(mw), SwRestore);
+                // Mouth closed, front-ish — freeze micro-motion for fair Idle vs Active compare
+                mw.PrepareParityCapture(5f, 0f);
+            });
+            await Task.Delay(200);
+
+            // Active frame — pin time, let Tick Present, then dump
+            await UiAsync(mw, () =>
+            {
+                mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Active);
+                mw.PinHoloAnimTime(1.0f);
+            });
+            await Task.Delay(500);
+            await UiAsync(mw, () => mw.PinHoloAnimTime(1.0f));
+            await Task.Delay(200);
+            await UiAsync(mw, () => mw.SaveHoloPng(activePath));
+
+            // Idle frame (real default economy — arcs/hair must still be present)
+            await UiAsync(mw, () =>
+            {
+                mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Idle);
+                mw.PinHoloAnimTime(1.0f);
+            });
+            await Task.Delay(700);
+            await UiAsync(mw, () => mw.PinHoloAnimTime(1.0f));
+            await Task.Delay(250);
+            await UiAsync(mw, () => mw.SaveHoloPng(idlePath));
+
+            await UiAsync(mw, () =>
+            {
+                mw.ClearParityCapture();
+                mw.SetRenderPaceOverride(null);
+                mw.RefreshRenderPace();
+            });
+
+            if (!File.Exists(idlePath) || !File.Exists(activePath))
+            {
+                L($"FAIL idle_visual_parity: missing captures idle={File.Exists(idlePath)} active={File.Exists(activePath)}");
+                return 1;
+            }
+
+            var script = Path.Combine(cwd, "tools", "check_framing.py");
+            if (!File.Exists(script))
+                script = Path.Combine(AppContext.BaseDirectory, "tools", "check_framing.py");
+            if (!File.Exists(script))
+            {
+                // Walk up from cwd (publish/ → repo root)
+                var probe = new DirectoryInfo(cwd);
+                for (var i = 0; i < 6 && probe != null; i++, probe = probe.Parent)
+                {
+                    var cand = Path.Combine(probe.FullName, "tools", "check_framing.py");
+                    if (File.Exists(cand)) { script = cand; break; }
+                }
+            }
+            if (!File.Exists(script))
+            {
+                L("FAIL idle_visual_parity: tools/check_framing.py not found");
+                return 1;
+            }
+
+            var py = FindPython();
+            if (py == null)
+            {
+                L("FAIL idle_visual_parity: python not found");
+                return 1;
+            }
+
+            var psi = new ProcessStartInfo(py)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = outDir,
+            };
+            // `py` launcher needs -3; absolute python.exe does not
+            if (py.Equals("py", StringComparison.OrdinalIgnoreCase)
+                || py.EndsWith("\\py.exe", StringComparison.OrdinalIgnoreCase))
+                psi.ArgumentList.Add("-3");
+            foreach (var a in new[] { script, "--parity", idlePath, activePath, "--max-mad=16" })
+                psi.ArgumentList.Add(a);
+            using var p = Process.Start(psi)!;
+            var stdout = await p.StandardOutput.ReadToEndAsync();
+            var stderr = await p.StandardError.ReadToEndAsync();
+            await p.WaitForExitAsync();
+            foreach (var line in (stdout + "\n" + stderr).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                L(line);
+
+            if (p.ExitCode != 0)
+            {
+                L($"FAIL idle_visual_parity: check_framing exit={p.ExitCode}");
+                return 1;
+            }
+            if (!stdout.Contains("idle_visual_parity: PASS", StringComparison.Ordinal)
+                && !stdout.Contains("mean_abs_diff=", StringComparison.Ordinal))
+            {
+                L("FAIL idle_visual_parity: missing PASS / mean_abs_diff in output");
+                return 1;
+            }
+            // Ensure PASS line landed in selftest.txt via L()
+            if (!stdout.Contains("idle_visual_parity: PASS", StringComparison.Ordinal))
+            {
+                // check_framing prints PASS on stdout — if MAD ok but framing failed, already caught
+                L("FAIL idle_visual_parity: no PASS marker");
+                return 1;
+            }
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            L($"FAIL idle_visual_parity: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+    }
+
+    static string? FindPython()
+    {
+        var env = Environment.GetEnvironmentVariable("LIA_PYTHON");
+        if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return env;
+
+        // Selftest may poison PATH with lia-broken-python stubs — skip those dirs.
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (dir.Contains("lia-broken-python", StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (var name in new[] { "python.exe", "python3.exe" })
+            {
+                var cand = Path.Combine(dir.Trim('"'), name);
+                if (!File.Exists(cand)) continue;
+                if (PythonHasImaging(cand)) return cand;
+            }
+        }
+
+        foreach (var name in new[] { "py" })
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(name)
+                {
+                    ArgumentList = { "-3", "-c", "import PIL,numpy; print('ok')" },
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                };
+                using var p = Process.Start(psi);
+                if (p == null) continue;
+                if (!p.WaitForExit(8000)) { try { p.Kill(true); } catch { /* */ } continue; }
+                if (p.ExitCode == 0) return name;
+            }
+            catch { /* */ }
+        }
+        return null;
+    }
+
+    static bool PythonHasImaging(string exe)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(exe)
+            {
+                ArgumentList = { "-c", "import PIL,numpy; print('ok')" },
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            using var p = Process.Start(psi);
+            if (p == null) return false;
+            if (!p.WaitForExit(8000)) { try { p.Kill(true); } catch { /* */ } return false; }
+            return p.ExitCode == 0;
+        }
+        catch { return false; }
     }
 
     static Task UiAsync(MainWindow mw, Action action)

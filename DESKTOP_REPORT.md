@@ -2,7 +2,7 @@
 
 ## v0.7.5 — System telemetry · UIA · LTM · idle throttle (pending)
 
-Blocked on hard gates. Product `type_text` cascade SendInput → clipboard (restore) → WM_SETTEXT with `method=` + verified readback; `agent_notepad` calls tool path only then independent read. Also: system telemetry HUD; UIA agent + act-observe + confirm; LTM Settings «Память»; friendly mic journal; idle render throttle (`app_idle_cpu` ≥40%). No Latest until all hard gates green.
+Blocked on hard gates. Idle must match Active visually (arcs/hair/head); CPU via fps + skip Present + cheap AA only (`idle_visual_parity` + `app_idle_cpu` ≥40%). Product `type_text` cascade with `method=`; `agent_notepad` tool path only. No Latest until all hard gates green.
 
 ## v0.7.4 — Offline wake word «Лиа»
 

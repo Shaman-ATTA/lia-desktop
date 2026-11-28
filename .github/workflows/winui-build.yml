@@ -337,6 +337,8 @@ jobs:
             if ($txt -notmatch 'app_idle_cpu: PASS.*drop_pct=') { throw "selftest app_idle_cpu missing drop_pct=" }
             if ($txt -notmatch 'app_idle_cpu: PASS.*minimized_avg=') { throw "selftest app_idle_cpu missing minimized_avg=" }
             if ($txt -notmatch 'app_idle_cpu: PASS.*gpu=') { throw "selftest app_idle_cpu missing gpu=" }
+            if ($txt -notmatch 'idle_visual_parity: PASS') { throw "selftest missing idle_visual_parity PASS" }
+            if ($txt -notmatch 'idle_visual_parity: PASS.*mean_abs_diff=') { throw "selftest idle_visual_parity missing mean_abs_diff=" }
             if ($txt -notmatch 'mic_error_friendly: PASS') { throw "selftest missing mic_error_friendly PASS" }
             if ($txt -notmatch 'telemetry_system: PASS') { throw "selftest missing telemetry_system PASS" }
             if ($txt -notmatch 'agent_confirm: PASS') { throw "selftest missing agent_confirm PASS" }
@@ -782,6 +784,8 @@ jobs:
             layout_*.png
             layout_window_max.png
             selftest.txt
+            idle_parity_idle.png
+            idle_parity_active.png
             vision_test.png
             sample_log.txt
             tasklist_before.txt

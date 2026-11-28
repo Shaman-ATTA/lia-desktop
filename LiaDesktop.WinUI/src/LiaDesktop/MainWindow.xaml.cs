@@ -52,6 +52,28 @@ public sealed partial class MainWindow : Window
     }
 
     public HoloPanel.RenderPace CurrentRenderPace => Holo.Pace;
+
+    /// <summary>Selftest / parity: force pose + pin anim clock + dump hologram backbuffer.</summary>
+    public void PrepareParityCapture(float yawDeg, float jaw)
+    {
+        Holo.Renderer.ForcePose(yawDeg, jaw);
+        Holo.Renderer.SetAnimTime(1.0f);
+        Holo.Renderer.MarkDirty();
+    }
+
+    public void ClearParityCapture()
+    {
+        Holo.Renderer.ForcePose(null, null);
+        Holo.Renderer.MarkDirty();
+    }
+
+    public void PinHoloAnimTime(float t)
+    {
+        Holo.Renderer.SetAnimTime(t);
+        Holo.Renderer.MarkDirty();
+    }
+
+    public void SaveHoloPng(string path) => Holo.Renderer.SaveBackbufferPng(path);
     public string VoiceStatusText => VoiceLine.Text ?? "";
     public void NotifyMicUnavailable() => OnMicUnavailable();
 
@@ -163,10 +185,7 @@ public sealed partial class MainWindow : Window
 
         var smoke = ApplySmokeOverrides();
         var virtualSmoke = TryScheduleVirtualSmokeDump();
-        // Smoke screenshots need full Active pass (arcs/hair/MSAA). Idle economy skips those
-        // for CPU — fine for ОЖИДАНИЕ, wrong for product framing gates.
-        if (smoke || virtualSmoke)
-            _renderPaceOverride = HoloPanel.RenderPace.Active;
+        // Smoke uses real default Idle pace — Idle must visually match Active (parity gate).
         DispatcherQueue.TryEnqueue(() => InitTrayAndAutostart());
         DispatcherQueue.TryEnqueue(RefreshRenderPace);
         if (SelfTestRunner.IsSelfTest)

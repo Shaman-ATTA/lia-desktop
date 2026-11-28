@@ -181,6 +181,22 @@ public sealed class HoloRenderer : IDisposable
         _eyesCloseup = eyesCloseup;
         _ringsShowcase = ringsShowcase;
         if (ringsShowcase) _time = 1.85f;
+        if (_freezeBlink)
+        {
+            _blinkPhase = 0;
+            _gazeYaw = 0;
+            _gazePitch = 0;
+            _saccadeYaw = 0;
+            _saccadePitch = 0;
+            _dirty = true;
+        }
+    }
+
+    /// <summary>Pin animation clock (parity captures / smoke freeze).</summary>
+    public void SetAnimTime(float t)
+    {
+        _time = t;
+        _dirty = true;
     }
 
     public ID3D11Device? Device => _device;
@@ -189,8 +205,8 @@ public sealed class HoloRenderer : IDisposable
     public int PresentInterval { get; set; } = 3;
 
     /// <summary>
-    /// Idle throttle: 1× RT (no MSAA resolve), no FXAA, no hair, eased rings, morph only when mouth moves,
-    /// skip Present when the frame is unchanged.
+    /// Idle throttle — visual parity with Active (arcs/hair/rings/head/materials identical).
+    /// Saves CPU only via: lower Present rate, skip unchanged Presents, cheaper AA (1× RT, no FXAA).
     /// </summary>
     public bool EconomyMode
     {
@@ -200,11 +216,9 @@ public sealed class HoloRenderer : IDisposable
             if (_economyMode == value) return;
             _economyMode = value;
             _dirty = true; // force one Present on pace change
-            if (!value) _economyMorphedOnce = false;
         }
     }
     bool _economyMode;
-    bool _economyMorphedOnce;
     bool _dirty = true;
     int _idleSkipCounter;
     float _lastPresentedJaw = float.NaN;
@@ -599,23 +613,21 @@ public sealed class HoloRenderer : IDisposable
         var jaw = float.IsNaN(_forcedJaw) ? _jaw : _forcedJaw;
         if (EconomyMode)
         {
-            // Heartbeat: eased ring motion ~ every 3rd idle tick; otherwise skip Present if clean.
+            // Skip Present when unchanged (CPU). Heartbeat keeps rings/arcs alive at ~Idle fps/3.
             _idleSkipCounter++;
             var jawMoved = float.IsNaN(_lastPresentedJaw) || MathF.Abs(jaw - _lastPresentedJaw) > 0.004f;
             var heartbeat = (_idleSkipCounter % 3) == 0;
             if (!_dirty && !jawMoved && !heartbeat && !_wakePulseActiveNow())
-                return; // skip Present — nothing changed
+                return;
             _dirty = false;
             _idleSkipCounter = heartbeat ? 0 : _idleSkipCounter;
         }
 
-        if (!EconomyMode || jaw > 0.02f || !float.IsNaN(_forcedJaw) || _wakePulseActiveNow())
-        {
-            UpdateBlink(dt);
-            UpdateHeadLook(dt);
-            UpdateGaze(dt);
-        }
-        var blinkAmt = EconomyMode ? 0f : _blinkPhase;
+        // Same animation path as Active — Idle only differs in Present rate / AA.
+        UpdateBlink(dt);
+        UpdateHeadLook(dt);
+        UpdateGaze(dt);
+        var blinkAmt = _blinkPhase;
 
         var funnel = float.IsNaN(_forcedJaw) ? _funnel : Math.Min(0.35f, _forcedJaw * 0.4f);
         var wide = float.IsNaN(_forcedJaw) ? _wide : 0.08f;
@@ -627,18 +639,14 @@ public sealed class HoloRenderer : IDisposable
             ? 0.08f + 0.05f * MathF.Sin(_time * 0.41f + 1.2f)
             : 0.05f;
 
-        // Economy: morph only when mouth/forced pose changes — idle head reuses last upload.
-        var needMorph = !EconomyMode || jaw > 0.02f || !float.IsNaN(_forcedJaw) || !_economyMorphedOnce;
-        if (needMorph && _mesh != null && _morphScratch != null)
+        if (_mesh != null && _morphScratch != null)
         {
-            var lid = EconomyMode ? 0f : BlinkLidAmount();
+            var lid = BlinkLidAmount();
             _mesh.Morph(Math.Min(0.62f, jaw * 0.88f), funnel * 0.50f, wide * 0.50f, smile, brow, lid, _morphScratch);
             UploadHead(_morphScratch);
-            _economyMorphedOnce = true;
         }
 
-        // Economy: draw 1× into scene color (skip MSAA resolve — dominant WARP CPU cost).
-        // Active: MSAA RT when available, then resolve.
+        // Idle cheaper AA: 1× RT (skip MSAA resolve — dominant WARP cost). Same geometry/materials.
         var useMsaa = !EconomyMode && _msaaSamples > 1;
         var drawRtv = useMsaa ? _rtvMsaa! : _rtvScene!;
         var drawDsv = useMsaa ? _dsvMsaa! : (_dsv1x ?? _dsvMsaa!);
@@ -660,6 +668,8 @@ public sealed class HoloRenderer : IDisposable
         float nearPlane = 0.08f;
         // Eye local ≈ (±0.032, 0.43, 0.05) → world after HeadScale/Trans
         var eyeY = 0.43f * HeadScale + HeadTransY; // ≈ 0.16
+        // Forced pose / smoke: freeze micro-orbit so Idle vs Active captures match.
+        var freezeMicro = _freezeBlink;
         if (_eyesCloseup)
         {
             // Both eyes (outer-corner span) ≈60% of viewport width
@@ -670,7 +680,7 @@ public sealed class HoloRenderer : IDisposable
         }
         else if (_ringsShowcase)
         {
-            var orbit = MathF.Sin(_time * 0.14f) * 0.06f;
+            var orbit = freezeMicro ? 0f : MathF.Sin(_time * 0.14f) * 0.06f;
             // Exact v0.6.2 framing baseline
             cam = new Vector3(orbit, 0.00f, 2.82f);
             lookAt = new Vector3(0, 0.00f, 0.02f);
@@ -679,8 +689,7 @@ public sealed class HoloRenderer : IDisposable
         else
         {
             // Exact v0.6.2 framing — head+neck ≈75–80% viewport height
-            // Idle: freeze micro-orbit (camera static) — motion lives in eased rings only.
-            var orbit = EconomyMode ? 0f : MathF.Sin(_time * 0.09f) * 0.04f;
+            var orbit = freezeMicro ? 0f : MathF.Sin(_time * 0.09f) * 0.04f;
             cam = new Vector3(orbit, 0.00f, 2.82f);
             lookAt = new Vector3(0, 0.00f, 0.02f);
             fovDeg = 24f;
@@ -691,8 +700,8 @@ public sealed class HoloRenderer : IDisposable
 
         var yaw = float.IsNaN(_forcedYaw) ? _headYaw : _forcedYaw;
         var pitch = _eyesCloseup ? 0f : _headPitch;
-        var breath = EconomyMode ? 1f : 1f + MathF.Sin(_time * 1.05f) * 0.008f;
-        var breathY = EconomyMode ? 0f : MathF.Sin(_time * 1.05f) * 0.006f;
+        var breath = freezeMicro ? 1f : 1f + MathF.Sin(_time * 1.05f) * 0.008f;
+        var breathY = freezeMicro ? 0f : MathF.Sin(_time * 1.05f) * 0.006f;
         var headWorld = Matrix4x4.CreateScale(HeadScale * breath)
                         * Matrix4x4.CreateRotationX(pitch)
                         * Matrix4x4.CreateRotationY(yaw)
@@ -700,8 +709,8 @@ public sealed class HoloRenderer : IDisposable
         var headModel = Matrix4x4.Transpose(headWorld);
         var stride = (uint)Marshal.SizeOf<Vertex>();
 
-        // 0) Dense 2D arcs — skip in economy (big fill-rate on WARP)
-        if (!_eyesCloseup && !EconomyMode)
+        // 0) Dense 2D arcs — always (Idle visual parity with Active)
+        if (!_eyesCloseup)
             DrawBackgroundArcs();
 
         // Restore mesh IA after fullscreen pass
@@ -713,9 +722,7 @@ public sealed class HoloRenderer : IDisposable
         _ctx.VSSetConstantBuffer(0, _frameCb);
         _ctx.PSSetConstantBuffer(0, _frameCb);
 
-        // 1) Skin — depth prepass then premul color. Mesh needs NoCull (Rocketbox
-        //    winding); CullBack drew skull interiors → black face. Prepass picks the
-        //    closest surface; color uses LessEqual/depth-write-off so inner faces lose.
+        // 1) Skin — depth prepass then premul color (same Idle + Active).
         WriteFrame(viewProj, headModel, cam, blinkAmt, 1.0f);
         BindSkinTextures();
         _ctx.PSSetShader(_psSkin);
@@ -723,35 +730,24 @@ public sealed class HoloRenderer : IDisposable
         {
             _ctx.IASetVertexBuffer(0, _headVb, stride, 0);
             _ctx.IASetIndexBuffer(_headIb, Format.R32_UInt, 0);
-            if (EconomyMode)
-            {
-                // Single color pass — depth prepass skipped (idle CPU)
-                _ctx.OMSetDepthStencilState(_dssWrite);
-                _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
-                _ctx.RSSetState(_rsNoCull);
-                _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
-            }
-            else
-            {
-                // 1a) Depth only — closest surface wins (NoCull, same as v0.6.6 skin)
-                _ctx.OMSetDepthStencilState(_dssWrite);
-                _ctx.OMSetBlendState(_blendNoColor!);
-                _ctx.RSSetState(_rsNoCull);
-                _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
-                // 1b) Color premul; LessEqual (MSAA-safe vs Equal) + no depth write
-                _ctx.OMSetDepthStencilState(_dssRead);
-                _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
-                _ctx.RSSetState(_rsNoCull);
-                _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
-            }
+            // 1a) Depth only — closest surface wins (NoCull, same as v0.6.6 skin)
+            _ctx.OMSetDepthStencilState(_dssWrite);
+            _ctx.OMSetBlendState(_blendNoColor!);
+            _ctx.RSSetState(_rsNoCull);
+            _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
+            // 1b) Color premul; LessEqual (MSAA-safe vs Equal) + no depth write
+            _ctx.OMSetDepthStencilState(_dssRead);
+            _ctx.OMSetBlendState(_blendPremul!, new Color4(0, 0, 0, 1), 0xFFFFFFFF);
+            _ctx.RSSetState(_rsNoCull);
+            _ctx.DrawIndexed((uint)_mesh.Indices.Length, 0, 0);
         }
         _ctx.RSSetState(_rs);
 
         // 2) Eyes + cornea
         DrawEyes(viewProj, headWorld, cam, blinkAmt);
 
-        // 3) Hair — skip in economy (alpha cards are expensive on WARP)
-        if (!EconomyMode && _hairVb != null && _hairIb != null && _hairIndexCount > 0)
+        // 3) Hair — always (Idle must not change the head silhouette)
+        if (_hairVb != null && _hairIb != null && _hairIndexCount > 0)
         {
             _ctx.OMSetDepthStencilState(_dssRead);
             _ctx.OMSetBlendState(_blendOpaque); // opaque; neck stump is skin-only fade
@@ -765,9 +761,7 @@ public sealed class HoloRenderer : IDisposable
             _ctx.RSSetState(_rs);
         }
 
-        // 4) Rings — parented to head orient (so yaw never slices the face);
-        //    placed behind face plane in head space; hidden in eyes close-up
-        // Idle: eased spin (0.22×) so motion is still readable at ~20fps.
+        // 4) Rings — same count/spin as Active (Idle visual parity)
         if (!_eyesCloseup)
         {
             var headOrient = Matrix4x4.CreateRotationX(pitch)
@@ -778,13 +772,13 @@ public sealed class HoloRenderer : IDisposable
             _ctx.RSSetState(_rsNoCull);
             _ctx.PSSetShader(_psRing);
             _ctx.PSSetShaderResources(0, Array.Empty<ID3D11ShaderResourceView>());
-            var spinMul = _ringsShowcase ? 2.2f : EconomyMode ? 0.22f : 1f;
-            var ringCount = EconomyMode ? Math.Min(_rings.Count, 4) : _rings.Count;
-            for (var i = 0; i < ringCount; i++)
+            var spinMul = _ringsShowcase ? 2.2f : 1f;
+            var ringTime = freezeMicro ? 0f : _time;
+            for (var i = 0; i < _rings.Count; i++)
             {
                 var r = _rings[i];
                 var rot = Matrix4x4.CreateFromYawPitchRoll(
-                    r.BaseYaw + _time * r.SpinY * spinMul,
+                    r.BaseYaw + ringTime * r.SpinY * spinMul,
                     r.BasePitch,
                     r.BaseRoll);
                 var ringLocal = rot * Matrix4x4.CreateTranslation(0f, r.TransY, r.TransZ);
@@ -806,9 +800,9 @@ public sealed class HoloRenderer : IDisposable
 
         if (useMsaa && _msaaColor != null && _sceneColor != null)
             _ctx.ResolveSubresource(_sceneColor, 0, _msaaColor, 0, Format.B8G8R8A8_UNorm);
-        // economy / msaa==1 already drew into _rtvScene
+        // Idle 1× already drew into _rtvScene
 
-        // Blit scene → swap. FXAA only when Active + MSAA unavailable.
+        // Blit scene → swap. FXAA only when Active + MSAA unavailable (Idle: raw copy).
         if (!useMsaa && !EconomyMode)
         {
             if (!ApplyFxaa())
@@ -930,7 +924,8 @@ public sealed class HoloRenderer : IDisposable
             *(FxaaCB*)mapped.DataPointer = new FxaaCB
             {
                 InvSize = new Vector2(1f / Math.Max(1, _width), 1f / Math.Max(1, _height)),
-                Time = _time,
+                // Forced pose / smoke: freeze arc phase so Idle vs Active captures match.
+                Time = _freezeBlink ? 0f : _time,
             };
         }
         _ctx.Unmap(_fxaaCb, 0);
@@ -1093,6 +1088,12 @@ public sealed class HoloRenderer : IDisposable
 
     void UpdateGaze(float dt)
     {
+        if (_freezeBlink)
+        {
+            _gazeYaw = 0;
+            _gazePitch = 0;
+            return;
+        }
         var leadYaw = Math.Clamp((_headYaw - _poseYaw) * 0.35f + _ptrX * 0.12f, -0.22f, 0.22f);
         var leadPitch = Math.Clamp(_headPitch * 0.5f + _ptrY * 0.08f, -0.14f, 0.14f);
         if (_time >= _nextSaccade)

@@ -544,9 +544,94 @@ def assert_layout_shot(path: Path, label: str | None = None) -> int:
     return fail
 
 
+def full_frame_mad(a: Path, b: Path) -> float:
+    """Mean abs RGB diff over the hologram viewport (0–255 scale)."""
+    ca = np.asarray(Image.open(a).convert("RGB")).astype(np.float32)
+    cb = np.asarray(Image.open(b).convert("RGB")).astype(np.float32)
+    if ca.shape != cb.shape:
+        h = min(ca.shape[0], cb.shape[0])
+        w = min(ca.shape[1], cb.shape[1])
+        ca, cb = ca[:h, :w], cb[:h, :w]
+    y0, y1, x0, x1 = _find_viewport(ca)
+    return float(np.mean(np.abs(ca[y0:y1, x0:x1] - cb[y0:y1, x0:x1])))
+
+
+def assert_front_like_framing(path: Path, label: str | None = None) -> int:
+    """Head framing + dense arcs on both sides (Idle must pass this too)."""
+    name = label or path.name
+    if not path.is_file():
+        print(f"FAIL: missing {name}", file=sys.stderr)
+        return 1
+    fail = 0
+    frac, top, bot = viewport_content_frac(path)
+    print(f"{name}: head_height_frac={frac:.3f} top_margin={top:.3f} bot_margin={bot:.3f}")
+    if frac < 0.52:
+        print(f"FAIL: {name} head too small ({frac:.1%})", file=sys.stderr)
+        fail = 1
+    if frac > 0.90:
+        print(f"FAIL: {name} head too large / cropped ({frac:.1%})", file=sys.stderr)
+        fail = 1
+    if assert_center_column(path, name) != 0:
+        fail = 1
+    ring_n, face_n, left_n, right_n = arc_ring_pixel_count(path)
+    print(
+        f"{name}: arc_ring_pixels={ring_n} (L={left_n} R={right_n}) "
+        f"arc_on_face_pixels={face_n}"
+    )
+    if ring_n < 300 or left_n < 80 or right_n < 80:
+        print(
+            f"FAIL: {name} arc ring too sparse "
+            f"(ring={ring_n} L={left_n} R={right_n}) — arcs missing around head",
+            file=sys.stderr,
+        )
+        fail = 1
+    if face_n > 80:
+        print(f"FAIL: {name} arc pixels on face ({face_n} > 80)", file=sys.stderr)
+        fail = 1
+    return fail
+
+
+def run_parity(idle: Path, active: Path, max_mad: float = 14.0) -> int:
+    """Idle vs Active (mouth closed): framing on both + mean abs pixel diff."""
+    print(f"idle_visual_parity: idle={idle} active={active} max_mad={max_mad:.1f}")
+    fail = 0
+    if assert_front_like_framing(idle, "idle") != 0:
+        fail = 1
+    if assert_front_like_framing(active, "active") != 0:
+        fail = 1
+    if not idle.is_file() or not active.is_file():
+        return 1
+    mad = full_frame_mad(idle, active)
+    print(f"idle_visual_parity: mean_abs_diff={mad:.2f}")
+    if mad > max_mad:
+        print(
+            f"FAIL: idle_visual_parity mean_abs_diff={mad:.2f} > {max_mad:.1f} "
+            "(Idle must look like Active — arcs/hair/head)",
+            file=sys.stderr,
+        )
+        return 1
+    if fail:
+        return 1
+    print(f"idle_visual_parity: PASS mean_abs_diff={mad:.2f}")
+    return 0
+
+
 def main() -> int:
+    # --parity idle.png active.png [--max-mad=14]
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--parity":
+        if len(argv) < 3:
+            print("usage: check_framing.py --parity idle.png active.png [--max-mad=N]", file=sys.stderr)
+            return 2
+        idle, active = Path(argv[1]), Path(argv[2])
+        max_mad = 14.0
+        for a in argv[3:]:
+            if a.startswith("--max-mad="):
+                max_mad = float(a.split("=", 1)[1])
+        return run_parity(idle, active, max_mad)
+
     # Optional: python check_framing.py desktop_winui_front_1080.png ...
-    extra = [Path(a) for a in sys.argv[1:] if a.endswith(".png")]
+    extra = [Path(a) for a in argv if a.endswith(".png")]
 
     front = Path("desktop_winui_front.png")
     if not front.is_file() and not extra:

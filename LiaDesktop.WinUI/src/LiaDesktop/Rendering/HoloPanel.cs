@@ -16,7 +16,7 @@ public sealed class HoloPanel : SwapChainPanel
     {
         /// <summary>No Tick/Present — minimized / occluded / screen locked.</summary>
         Paused = 0,
-        /// <summary>~20 fps — ОЖИДАНИЕ idle (visible, not speaking/listening); economy Present.</summary>
+        /// <summary>~20 fps — ОЖИДАНИЕ; same visuals as Active, cheaper Present/AA.</summary>
         Idle = 1,
         /// <summary>~60 fps — speaking or follow-up listening (lip sync unchanged).</summary>
         Active = 2,
