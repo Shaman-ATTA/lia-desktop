@@ -326,6 +326,10 @@ jobs:
             if ($txt -notmatch 'wake_cpu: PASS.*mode=') { throw "selftest wake_cpu missing mode=" }
             if ($txt -notmatch 'wake_cpu: PASS.*mode=(wavein|wasapi|loopback)') { throw "selftest wake_cpu must use real capture mode=wavein|wasapi|loopback" }
             if ($txt -notmatch 'wake_cpu: PASS.*idle_avg=') { throw "selftest wake_cpu missing idle_avg=" }
+            if ($txt -notmatch 'wake_cpu: PASS.*baseline_avg=') { throw "selftest wake_cpu missing baseline_avg=" }
+            if ($txt -notmatch 'wake_cpu: PASS.*active_avg=') { throw "selftest wake_cpu missing active_avg=" }
+            if ($txt -notmatch 'wake_cpu: PASS.*delta=') { throw "selftest wake_cpu missing delta=" }
+            if ($txt -notmatch 'wake_cpu: PASS.*gpu=') { throw "selftest wake_cpu missing gpu=" }
             if ($txt -notmatch 'wake_cpu: PASS.*wall_s=') { throw "selftest wake_cpu missing wall_s=" }
             if ($txt -notmatch 'log_file: PASS') { throw "selftest missing log_file PASS" }
             if ($txt -notmatch 'render_role: PASS') { throw "selftest missing render_role PASS" }

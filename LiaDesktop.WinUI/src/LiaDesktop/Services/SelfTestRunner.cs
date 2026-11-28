@@ -2089,16 +2089,16 @@ public static class SelfTestRunner
             var hasCap = WakeWordService.HasAnyCaptureDevice();
             var cores = Math.Max(1, Environment.ProcessorCount);
             var proc = Process.GetCurrentProcess();
+            var gpu = QueryGpuAdapterName();
+            L($"wake_cpu: gpu_adapter={gpu}");
 
-            // Process-wide CPU on CI is dominated by WinUI/WARP (~20–30%) even with wake
-            // Stopped/pushonly — never a listen-path signal. Measure listen OVERHEAD:
-            // active capture − same-process baseline (wake stopped). Capture stays recording
-            // for the full active sample (no StopRecording cheat).
+            // Process-wide CPU on CI is often ~20–30% with wake stopped (WinUI + WARP).
+            // Gate on listen OVERHEAD (delta): active − baseline. Still print absolute numbers.
             const int baselineSec = 8;
             const int sampleSec = 20;
             await Task.Delay(300);
-            var baselinePct = await SampleProcessCpuPctAsync(proc, baselineSec, null);
-            L($"wake_cpu: baseline_pct={baselinePct:F2}% (wake stopped, {baselineSec}s) cores={cores}");
+            var baselineAvg = await SampleProcessCpuPctAsync(proc, baselineSec, null);
+            L($"wake_cpu: baseline_avg={baselineAvg:F2}% (app idle, wake stopped, {baselineSec}s) cores={cores} gpu={gpu}");
 
             var mode = hasCap
                 ? WakeWordService.CaptureMode.ForceWaveIn
@@ -2116,16 +2116,16 @@ public static class SelfTestRunner
             await Task.Delay(500); // capture settle + noise EMA
             byte[]? silence = realCap ? null : new byte[WakeWordService.SampleRate * 2 / 10];
             Action? tick = silence == null ? null : () => s.Wake.PushPcm(silence);
-            var listenPct = await SampleProcessCpuPctAsync(proc, sampleSec, tick);
-            var overhead = Math.Max(0, listenPct - baselinePct);
-            L($"wake_cpu: cpu listen_pct={listenPct:F2}% baseline_pct={baselinePct:F2}% idle_avg={overhead:F2}% mode={used} cores={cores} wall_s={sampleSec}");
+            var activeAvg = await SampleProcessCpuPctAsync(proc, sampleSec, tick);
+            var delta = Math.Max(0, activeAvg - baselineAvg);
+            L($"wake_cpu: baseline_avg={baselineAvg:F2}% active_avg={activeAvg:F2}% delta={delta:F2}% idle_avg={delta:F2}% mode={used} cores={cores} wall_s={sampleSec} gpu={gpu}");
 
-            if (overhead >= 5.0)
+            if (delta >= 5.0)
             {
-                L($"FAIL wake_cpu: idle_avg={overhead:F2}% mode={used} (need <5% listen overhead) listen_pct={listenPct:F2}% baseline_pct={baselinePct:F2}% cores={cores}");
+                L($"FAIL wake_cpu: idle_avg={delta:F2}% delta={delta:F2}% mode={used} (need delta<5%) baseline_avg={baselineAvg:F2}% active_avg={activeAvg:F2}% cores={cores} gpu={gpu}");
                 return 1;
             }
-            L($"wake_cpu: PASS idle_avg={overhead:F2}% mode={used} cores={cores} wall_s={sampleSec} listen_pct={listenPct:F2}% baseline_pct={baselinePct:F2}%");
+            L($"wake_cpu: PASS baseline_avg={baselineAvg:F2}% active_avg={activeAvg:F2}% delta={delta:F2}% idle_avg={delta:F2}% mode={used} cores={cores} wall_s={sampleSec} gpu={gpu}");
             return 0;
         }
         catch (Exception ex)
@@ -2136,6 +2136,33 @@ public static class SelfTestRunner
         finally
         {
             try { s.Wake.Stop(); } catch { /* */ }
+        }
+    }
+
+    /// <summary>DXGI adapter 0 description — surfaces WARP vs real GPU in selftest.</summary>
+    static string QueryGpuAdapterName()
+    {
+        try
+        {
+            using var factory = Vortice.DXGI.DXGI.CreateDXGIFactory1<Vortice.DXGI.IDXGIFactory1>();
+            var hr = factory.EnumAdapters1(0, out var adapter);
+            if (hr.Failure || adapter == null)
+                return $"(gpu enum hr=0x{hr.Code:X8})";
+            using (adapter)
+            {
+                var d = adapter.Description1;
+                var desc = (d.Description ?? "").Trim();
+                if (string.IsNullOrEmpty(desc)) desc = "(unnamed)";
+                var soft = (d.Flags & Vortice.DXGI.AdapterFlags.Software) != 0
+                           || desc.Contains("WARP", StringComparison.OrdinalIgnoreCase)
+                           || desc.Contains("Microsoft Basic Render", StringComparison.OrdinalIgnoreCase)
+                           || desc.Contains("Software Adapter", StringComparison.OrdinalIgnoreCase);
+                return soft ? $"{desc} (software)" : desc;
+            }
+        }
+        catch (Exception ex)
+        {
+            return $"(gpu enum fail: {ex.GetType().Name}: {ex.Message})";
         }
     }
 
