@@ -17,7 +17,10 @@ public static class ToolDefs
             ("path", "Куда сохранить", false)),
         Decl("browser_open", "Открыть URL в браузере Playwright", ("url", "URL", true)),
         Decl("browser_close", "Закрыть браузер Playwright"),
-        Decl("type_text", "Набрать текст клавиатурой", ("text", "Текст", true)),
+        Decl("type_text",
+            "Набрать текст в активное окно (SendInput → clipboard paste → WM_SETTEXT). " +
+            "Возвращает method=sendinput|clipboard|settext и verified после проверки содержимого.",
+            ("text", "Текст", true)),
         Decl("mouse_click",
             "Клик мышью. X/Y — пиксели ПОСЛЕДНЕГО скриншота (look_at_screen/screenshot), не DIP. " +
             "Рантайм сам пересчитает в physical screen pixels (DPI 100–300%).",

@@ -1,10 +1,8 @@
 # Lia Desktop — ship report
 
-## v0.7.5 — System telemetry · UIA · LTM · idle throttle (Latest)
+## v0.7.5 — System telemetry · UIA · LTM · idle throttle (pending)
 
-https://github.com/Shaman-ATTA/lia-desktop/releases/tag/v0.7.5
-
-Published non-draft Latest. System telemetry HUD; UIA agent tools + act-observe + destructive confirm; long-term memory Settings «Память»; friendly mic journal; idle render throttle. Hard gates: `telemetry_system`, `agent_*`, `ltm_*`, `mic_error_friendly`, `app_idle_cpu`, plus all prior wake_*/tts_*/… gates.
+Blocked on hard gates. Product `type_text` cascade SendInput → clipboard (restore) → WM_SETTEXT with `method=` + verified readback; `agent_notepad` calls tool path only then independent read. Also: system telemetry HUD; UIA agent + act-observe + confirm; LTM Settings «Память»; friendly mic journal; idle render throttle (`app_idle_cpu` ≥40%). No Latest until all hard gates green.
 
 ## v0.7.4 — Offline wake word «Лиа»
 

@@ -271,10 +271,218 @@ public sealed class ToolHost : IAsyncDisposable
         return new { ok = true };
     }
 
+    /// <summary>
+    /// Type into the focused window: SendInput → clipboard paste (save/restore user clipboard) →
+    /// WM_SETTEXT on classic Edit. Verifies readback; returns method=sendinput|clipboard|settext.
+    /// </summary>
     object TypeText(string text)
     {
+        if (string.IsNullOrEmpty(text))
+            return new { ok = false, error = "empty text", method = "none" };
+
+        // 1) Unicode SendInput
         foreach (var ch in text) SendChar(ch);
-        return new { ok = true, len = text.Length };
+        Thread.Sleep(150);
+        if (FocusedEditContains(text, out var read1))
+            return new { ok = true, len = text.Length, method = "sendinput", verified = true, readback = Trunc(read1!, 120) };
+
+        // 2) Clipboard paste (preserve user's clipboard — restore only after paste consumes it)
+        string? clipSaved = null;
+        var pasted = TryClipboardPaste(text, out clipSaved);
+        if (pasted)
+        {
+            Thread.Sleep(220);
+            if (FocusedEditContains(text, out var read2))
+            {
+                RestoreClipboard(clipSaved);
+                return new { ok = true, len = text.Length, method = "clipboard", verified = true, readback = Trunc(read2!, 120) };
+            }
+        }
+        RestoreClipboard(clipSaved);
+
+        // 3) WM_SETTEXT into classic Edit under the foreground window
+        if (TryWmSetTextForeground(text))
+        {
+            Thread.Sleep(100);
+            if (FocusedEditContains(text, out var read3))
+                return new { ok = true, len = text.Length, method = "settext", verified = true, readback = Trunc(read3!, 120) };
+            // SETTEXT wrote but UIA/Win32 readback lagged — still report settext (caller may re-read)
+            return new { ok = true, len = text.Length, method = "settext", verified = false, warn = "settext without readback" };
+        }
+
+        // Last chance: content may already be there from SendInput/clipboard with slow UIA
+        if (FocusedEditContains(text, out var readFinal))
+        {
+            var method = pasted ? "clipboard" : "sendinput";
+            return new { ok = true, len = text.Length, method, verified = true, readback = Trunc(readFinal!, 120) };
+        }
+
+        return new
+        {
+            ok = false,
+            error = "type_text failed all methods (sendinput/clipboard/settext)",
+            len = text.Length,
+            method = "none",
+            verified = false,
+            readback = Trunc(read1 ?? "", 120),
+        };
+    }
+
+    static bool FocusedEditContains(string expected, out string? readback)
+    {
+        readback = null;
+        for (var i = 0; i < 5; i++)
+        {
+            readback = ReadFocusedEditText();
+            if (!string.IsNullOrEmpty(readback) && readback.Contains(expected, StringComparison.Ordinal))
+                return true;
+            Thread.Sleep(70);
+        }
+        return false;
+    }
+
+    static string? ReadFocusedEditText()
+    {
+        var hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return null;
+        var edit = FindWindowEx(hwnd, IntPtr.Zero, "Edit", null);
+        if (edit == IntPtr.Zero) edit = FindEditChild(hwnd);
+        if (edit != IntPtr.Zero)
+        {
+            var len = (int)SendMessage(edit, 0x000E, IntPtr.Zero, IntPtr.Zero);
+            if (len > 0)
+            {
+                var sb = new StringBuilder(len + 1);
+                SendMessage(edit, 0x000D, new IntPtr(sb.Capacity), sb);
+                return sb.ToString();
+            }
+        }
+        // UIA fallback (Win11 Notepad Document)
+        try
+        {
+            var title = new StringBuilder(512);
+            GetWindowText(hwnd, title, title.Capacity);
+            var t = title.ToString();
+            if (t.Length == 0) return null;
+            return UiaTools.ReadEditText(t)
+                   ?? (t.Contains("Notepad", StringComparison.OrdinalIgnoreCase) || t.Contains("Блокнот", StringComparison.OrdinalIgnoreCase)
+                       ? UiaTools.ReadEditText("notepad") ?? UiaTools.ReadEditText("Notepad")
+                       : null);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Paste via clipboard. Saves prior CF_UNICODETEXT into <paramref name="saved"/> for later RestoreClipboard.</summary>
+    static bool TryClipboardPaste(string text, out string? saved)
+    {
+        saved = null;
+        try
+        {
+            if (!OpenClipboard(IntPtr.Zero)) return false;
+            try
+            {
+                var hExisting = GetClipboardData(13 /*CF_UNICODETEXT*/);
+                if (hExisting != IntPtr.Zero)
+                {
+                    var p = GlobalLock(hExisting);
+                    if (p != IntPtr.Zero)
+                    {
+                        try { saved = Marshal.PtrToStringUni(p); }
+                        finally { GlobalUnlock(hExisting); }
+                    }
+                }
+                EmptyClipboard();
+                var bytes = (text.Length + 1) * 2;
+                var h = GlobalAlloc(0x0002 /*GMEM_MOVEABLE*/, (UIntPtr)bytes);
+                if (h == IntPtr.Zero) return false;
+                var ptr = GlobalLock(h);
+                if (ptr == IntPtr.Zero) { GlobalFree(h); return false; }
+                try
+                {
+                    Marshal.Copy(text.ToCharArray(), 0, ptr, text.Length);
+                    Marshal.WriteInt16(ptr, text.Length * 2, 0);
+                }
+                finally { GlobalUnlock(h); }
+                if (SetClipboardData(13, h) == IntPtr.Zero)
+                {
+                    GlobalFree(h);
+                    return false;
+                }
+            }
+            finally { CloseClipboard(); }
+
+            // Ctrl+A then Ctrl+V — replace any partial SendInput residue
+            keybd_event(0x11, 0, 0, UIntPtr.Zero); // Ctrl
+            keybd_event(0x41, 0, 0, UIntPtr.Zero); // A
+            keybd_event(0x41, 0, 2, UIntPtr.Zero);
+            keybd_event(0x11, 0, 2, UIntPtr.Zero);
+            Thread.Sleep(30);
+            keybd_event(0x11, 0, 0, UIntPtr.Zero); // Ctrl
+            keybd_event(0x56, 0, 0, UIntPtr.Zero); // V
+            keybd_event(0x56, 0, 2, UIntPtr.Zero);
+            keybd_event(0x11, 0, 2, UIntPtr.Zero);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    static void RestoreClipboard(string? saved)
+    {
+        if (saved == null) return;
+        try
+        {
+            if (!OpenClipboard(IntPtr.Zero)) return;
+            try
+            {
+                EmptyClipboard();
+                var bytes = (saved.Length + 1) * 2;
+                var h = GlobalAlloc(0x0002, (UIntPtr)bytes);
+                if (h == IntPtr.Zero) return;
+                var ptr = GlobalLock(h);
+                if (ptr == IntPtr.Zero) { GlobalFree(h); return; }
+                try
+                {
+                    Marshal.Copy(saved.ToCharArray(), 0, ptr, saved.Length);
+                    Marshal.WriteInt16(ptr, saved.Length * 2, 0);
+                }
+                finally { GlobalUnlock(h); }
+                if (SetClipboardData(13, h) == IntPtr.Zero)
+                    GlobalFree(h);
+            }
+            finally { CloseClipboard(); }
+        }
+        catch { /* */ }
+    }
+
+    static bool TryWmSetTextForeground(string text)
+    {
+        var hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return false;
+        var edit = FindWindowEx(hwnd, IntPtr.Zero, "Edit", null);
+        if (edit == IntPtr.Zero) edit = FindWindowEx(hwnd, IntPtr.Zero, "RichEditD2DPT", null);
+        if (edit == IntPtr.Zero) edit = FindEditChild(hwnd);
+        if (edit == IntPtr.Zero) return false;
+        SendMessage(edit, 0x000C, IntPtr.Zero, text); // WM_SETTEXT
+        return true;
+    }
+
+    static IntPtr FindEditChild(IntPtr parent)
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumChildWindows(parent, (h, _) =>
+        {
+            var cls = new StringBuilder(64);
+            GetClassName(h, cls, cls.Capacity);
+            var c = cls.ToString();
+            if (c.Equals("Edit", StringComparison.OrdinalIgnoreCase)
+                || c.Contains("RichEdit", StringComparison.OrdinalIgnoreCase))
+            {
+                found = h;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
     }
 
     object MouseClick(int x, int y, string? physicalFlag)
@@ -316,6 +524,25 @@ public sealed class ToolHost : IAsyncDisposable
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
     [DllImport("user32.dll")] static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string? className, string? windowTitle);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, StringBuilder lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr hWnd, EnumChildProc lpEnumFunc, IntPtr lParam);
+    delegate bool EnumChildProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+    [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr hWndNewOwner);
+    [DllImport("user32.dll")] static extern bool CloseClipboard();
+    [DllImport("user32.dll")] static extern bool EmptyClipboard();
+    [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+    [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint uFormat);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr hMem);
+    [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr hMem);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalFree(IntPtr hMem);
+    [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
     [StructLayout(LayoutKind.Sequential)]
     struct INPUT { public uint type; public InputUnion U; }

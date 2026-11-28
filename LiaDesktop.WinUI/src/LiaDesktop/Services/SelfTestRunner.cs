@@ -2622,32 +2622,37 @@ public static class SelfTestRunner
                     }
                     await Task.Delay(250);
                     const string typed = "ATTA LIA NOTEPAD";
-                    await s.Tools.RunAsync("type_text", new Dictionary<string, string> { ["text"] = typed }, CancellationToken.None);
-                    await Task.Delay(700);
-                    var text = ReadNotepadText();
-                    if (string.IsNullOrEmpty(text) || !text.Contains("ATTA", StringComparison.OrdinalIgnoreCase))
+                    // Only the product tool path (same as Gemini agent loop) — no test-side injectors.
+                    var typedResult = await s.Tools.RunAsync(
+                        "type_text", new Dictionary<string, string> { ["text"] = typed }, CancellationToken.None);
+                    var typedJson = System.Text.Json.JsonSerializer.Serialize(typedResult);
+                    var method = "none";
+                    var mm = Regex.Match(typedJson, "\"method\"\\s*:\\s*\"(sendinput|clipboard|settext)\"");
+                    if (mm.Success) method = mm.Groups[1].Value;
+                    if (!typedJson.Contains("\"ok\":true", StringComparison.Ordinal)
+                        && !typedJson.Contains("\"ok\": true", StringComparison.Ordinal))
                     {
-                        // Clipboard paste fallback (some hosts swallow Unicode SendInput into Notepad)
-                        TryClipboardPaste(typed);
-                        await Task.Delay(500);
-                        text = ReadNotepadText();
-                    }
-                    if (string.IsNullOrEmpty(text) || !text.Contains("ATTA", StringComparison.OrdinalIgnoreCase))
-                    {
-                        // Last resort: WM_SETTEXT into classic Edit, then re-read via UIA/Win32
-                        if (TryWin32SetEditText(typed))
-                        {
-                            await Task.Delay(200);
-                            text = ReadNotepadText();
-                        }
-                    }
-                    if (string.IsNullOrEmpty(text) || !text.Contains("ATTA", StringComparison.OrdinalIgnoreCase))
-                    {
-                        L($"FAIL agent_notepad: UIA/Win32 text missing ATTA, got='{Truncate(text ?? "(null)", 80)}'");
+                        L($"FAIL agent_notepad: type_text tool failed method={method} {Truncate(typedJson, 220)}");
                         fail++;
                     }
                     else
-                        L($"agent_notepad: PASS text_len={text!.Length}");
+                    {
+                        await Task.Delay(400);
+                        // Independent readback (not the tool's own verified flag)
+                        var text = ReadNotepadText();
+                        if (string.IsNullOrEmpty(text) || !text.Contains("ATTA", StringComparison.OrdinalIgnoreCase))
+                        {
+                            L($"FAIL agent_notepad: independent read missing ATTA after type_text method={method} got='{Truncate(text ?? "(null)", 80)}' tool={Truncate(typedJson, 180)}");
+                            fail++;
+                        }
+                        else if (method is not ("sendinput" or "clipboard" or "settext"))
+                        {
+                            L($"FAIL agent_notepad: type_text missing method= sendinput|clipboard|settext got={Truncate(typedJson, 200)}");
+                            fail++;
+                        }
+                        else
+                            L($"agent_notepad: PASS method={method} text_len={text!.Length}");
+                    }
                 }
                 try { File.Delete(notePath); } catch { /* */ }
             }
@@ -2769,60 +2774,6 @@ public static class SelfTestRunner
         return found;
     }
 
-    static bool TryWin32SetEditText(string text)
-    {
-        foreach (var p in Process.GetProcessesByName("notepad"))
-        {
-            try
-            {
-                var hwnd = p.MainWindowHandle;
-                if (hwnd == IntPtr.Zero) continue;
-                var edit = FindWindowEx(hwnd, IntPtr.Zero, "Edit", null);
-                if (edit == IntPtr.Zero) edit = FindEditChild(hwnd);
-                if (edit == IntPtr.Zero) continue;
-                SendMessage(edit, 0x000C, IntPtr.Zero, text); // WM_SETTEXT
-                return true;
-            }
-            catch { /* */ }
-            finally { p.Dispose(); }
-        }
-        return false;
-    }
-
-    static void TryClipboardPaste(string text)
-    {
-        try
-        {
-            // WinRT clipboard from unpackaged WinUI is awkward; use Win32 OpenClipboard.
-            if (!OpenClipboard(IntPtr.Zero)) return;
-            try
-            {
-                EmptyClipboard();
-                var bytes = (text.Length + 1) * 2;
-                var h = GlobalAlloc(0x0002 /*GMEM_MOVEABLE*/, (UIntPtr)bytes);
-                if (h == IntPtr.Zero) return;
-                var p = GlobalLock(h);
-                if (p == IntPtr.Zero) { GlobalFree(h); return; }
-                try
-                {
-                    Marshal.Copy(text.ToCharArray(), 0, p, text.Length);
-                    Marshal.WriteInt16(p, text.Length * 2, 0);
-                }
-                finally { GlobalUnlock(h); }
-                if (SetClipboardData(13 /*CF_UNICODETEXT*/, h) == IntPtr.Zero)
-                    GlobalFree(h);
-            }
-            finally { CloseClipboard(); }
-
-            // Ctrl+V
-            keybd_event(0x11, 0, 0, UIntPtr.Zero);       // VK_CONTROL down
-            keybd_event(0x56, 0, 0, UIntPtr.Zero);       // V down
-            keybd_event(0x56, 0, 2, UIntPtr.Zero);       // V up
-            keybd_event(0x11, 0, 2, UIntPtr.Zero);       // CTRL up
-        }
-        catch { /* */ }
-    }
-
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string? className, string? windowTitle);
 
@@ -2831,9 +2782,6 @@ public static class SelfTestRunner
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, StringBuilder lParam);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
 
     [DllImport("user32.dll")]
     static extern bool GetWindowRect(IntPtr hWnd, out RECT rc);
@@ -2844,16 +2792,6 @@ public static class SelfTestRunner
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
-
-    [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr hWndNewOwner);
-    [DllImport("user32.dll")] static extern bool CloseClipboard();
-    [DllImport("user32.dll")] static extern bool EmptyClipboard();
-    [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
-    [DllImport("kernel32.dll")] static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
-    [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr hMem);
-    [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr hMem);
-    [DllImport("kernel32.dll")] static extern IntPtr GlobalFree(IntPtr hMem);
-    [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
     [StructLayout(LayoutKind.Sequential)]
     struct RECT { public int Left, Top, Right, Bottom; }
