@@ -2319,31 +2319,26 @@ public static partial class SelfTestRunner
                 ShowWindow(WindowNative.GetWindowHandle(mw), SwRestore);
                 // Mouth closed, front-ish — freeze micro-motion for fair Idle vs Active compare
                 mw.PrepareParityCapture(5f, 0f);
+                mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Idle);
+                mw.PinHoloAnimTime(1.0f);
             });
-            await Task.Delay(200);
+            // After app_idle_cpu minimize, swapchain needs extra Present cycles before dump
+            await Task.Delay(900);
+            await UiAsync(mw, () => mw.PinHoloAnimTime(1.0f));
+            await Task.Delay(300);
 
-            // Active frame — pin time, let Tick Present, then dump
+            // Idle first (warmup Present), then Active — both must pass check_framing
+            await UiAsync(mw, () => mw.SaveParityWindowPng(idlePath));
+
             await UiAsync(mw, () =>
             {
                 mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Active);
                 mw.PinHoloAnimTime(1.0f);
             });
-            await Task.Delay(500);
-            await UiAsync(mw, () => mw.PinHoloAnimTime(1.0f));
-            await Task.Delay(200);
-            // Composite into window chrome so check_framing arc/viewport bands match smoke
-            await UiAsync(mw, () => mw.SaveParityWindowPng(activePath));
-
-            // Idle frame (real default economy — arcs/hair must still be present)
-            await UiAsync(mw, () =>
-            {
-                mw.SetRenderPaceOverride(Rendering.HoloPanel.RenderPace.Idle);
-                mw.PinHoloAnimTime(1.0f);
-            });
             await Task.Delay(700);
             await UiAsync(mw, () => mw.PinHoloAnimTime(1.0f));
             await Task.Delay(250);
-            await UiAsync(mw, () => mw.SaveParityWindowPng(idlePath));
+            await UiAsync(mw, () => mw.SaveParityWindowPng(activePath));
 
             await UiAsync(mw, () =>
             {

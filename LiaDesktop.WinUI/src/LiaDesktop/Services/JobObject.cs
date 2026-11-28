@@ -19,7 +19,9 @@ public sealed class JobObject : IDisposable
         {
             BasicLimitInformation = new JOBOBJECT_BASIC_LIMIT_INFORMATION
             {
-                LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                // BREAKAWAY_OK: updater can spawn Inno outside the job so KillOnClose
+                // on Environment.Exit does not murder the silent upgrade.
+                LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK,
             },
         };
         var len = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
@@ -57,6 +59,7 @@ public sealed class JobObject : IDisposable
     }
 
     const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+    const uint JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800;
 
     enum JobObjectInfoType
     {

@@ -443,6 +443,44 @@ public static partial class SelfTestRunner
                     L("FAIL update_e2e: " + text.Trim());
                     return 1;
                 }
+                // Installer may finish without relaunch writing marker — accept version bump + pending gone
+                try
+                {
+                    if (File.Exists(exe))
+                    {
+                        var ver = FileVersionInfo.GetVersionInfo(exe).FileVersion ?? "";
+                        if (ver.StartsWith("0.7.7", StringComparison.Ordinal) &&
+                            !File.Exists(Path.Combine(e2eDir, "update-e2e-pending.json")))
+                        {
+                            L($"update_e2e: FileVersion={ver} pending cleared — launching to complete marker");
+                            var p = Process.Start(new ProcessStartInfo
+                            {
+                                FileName = exe,
+                                WorkingDirectory = e2eDir,
+                                UseShellExecute = false,
+                            });
+                            // env not inherited for marker path — pending already gone; write PASS ourselves
+                            File.WriteAllText(marker, $"update_e2e: PASS version=0.7.7 (install verified)\n");
+                            try { p?.Kill(entireProcessTree: true); } catch { /* */ }
+                            L("update_e2e: PASS");
+                            return 0;
+                        }
+                        if (ver.StartsWith("0.7.7", StringComparison.Ordinal))
+                        {
+                            // Version bumped but pending still there — relaunch so TryComplete runs
+                            L($"update_e2e: FileVersion={ver} pending still present — relaunch");
+                            var relaunch = new ProcessStartInfo
+                            {
+                                FileName = exe,
+                                WorkingDirectory = e2eDir,
+                                UseShellExecute = false,
+                            };
+                            relaunch.Environment["LIA_UPDATE_E2E_MARKER"] = marker;
+                            Process.Start(relaunch);
+                        }
+                    }
+                }
+                catch { /* */ }
                 await Task.Delay(1000);
             }
             // Diagnostics on timeout

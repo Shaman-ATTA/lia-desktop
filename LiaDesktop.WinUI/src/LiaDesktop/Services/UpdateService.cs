@@ -267,8 +267,7 @@ public sealed class UpdateService : IDisposable
             // Leave a pending marker so the relaunched build can confirm e2e / write PASS.
             try { UpdateE2eHook.WritePending(installDir, info.Version); } catch { /* */ }
             var args = UpdateLogic.BuildSilentUpgradeArgs(installDir);
-            // Program.Main puts us in a KillOnClose job — launching setup directly would
-            // get the installer killed when we Environment.Exit. Escape via shell+.cmd.
+            // Program.Main uses KillOnClose job — must CREATE_BREAKAWAY_FROM_JOB or Exit kills setup.
             var wrapper = Path.Combine(tmpDir, "lia-run-setup.cmd");
             File.WriteAllText(wrapper,
                 "@echo off\r\n" +
@@ -276,12 +275,16 @@ public sealed class UpdateService : IDisposable
                 "ping -n 3 127.0.0.1 >nul\r\n" +
                 "\"" + setupPath + "\" " + args + "\r\n");
             _log.Info($"обновления: запуск установщика {info.SetupName} dir={installDir}");
-            Process.Start(new ProcessStartInfo
+            if (!DetachedProcess.StartDelayedCmd(wrapper, tmpDir))
             {
-                FileName = wrapper,
-                UseShellExecute = true,
-                WorkingDirectory = tmpDir,
-            });
+                // Fallback: shell execute (may still die under job without breakaway)
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = wrapper,
+                    UseShellExecute = true,
+                    WorkingDirectory = tmpDir,
+                });
+            }
 
             if (SuppressExitAfterLaunch)
                 return (true, "installing");
