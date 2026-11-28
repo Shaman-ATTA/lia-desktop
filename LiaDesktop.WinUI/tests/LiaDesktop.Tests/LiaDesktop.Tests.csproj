@@ -20,5 +20,7 @@
     <Compile Include="..\..\src\LiaDesktop\Services\InterruptClassifier.cs" Link="InterruptClassifier.cs" />
     <Compile Include="..\..\src\LiaDesktop\Services\EchoCancelVad.cs" Link="EchoCancelVad.cs" />
     <Compile Include="..\..\src\LiaDesktop\Services\WakeText.cs" Link="WakeText.cs" />
+    <Compile Include="..\..\src\LiaDesktop\Services\AppVersion.cs" Link="AppVersion.cs" />
+    <Compile Include="..\..\src\LiaDesktop\Services\UpdateLogic.cs" Link="UpdateLogic.cs" />
   </ItemGroup>
 </Project>

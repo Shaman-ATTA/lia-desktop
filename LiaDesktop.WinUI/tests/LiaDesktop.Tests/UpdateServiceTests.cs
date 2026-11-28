@@ -9,7 +9,7 @@ public class UpdateServiceTests
     public void TryGetSha256_parses_gnu_format()
     {
         var sums = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899  LiaDesktop-0.7.6-setup.exe\n";
-        Assert.True(UpdateService.TryGetSha256(sums, "LiaDesktop-0.7.6-setup.exe", out var h));
+        Assert.True(UpdateLogic.TryGetSha256(sums, "LiaDesktop-0.7.6-setup.exe", out var h));
         Assert.Equal("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899", h);
     }
 
@@ -17,17 +17,17 @@ public class UpdateServiceTests
     public void TryGetSha256_rejects_missing()
     {
         var sums = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899  other.exe\n";
-        Assert.False(UpdateService.TryGetSha256(sums, "LiaDesktop-0.7.6-setup.exe", out _));
+        Assert.False(UpdateLogic.TryGetSha256(sums, "LiaDesktop-0.7.6-setup.exe", out _));
     }
 
     [Fact]
     public void IsUpdateCommand_ru_phrases()
     {
-        Assert.True(UpdateService.IsUpdateCommand("обнови себя"));
-        Assert.True(UpdateService.IsUpdateCommand("Лиа, проверь обновления"));
-        Assert.True(UpdateService.IsUpdateCommand("проверь обновление"));
-        Assert.True(UpdateService.IsInstallIntent("обновись"));
-        Assert.False(UpdateService.IsUpdateCommand("открой блокнот"));
+        Assert.True(UpdateLogic.IsUpdateCommand("обнови себя"));
+        Assert.True(UpdateLogic.IsUpdateCommand("Лиа, проверь обновления"));
+        Assert.True(UpdateLogic.IsUpdateCommand("проверь обновление"));
+        Assert.True(UpdateLogic.IsInstallIntent("обновись"));
+        Assert.False(UpdateLogic.IsUpdateCommand("открой блокнот"));
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public class UpdateServiceTests
     [Fact]
     public void BuildSilentUpgradeArgs_includes_launch_and_dir()
     {
-        var a = UpdateService.BuildSilentUpgradeArgs(@"C:\Users\x\AppData\Local\LiaDesktop");
+        var a = UpdateLogic.BuildSilentUpgradeArgs(@"C:\Users\x\AppData\Local\LiaDesktop");
         Assert.Contains("/VERYSILENT", a);
         Assert.Contains("/FORCECLOSEAPPLICATIONS", a);
         Assert.Contains("/LAUNCHAFTER=1", a);
